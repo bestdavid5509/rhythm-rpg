@@ -1,0 +1,28 @@
+# Godot 4+
+.godot/
+/android/
+*.import
+*.translation
+*.uid
+
+# Export / build output
+exports/
+builds/
+
+# C# / .NET
+.vs/
+obj/
+bin/
+*.user
+*.suo
+*.userprefs
+.mono/
+mono_crash.*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor metadata
+.idea/
+.vscode/

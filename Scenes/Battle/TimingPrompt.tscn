@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3 uid="uid://timing_prompt_v1"]
+
+[ext_resource type="Script" path="res://Scripts/Battle/TimingPrompt.cs" id="1_timingprompt"]
+
+[node name="TimingPrompt" type="Node2D"]
+position = Vector2(960, 540)
+script = ExtResource("1_timingprompt")
