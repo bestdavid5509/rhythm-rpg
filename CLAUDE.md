@@ -90,4 +90,27 @@ The fight is **winnable but extremely difficult on a first run**. It serves as a
 
 ## Architectural Decisions
 
-_Decisions will be documented here as they are made._
+### TimingPrompt — Input Rules
+
+Input is **only accepted** when `_currentRadius` is within `HitWindowSize` of `TargetRadius`. Input outside this range is completely ignored — no state change, no feedback, no miss registered. For Bouncing prompts, input is additionally restricted to inward passes only.
+
+- After a **successful input** (Hit or Perfect): no lockout — the pass resolves immediately and the sequence continues.
+- After an **auto-miss** (ring reaches `t = 1` without input): `InputLockoutDuration` (default 0.3s) is applied to block accidental inputs during the outward bounce.
+
+There is no overshoot. The inward lerp endpoint is `TargetRadius - HitWindowSize` (inner edge of the window); the ring stops there and auto-misses via `OnPassComplete`.
+
+### TimingPrompt — Bounce Timing
+
+Variable bounce speed is removed. The outward pass is controlled by a single `BounceDuration` export (default 0.5s):
+
+- The outward lerp **always** goes from `TargetRadius` to `StartRadius` — the same distance every time, regardless of where the player pressed or whether the pass auto-missed.
+- `_t` advances at `dt / BounceDuration` on outward passes, so it always takes exactly `BounceDuration` seconds.
+- This makes `Perfect@` timestamps on subsequent passes fully predictable and consistent.
+
+Removed: `OvershootDistance`, `FixedReturnDuration`, `_bounceSpeedMultiplier`, `_bounceStartRadius`, `MinBounceSpeed`, `MaxBounceSpeed`.
+
+### TimingPrompt — Multi-Circle Resolution
+
+All active `TimingPrompt` instances register themselves in a static `List<TimingPrompt> _activePrompts` on `_Ready` and remove themselves on `_ExitTree`.
+
+`TimingPrompt.ConfirmAll()` is a static method that calls `EvaluateInput()` on every registered prompt. BattleSystem calls this once per input event to resolve all in-window circles simultaneously. Prompts outside the window, locked out, or on outward passes are silently skipped by `EvaluateInput`'s existing guards.

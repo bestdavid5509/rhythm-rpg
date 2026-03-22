@@ -1,26 +1,35 @@
 using Godot;
+using System.Collections.Generic;
 
 /// <summary>
 /// A timing prompt visual — a ring that starts large and closes toward a smaller target
-/// ring at the center. The player presses the input button when the moving ring reaches
-/// the target ring; the result is evaluated by how close the two rings are at that moment.
+/// ring at the center. The player presses the input button when the moving ring overlaps
+/// the target ring; success is evaluated by how close the centers are at press time.
 ///
 /// Prompt types:
-///   Standard — white ring, ease-in inward, standard speed and hit window.
-///   Slow     — blue ring, half speed, slightly larger hit window.
+///   Standard — white ring, ease-in inward, standard speed.
+///   Slow     — blue ring, half speed.
 ///   Bouncing — pink → orange → white across three inward passes; BounceCount forced to 2.
-///              The sequence is scripted — the ring always bounces on schedule regardless
-///              of player input. Each pass evaluates independently: hit = player deals
-///              damage, miss = player takes damage. Color shift signals the final pass.
+///              Color shift signals the final pass.
 ///
-/// Movement:
-///   Inward  — ease-in (slow start, fast finish). The ring is moving fastest at the hit
-///             window, giving the player time to read before urgency builds. Continues
-///             OvershootDistance past the target before auto-missing.
-///   Outward — ease-out (fast launch, decelerates to zero at peak). Mimics a bounce.
+/// Movement — fully scripted; player input never alters the path:
+///   Inward  — ease-in (slow start, fast finish). Travels from StartRadius to
+///             (TargetRadius - RingLineWidth), the inner edge of the valid zone.
+///             t = 1 completes the pass regardless of input.
+///   Outward — ease-out (fast launch, decelerates). Always lerps from TargetRadius to
+///             StartRadius over exactly BounceDuration seconds. Bounce point is scripted.
 ///
-/// Both driven by a t value (0–1) sampled through a Godot Curve, falling back to
-/// quadratic easing when no curve is assigned.
+/// Input rules:
+///   Valid zone   = |_currentRadius - TargetRadius| <= RingLineWidth (ring overlap).
+///   Inward only  = for Bouncing, input is additionally restricted to inward passes.
+///   In zone      → hit registered, flash immediately, no lockout; circle continues.
+///   Outside zone → failed input, InputLockoutDuration lockout; circle unaffected.
+///   Outward pass → failed input, lockout; outward is purely animated.
+///   Auto-miss    → pass exits zone at t = 1 without input; damage dealt, NO lockout.
+///
+/// Multi-circle resolution:
+///   All active prompts register in _activePrompts on _Ready.
+///   BattleSystem calls TimingPrompt.ConfirmAll() once per input event.
 /// </summary>
 public partial class TimingPrompt : Node2D
 {
@@ -30,15 +39,15 @@ public partial class TimingPrompt : Node2D
 
     public enum InputResult
     {
-        Perfect,  // within the inner fraction of the hit window
-        Hit,      // within HitWindowSize but outside the perfect zone
-        Miss,     // outside HitWindowSize, or ring completes travel without input
+        Perfect,  // within PerfectWindowFraction of the center of the valid zone
+        Hit,      // within RingLineWidth of TargetRadius, outside the perfect zone
+        Miss,     // pass exits without a registered hit
     }
 
     public enum PromptType
     {
-        Standard,  // white ring, default speed and window
-        Slow,      // blue ring, half speed, wider window
+        Standard,  // white ring, default speed
+        Slow,      // blue ring, half speed
         Bouncing,  // pink→orange→white; scripted three-pass sequence, BounceCount = 2
     }
 
@@ -48,12 +57,12 @@ public partial class TimingPrompt : Node2D
 
     /// <summary>
     /// Determines the visual style, speed, and bounce behaviour of this prompt.
-    /// Automatically configures Duration, HitWindowSize, and BounceCount on _Ready.
+    /// Automatically configures Duration and BounceCount on _Ready.
     /// </summary>
     [Export] public PromptType Type = PromptType.Standard;
 
     /// <summary>
-    /// Total time in seconds for one pass (inward or outward).
+    /// Total time in seconds for one inward pass.
     /// Set automatically by Type — override only when driving directly from BattleSystem.
     /// </summary>
     [Export] public float Duration = 1.0f;
@@ -72,27 +81,28 @@ public partial class TimingPrompt : Node2D
     [Export] public Curve OutCurve;
 
     /// <summary>
-    /// Radius tolerance around the target ring that counts as a hit.
-    /// Set automatically by Type — override only when driving directly from BattleSystem.
+    /// Stroke width of both rings in pixels. Drives three things simultaneously:
+    ///   • Moving ring visual thickness (DrawArc line width).
+    ///   • Target ring visual thickness (DrawArc line width).
+    ///   • Valid input zone: input is accepted when |_currentRadius - TargetRadius| &lt;= RingLineWidth,
+    ///     which equals exactly the condition "the two rings overlap at all".
+    /// Keeping these in sync via a single value ensures the green rim always matches reality.
     /// </summary>
-    [Export] public float HitWindowSize = 20.0f;
+    [Export] public float RingLineWidth = 6f;
 
     /// <summary>
-    /// How far past the target ring the ring travels before auto-missing.
-    /// Gives a brief grace window after the ideal hit moment.
+    /// Time in seconds for the outward (bounce) pass.
+    /// The ring always lerps from TargetRadius to StartRadius in this exact duration,
+    /// making Perfect@ timestamps on subsequent passes fully deterministic.
     /// </summary>
-    [Export] public float OvershootDistance = 20.0f;
+    [Export] public float BounceDuration = 0.5f;
 
     /// <summary>
-    /// The outward pass always completes in exactly this many seconds, regardless of
-    /// where in the hit window the player pressed (or whether the ring auto-missed).
-    /// Because the outward lerp starts from _currentRadius at the moment of bounce,
-    /// a hit near the target travels less distance and moves slower in pixels/second,
-    /// while an edge hit or auto-miss travels more distance and moves faster —
-    /// but both arrive back at StartRadius at the same wall-clock time.
-    /// This makes Perfect@ timestamps on subsequent passes fully predictable.
+    /// Seconds during which input is locked out after a failed press (outside zone or during
+    /// outward pass). Prevents accidental multiple presses from stacking.
+    /// No lockout is applied after a successful input or after an auto-miss.
     /// </summary>
-    [Export] public float FixedReturnDuration = 0.5f;
+    [Export] public float InputLockoutDuration = 0.3f;
 
     /// <summary>
     /// Number of bounces after the first inward pass.
@@ -154,24 +164,22 @@ public partial class TimingPrompt : Node2D
     //   • Replace the target ring DrawArc with a static Sprite2D child node.
     //   • Drive result feedback and per-type tints via a shader uniform or
     //     AnimationPlayer rather than _movingRingColor below.
-    //   • StartRadius, TargetRadius, and OvershootDistance will still be needed
+    //   • StartRadius, TargetRadius, and RingLineWidth will still be needed
     //     to configure scale and travel range.
     // --------------------------------------------------------------------------
 
     private const float StartRadius           = 120f;
     private const float TargetRadius          = 28f;
-    private const float RingLineWidth         = 4f;
-    private const float PerfectWindowFraction = 0.25f;
+    private const float PerfectWindowFraction = 0.4f;
 
     // Shared UI colors
-    private static readonly Color ColorTarget      = new Color(1.00f, 1.00f, 1.00f, 0.90f);
-    private static readonly Color ColorHitWindow   = new Color(1.00f, 1.00f, 0.30f, 0.30f);
-    private static readonly Color ColorPerfectZone = new Color(0.30f, 1.00f, 0.50f, 0.40f);
+    private static readonly Color ColorTarget    = new Color(1.00f, 1.00f, 1.00f, 0.90f);
+    private static readonly Color ColorHitWindow = new Color(0.30f, 1.00f, 0.50f, 0.40f);  // green rim
 
     // Per-type ring colors
     private static readonly Color ColorStandard    = new Color(1.00f, 1.00f, 1.00f, 1.00f);  // white
     private static readonly Color ColorSlow        = new Color(0.35f, 0.65f, 1.00f, 1.00f);  // blue
-    private static readonly Color ColorBouncePass1 = new Color(1.00f, 0.50f, 0.75f, 1.00f);  // pink
+    private static readonly Color ColorBouncePass1 = new Color(0.20f, 0.85f, 0.80f, 1.00f);  // teal
     private static readonly Color ColorBouncePass2 = new Color(1.00f, 0.60f, 0.20f, 1.00f);  // orange
     // Pass 3 of Bouncing uses ColorStandard (white) — signals final approach to the player
 
@@ -180,13 +188,17 @@ public partial class TimingPrompt : Node2D
     private static readonly Color ColorFlashHit     = new Color(1.00f, 0.90f, 0.20f, 1.00f);  // yellow
     private static readonly Color ColorFlashMiss    = new Color(1.00f, 0.20f, 0.20f, 1.00f);  // red
 
-    // Type-specific timing
     private const float SlowDuration   = 2.0f;
-    private const float SlowHitWindow  = 28.0f;
 
     private const float FlashDuration  = 0.15f;
     private const float ShakeDuration  = 0.30f;
     private const float ShakeIntensity = 6f;
+
+    // -------------------------------------------------------------------------
+    // Static registry — allows BattleSystem to resolve all active prompts at once
+    // -------------------------------------------------------------------------
+
+    private static readonly List<TimingPrompt> _activePrompts = new();
 
     // -------------------------------------------------------------------------
     // Runtime state
@@ -199,32 +211,40 @@ public partial class TimingPrompt : Node2D
     private bool    _resolved         = false;
     private float   _currentRadius;
 
-    private Color   _movingRingColor       = ColorStandard;
-    private float   _flashTimer            = 0f;
-    private bool    _showMovingRing        = true;
+    // Whether a valid input was registered during the current inward pass.
+    // Set on press (with flash); consumed at t=1 by OnPassComplete.
+    private bool        _inputRegisteredThisPass = false;
+    private InputResult _lastPassResult          = InputResult.Miss;
 
-    // Scales _t advancement during the outward pass so it completes in FixedReturnDuration.
-    // Set by Bounce(); always Duration / FixedReturnDuration (constant for a given session).
-    private float   _bounceSpeedMultiplier = 1f;
+    private float   _lockoutTimer      = 0f;  // blocks input after a failed press
+    private float   _bounceStartRadius = TargetRadius;  // outward lerp origin; always TargetRadius
 
-    // The ring's radius at the moment Bounce() was called — used as the outward lerp start.
-    // Varies with where the player pressed (or overshoot position), giving each bounce a
-    // different pixel velocity while keeping the total outward time fixed.
-    private float   _bounceStartRadius     = StartRadius;
+    private Color   _movingRingColor  = ColorStandard;
+    private float   _flashTimer       = 0f;
+    private bool    _showMovingRing   = true;
+
+    // Separate flash ring drawn on input results — does not affect the moving ring's color or path.
+    // Perfect: locked to TargetRadius in green. Hit: locked to _currentRadius at press in yellow.
+    // Auto-miss: locked to TargetRadius - RingLineWidth in red.
+    private float   _flashRingTimer      = 0f;
+    private float   _flashRingRadius     = 0f;
+    private Color   _flashRingColor      = ColorFlashPerfect;
+    // True when the flash ring was set by an auto-miss — overrides outward-pass suppression so
+    // the ring shows during the bounce that immediately follows a missed inward pass.
+    private bool    _flashRingIsAutoMiss = false;
 
     private Vector2 _shakeOrigin;
     private float   _shakeTimer       = 0f;
 
     // DEBUG ONLY ---------------------------------------------------------------
-    private ulong       _dbgSequenceStartMs;      // ms timestamp when first pass began
-    private ulong       _dbgPassStartMs;          // ms timestamp when current inward pass began
-    private ulong       _dbgPerfectWindowMs;      // estimated ms when ring == TargetRadius
-    private ulong       _dbgPlayerPressMs;        // ms when player pressed (0 = no press yet)
+    private ulong       _dbgSequenceStartMs;
+    private ulong       _dbgPassStartMs;
+    private ulong       _dbgPerfectWindowMs;
+    private ulong       _dbgPlayerPressMs;
     private bool        _dbgPlayerPressedThisPass;
-    private float       _dbgLastAccuracy;         // accuracy value at last Bounce() or Resolve()
-    private float       _dbgLastBounceSpeed;      // _bounceSpeedMultiplier at last Bounce()
-    private InputResult _dbgLastResult;           // result of the last full resolution
-    private ulong       _dbgResolutionMs;         // ms when prompt fully resolved
+    private float       _dbgLastAccuracy;
+    private InputResult _dbgLastResult;
+    private ulong       _dbgResolutionMs;
     // -------------------------------------------------------------------------
 
     // -------------------------------------------------------------------------
@@ -234,26 +254,34 @@ public partial class TimingPrompt : Node2D
     public override void _Ready()
     {
         _shakeOrigin = Position;
+        _activePrompts.Add(this);
         ApplyTypeSettings();
         ResetState();
+    }
+
+    public override void _ExitTree()
+    {
+        _activePrompts.Remove(this);
     }
 
     public override void _Process(double delta)
     {
         float dt = (float)delta;
 
+        // Flash ring timer — counts down independently; DrawDebugOverlay renders it while active.
+        if (_flashRingTimer > 0f)
+        {
+            _flashRingTimer -= dt;
+            QueueRedraw();
+        }
+
         // Flash timer — holds result colour briefly, then either hides the ring (resolved)
         // or resets it to the current pass's base color (mid-sequence bounce).
         if (_flashTimer > 0f)
         {
             _flashTimer -= dt;
-            if (_flashTimer <= 0f)
-            {
-                if (_resolved)
-                    _showMovingRing = false;         // ring disappears after final flash
-                else
-                    _movingRingColor = GetBaseColor(); // mid-bounce: restore current pass color
-            }
+            if (_flashTimer <= 0f && !_resolved)
+                _movingRingColor = GetBaseColor();
             QueueRedraw();
         }
 
@@ -272,16 +300,21 @@ public partial class TimingPrompt : Node2D
 
         if (_resolved) return;
 
+        // Lockout timer — decrement each frame; EvaluateInput checks this internally.
+        if (_lockoutTimer > 0f)
+            _lockoutTimer -= dt;
+
+        // Always delegate to EvaluateInput — it handles lockout, direction, and zone checks.
         if (Input.IsActionJustPressed("battle_confirm"))
             EvaluateInput();
 
-        float speedMultiplier = _movingInward ? 1f : _bounceSpeedMultiplier;
-        _t = Mathf.Clamp(_t + dt * speedMultiplier / Duration, 0f, 1f);
+        // Inward: advances over Duration; outward: advances over BounceDuration.
+        _t = Mathf.Clamp(_t + dt / (_movingInward ? Duration : BounceDuration), 0f, 1f);
 
-        // Inward pass travels from StartRadius through the target all the way to
-        // (TargetRadius - OvershootDistance), giving the player a grace window after
-        // the ideal hit moment before auto-miss triggers.
-        float inwardEndpoint = TargetRadius - OvershootDistance;
+        // Inward pass: StartRadius → (TargetRadius - RingLineWidth), the inner edge of the
+        // valid zone. t = 1 triggers OnPassComplete regardless of whether the player hit.
+        // Outward pass: always TargetRadius → StartRadius for deterministic timing.
+        float inwardEndpoint = TargetRadius - RingLineWidth;
         _currentRadius = _movingInward
             ? Mathf.Lerp(StartRadius,        inwardEndpoint, SampleCurve(InCurve,  _t, easeIn: true))
             : Mathf.Lerp(_bounceStartRadius, StartRadius,    SampleCurve(OutCurve, _t, easeIn: false));
@@ -299,92 +332,107 @@ public partial class TimingPrompt : Node2D
     /// <summary>
     /// Evaluates the player's input against the current ring position.
     ///
-    /// Standard / Slow: resolves the prompt immediately (hit or miss ends the sequence).
+    /// In zone (inward pass, |_currentRadius - TargetRadius| &lt;= RingLineWidth):
+    ///   Hit registered, flash shown immediately, no lockout. Circle continues on its
+    ///   scripted path; the result is consumed at t = 1 by OnPassComplete.
     ///
-    /// Bouncing: input is only registered during inward passes and only within the hit
-    /// window. A hit within the window triggers an early bounce at that moment. Input
-    /// outside the window is ignored — the ring continues to the overshoot and auto-misses.
-    /// Either way, the sequence always continues to the next pass.
+    /// Outside zone OR during outward pass:
+    ///   Failed input. InputLockoutDuration lockout starts. Circle unaffected.
+    ///
+    /// Locked out OR already hit this pass:
+    ///   Completely ignored, no effect.
     /// </summary>
     public InputResult EvaluateInput()
     {
         if (_resolved) return InputResult.Miss;
 
-        // During outward (bounce) passes, input is not evaluated.
-        if (Type == PromptType.Bouncing && !_movingInward)
+        // Locked out — ignore completely, no additional penalty.
+        if (_lockoutTimer > 0f) return InputResult.Miss;
+
+        // During outward pass: failed input, red flash at press position, lockout.
+        if (!_movingInward)
+        {
+            _flashRingRadius     = _currentRadius;
+            _flashRingColor      = ColorFlashMiss;
+            _flashRingTimer      = FlashDuration;
+            _flashRingIsAutoMiss = false;  // ensures outward-pass suppression applies
+            QueueRedraw();
+            _lockoutTimer = InputLockoutDuration;
             return InputResult.Miss;
+        }
 
         float distance = Mathf.Abs(_currentRadius - TargetRadius);
 
-        if (Type == PromptType.Bouncing)
+        // Outside valid zone: failed input, red flash at press position, lockout.
+        if (distance > RingLineWidth)
         {
-            // Input outside the hit window is ignored — ring travels on to the overshoot
-            // where OnPassComplete will auto-miss and continue the sequence.
-            if (distance > HitWindowSize)
-                return InputResult.Miss;
-
-            InputResult result = distance <= HitWindowSize * PerfectWindowFraction
-                ? InputResult.Perfect
-                : InputResult.Hit;
-
-            // DEBUG ONLY
-            if (DebugMode && !_dbgPlayerPressedThisPass)
-            {
-                _dbgPlayerPressMs        = Time.GetTicksMsec();
-                _dbgPlayerPressedThisPass = true;
-            }
-
-            EvaluatePassAndContinue(result);
-            return result;
+            _flashRingRadius     = _currentRadius;
+            _flashRingColor      = ColorFlashMiss;
+            _flashRingTimer      = FlashDuration;
+            _flashRingIsAutoMiss = false;  // ensures outward-pass suppression applies
+            QueueRedraw();
+            _lockoutTimer = InputLockoutDuration;
+            return InputResult.Miss;
         }
-        else
+
+        // Already registered a hit this pass — ignore.
+        if (_inputRegisteredThisPass) return InputResult.Miss;
+
+        // In zone: register hit, flash immediately, circle continues on scripted path.
+        InputResult result = distance <= RingLineWidth * PerfectWindowFraction
+            ? InputResult.Perfect
+            : InputResult.Hit;
+
+        _inputRegisteredThisPass = true;
+        _lastPassResult          = result;
+
+        // Flash ring appears at a fixed position independent of the moving ring.
+        // Perfect: snaps to TargetRadius. Hit: locked to the exact radius at press time.
+        // The moving ring itself does not change color — it continues on its scripted path.
+        _flashRingRadius = (result == InputResult.Perfect) ? TargetRadius : _currentRadius;
+        _flashRingColor  = FlashColorFor(result);
+        _flashRingTimer  = FlashDuration;
+        QueueRedraw();
+
+        // DEBUG ONLY
+        if (DebugMode && !_dbgPlayerPressedThisPass)
         {
-            // Standard / Slow: any input immediately resolves the prompt.
-            InputResult result = distance <= HitWindowSize * PerfectWindowFraction ? InputResult.Perfect
-                               : distance <= HitWindowSize                          ? InputResult.Hit
-                                                                                    : InputResult.Miss;
-
-            // DEBUG ONLY
-            if (DebugMode && !_dbgPlayerPressedThisPass)
-            {
-                _dbgPlayerPressMs        = Time.GetTicksMsec();
-                _dbgPlayerPressedThisPass = true;
-                _dbgLastAccuracy          = Mathf.Clamp(distance / HitWindowSize, 0f, 1f);
-                _dbgLastBounceSpeed       = 0f;  // Standard/Slow has no bounce
-            }
-
-            Resolve(result);
-            return result;
+            _dbgPlayerPressMs         = Time.GetTicksMsec();
+            _dbgPlayerPressedThisPass = true;
+            _dbgLastAccuracy          = Mathf.Clamp(distance / RingLineWidth, 0f, 1f);
         }
+
+        return result;
     }
 
     /// <summary>
-    /// Reverses the prompt's direction, swapping the active curve.
-    /// Called automatically by OnPassComplete when bounces remain.
-    /// Can also be called externally by BattleSystem to force an early reversal.
+    /// Evaluates all active prompts against a single input event.
+    /// Call once per input event from BattleSystem for multi-circle encounters.
+    /// Each prompt's EvaluateInput handles its own zone, direction, and lockout checks.
+    /// </summary>
+    public static void ConfirmAll()
+    {
+        // Iterate over a copy in case evaluation causes prompts to exit the tree.
+        foreach (var prompt in new List<TimingPrompt>(_activePrompts))
+            prompt.EvaluateInput();
+    }
+
+    /// <summary>
+    /// Reverses the prompt's direction, resetting t to 0.
+    /// Always called at t = 1 of an inward pass (scripted bounce point).
+    /// The outward lerp always starts from TargetRadius, so every bounce covers the same
+    /// distance and completes in exactly BounceDuration seconds.
     /// </summary>
     public void Bounce()
     {
-        // Capture where the ring is right now as the outward lerp start point.
-        // This means a near-target hit travels less distance outward and moves slower
-        // in px/s, while an edge hit or auto-miss travels more distance and moves faster —
-        // but both complete in exactly FixedReturnDuration seconds because _bounceSpeedMultiplier
-        // scales _t to always go 0→1 in FixedReturnDuration regardless of lerp range.
-        _bounceStartRadius     = _currentRadius;
-        _bounceSpeedMultiplier = Duration / FixedReturnDuration;
-
-        // DEBUG ONLY
-        if (DebugMode)
-        {
-            float pixelsToTravel  = StartRadius - _bounceStartRadius;
-            float pixelSpeed      = pixelsToTravel / FixedReturnDuration;
-            _dbgLastAccuracy      = Mathf.Clamp(Mathf.Abs(_currentRadius - TargetRadius) / HitWindowSize, 0f, 1f);
-            _dbgLastBounceSpeed   = pixelSpeed;  // stored as px/s for readability in overlay
-        }
-
-        _t            = 0f;
-        _movingInward = !_movingInward;
+        _bounceStartRadius = TargetRadius;  // always start outward from the target
+        _t                 = 0f;
+        _movingInward      = false;
         _bouncesRemaining--;
+        // Advance pass index and apply the next pass color immediately so the player
+        // sees the new color for the full outward travel before the next inward pass begins.
+        _passIndex++;
+        _movingRingColor = GetBaseColor();
         QueueRedraw();
     }
 
@@ -394,18 +442,20 @@ public partial class TimingPrompt : Node2D
 
     public override void _Draw()
     {
-        // Hit window band (yellow tint) — shows the acceptable input zone.
-        DrawBand(TargetRadius, HitWindowSize, ColorHitWindow);
-
-        // Perfect window band (green tint) — inner zone within the hit window.
-        DrawBand(TargetRadius, HitWindowSize * PerfectWindowFraction, ColorPerfectZone);
-
-        // Target ring (static white) — always visible.
+        // Green rim and target ring — always visible; persist after resolution.
+        DrawBand(TargetRadius, RingLineWidth, ColorHitWindow);
         DrawArc(Vector2.Zero, TargetRadius, 0f, Mathf.Tau, 64, ColorTarget, RingLineWidth);
 
         // Moving ring — hidden after flash expires on a fully resolved prompt.
         if (_showMovingRing)
             DrawArc(Vector2.Zero, Mathf.Max(0f, _currentRadius), 0f, Mathf.Tau, 64, _movingRingColor, RingLineWidth);
+
+        // Flash ring — wrong-input flashes are suppressed during outward passes (Bouncing only)
+        // to avoid cluttering the bounce animation. Auto-miss flashes override this suppression
+        // so the inner red ring is visible during the bounce that immediately follows a miss.
+        bool suppressFlashRing = Type == PromptType.Bouncing && !_movingInward && !_flashRingIsAutoMiss;
+        if (_flashRingTimer > 0f && !suppressFlashRing)
+            DrawArc(Vector2.Zero, _flashRingRadius, 0f, Mathf.Tau, 64, _flashRingColor, RingLineWidth);
 
         // DEBUG ONLY
         if (DebugMode) DrawDebugOverlay();
@@ -416,30 +466,36 @@ public partial class TimingPrompt : Node2D
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Handles the result of a single Bouncing pass and advances the sequence.
-    /// Emits PassEvaluated, applies brief flash feedback, then either bounces
-    /// (more passes remain) or fully resolves (final pass).
-    /// The ring always continues — the sequence is scripted and consistent.
+    /// Called from OnPassComplete at t = 1 of a Bouncing inward pass.
+    /// Uses _inputRegisteredThisPass to determine the result.
+    /// Flash and shake only fire on auto-miss (hit was already flashed at press time).
+    /// Always bounces if passes remain; resolves on the final pass.
     /// </summary>
     private void EvaluatePassAndContinue(InputResult result)
     {
-        // Flash — ring continues after (not resolved yet), so flash expiry restores base color.
-        _movingRingColor = FlashColorFor(result);
-        _flashTimer      = FlashDuration;
-        QueueRedraw();
-
-        EmitSignal(SignalName.PassEvaluated, (int)result, _passIndex);
-
+        // Only flash/shake on auto-miss — hit was flashed at press time.
+        // Flash is suppressed when _lockoutTimer > 0: the wrong-input red flash already fired,
+        // drawing a second one is redundant. Circle resolves silently in that case.
         if (result == InputResult.Miss)
         {
+            if (_lockoutTimer <= 0f)
+            {
+                _flashRingRadius     = TargetRadius - RingLineWidth;
+                _flashRingColor      = ColorFlashMiss;
+                _flashRingTimer      = FlashDuration;
+                _flashRingIsAutoMiss = true;
+                QueueRedraw();
+            }
             _shakeOrigin = Position;
             _shakeTimer  = ShakeDuration;
             MissSoundPlayer?.Play();
         }
 
+        EmitSignal(SignalName.PassEvaluated, (int)result, _passIndex);
+
         if (_bouncesRemaining > 0)
         {
-            Bounce();  // more passes — launch outward
+            Bounce();
         }
         else
         {
@@ -447,7 +503,8 @@ public partial class TimingPrompt : Node2D
             // DEBUG ONLY
             if (DebugMode) { _dbgLastResult = result; _dbgResolutionMs = Time.GetTicksMsec(); }
 
-            _resolved = true;
+            _resolved       = true;
+            _showMovingRing = false;
             EmitSignal(SignalName.PromptCompleted, (int)result);
             if (AutoLoop)
                 GetTree().CreateTimer(1.0).Timeout += ResetPrompt;
@@ -455,19 +512,27 @@ public partial class TimingPrompt : Node2D
     }
 
     /// <summary>
-    /// Resolves a Standard or Slow prompt (single pass).
-    /// Sets _resolved, applies flash, and emits PromptCompleted.
+    /// Called from OnPassComplete at t = 1 of a Standard or Slow inward pass.
+    /// Uses _inputRegisteredThisPass to determine the result.
+    /// Flash and shake only fire on auto-miss.
     /// </summary>
     private void Resolve(InputResult result)
     {
         if (_resolved) return;
-        _resolved = true;
+        _resolved       = true;
+        _showMovingRing = false;
 
-        _movingRingColor = FlashColorFor(result);
-        _flashTimer      = FlashDuration;
-
+        // Only flash/shake on auto-miss — hit was flashed at press time.
+        // Flash is suppressed when _lockoutTimer > 0: the wrong-input red flash already fired.
         if (result == InputResult.Miss)
         {
+            if (_lockoutTimer <= 0f)
+            {
+                _flashRingRadius     = TargetRadius - RingLineWidth;
+                _flashRingColor      = ColorFlashMiss;
+                _flashRingTimer      = FlashDuration;
+                _flashRingIsAutoMiss = true;
+            }
             _shakeOrigin = Position;
             _shakeTimer  = ShakeDuration;
             MissSoundPlayer?.Play();
@@ -476,10 +541,9 @@ public partial class TimingPrompt : Node2D
         // DEBUG ONLY
         if (DebugMode)
         {
-            _dbgLastResult    = result;
-            _dbgResolutionMs  = Time.GetTicksMsec();
-            _dbgLastAccuracy    = Mathf.Clamp(Mathf.Abs(_currentRadius - TargetRadius) / HitWindowSize, 0f, 1f);
-            _dbgLastBounceSpeed = 0f;  // no outward pass after final resolution
+            _dbgLastResult   = result;
+            _dbgResolutionMs = Time.GetTicksMsec();
+            _dbgLastAccuracy = Mathf.Clamp(Mathf.Abs(_currentRadius - TargetRadius) / RingLineWidth, 0f, 1f);
         }
 
         QueueRedraw();
@@ -492,33 +556,32 @@ public partial class TimingPrompt : Node2D
     /// <summary>
     /// Called when a pass (inward or outward) reaches t = 1.
     ///
-    /// Inward: evaluates auto-miss and either continues (Bouncing) or resolves (Standard/Slow).
-    /// Outward: advances to the next inward pass and updates the ring color for that pass.
+    /// Inward: pass is complete. Result = registered hit if _inputRegisteredThisPass,
+    ///         otherwise auto-miss (no lockout). For Bouncing, always bounces.
+    ///         For Standard/Slow, resolves the prompt.
+    /// Outward: starts the next inward pass and resets per-pass input state.
     /// </summary>
     private void OnPassComplete()
     {
-        if (_resolved) return;  // player input already resolved this pass
+        if (_resolved) return;
 
         if (_movingInward)
         {
+            InputResult result = _inputRegisteredThisPass ? _lastPassResult : InputResult.Miss;
+
             if (Type == PromptType.Bouncing)
-            {
-                // Ring reached overshoot without player input — auto-miss, sequence continues.
-                EvaluatePassAndContinue(InputResult.Miss);
-            }
+                EvaluatePassAndContinue(result);
             else
-            {
-                // Standard / Slow: ring passed all the way through — auto-miss resolves.
-                Resolve(InputResult.Miss);
-            }
+                Resolve(result);
         }
         else
         {
-            // Outward pass complete — start the next inward pass and shift to its color.
-            _t               = 0f;
-            _movingInward    = true;
-            _passIndex++;
-            _movingRingColor = GetBaseColor();
+            // Outward pass complete — start the next inward pass.
+            // _passIndex and _movingRingColor were already updated in Bounce() at outward-pass start.
+            _t                       = 0f;
+            _movingInward            = true;
+            _inputRegisteredThisPass = false;
+            _lastPassResult          = InputResult.Miss;
 
             // DEBUG ONLY
             if (DebugMode) DbgStartNewInwardPass();
@@ -526,7 +589,7 @@ public partial class TimingPrompt : Node2D
     }
 
     /// <summary>
-    /// Configures Duration, HitWindowSize, and BounceCount from the current Type.
+    /// Configures Duration and BounceCount from the current Type.
     /// Called on _Ready and before each AutoLoop reset when type cycling is active.
     /// </summary>
     private void ApplyTypeSettings()
@@ -534,27 +597,23 @@ public partial class TimingPrompt : Node2D
         switch (Type)
         {
             case PromptType.Standard:
-                Duration      = 1.0f;
-                HitWindowSize = 20.0f;
-                BounceCount   = 0;
+                Duration    = 1.0f;
+                BounceCount = 0;
                 break;
             case PromptType.Slow:
-                Duration      = SlowDuration;
-                HitWindowSize = SlowHitWindow;
-                BounceCount   = 0;
+                Duration    = SlowDuration;
+                BounceCount = 0;
                 break;
             case PromptType.Bouncing:
-                Duration      = 1.0f;
-                HitWindowSize = 20.0f;
-                BounceCount   = 2;
+                Duration    = 1.0f;
+                BounceCount = 2;
                 break;
         }
     }
 
     /// <summary>
     /// Returns the base ring color for the current type and pass index.
-    /// Result flash colors are applied separately in Resolve/EvaluatePassAndContinue
-    /// and always override this.
+    /// Result flash colors are applied separately and always override this.
     /// </summary>
     private Color GetBaseColor()
     {
@@ -563,9 +622,9 @@ public partial class TimingPrompt : Node2D
             PromptType.Slow     => ColorSlow,
             PromptType.Bouncing => _passIndex switch
             {
-                0 => ColorBouncePass1,  // pink   — first approach
-                1 => ColorBouncePass2,  // orange — second approach
-                _ => ColorStandard,     // white  — final approach, signals last chance
+                0 => ColorBouncePass1,  // teal   — first approach
+                1 => ColorBouncePass2,  // orange — second approach (color shifts at start of outward pass)
+                _ => ColorStandard,     // white  — final approach (color shifts at start of outward pass)
             },
             _                   => ColorStandard,
         };
@@ -591,28 +650,32 @@ public partial class TimingPrompt : Node2D
     /// <summary>Resets all runtime state for a fresh prompt run.</summary>
     private void ResetState()
     {
-        _t                = 0f;
-        _movingInward     = true;
-        _passIndex        = 0;
-        _bouncesRemaining = BounceCount;
-        _resolved         = false;
-        _currentRadius    = StartRadius;
-        _movingRingColor  = GetBaseColor();
-        _flashTimer            = 0f;
-        _showMovingRing        = true;
-        _bounceSpeedMultiplier = 1f;
-        _bounceStartRadius     = StartRadius;
-        _shakeTimer            = 0f;
-        Position               = _shakeOrigin;
+        _t                       = 0f;
+        _movingInward            = true;
+        _passIndex               = 0;
+        _bouncesRemaining        = BounceCount;
+        _resolved                = false;
+        _currentRadius           = StartRadius;
+        _movingRingColor         = GetBaseColor();
+        _flashTimer              = 0f;
+        _showMovingRing          = true;
+        _lockoutTimer            = 0f;
+        _bounceStartRadius       = TargetRadius;
+        _flashRingTimer          = 0f;
+        _flashRingRadius         = 0f;
+        _flashRingIsAutoMiss     = false;
+        _inputRegisteredThisPass = false;
+        _lastPassResult          = InputResult.Miss;
+        _shakeTimer              = 0f;
+        Position                 = _shakeOrigin;
 
         // DEBUG ONLY
         if (DebugMode)
         {
-            _dbgSequenceStartMs      = Time.GetTicksMsec();
-            _dbgResolutionMs         = 0;
-            _dbgLastAccuracy         = 0f;
-            _dbgLastBounceSpeed      = 1f;
-            _dbgLastResult           = InputResult.Miss;
+            _dbgSequenceStartMs = Time.GetTicksMsec();
+            _dbgResolutionMs    = 0;
+            _dbgLastAccuracy    = 0f;
+            _dbgLastResult      = InputResult.Miss;
             DbgStartNewInwardPass();
         }
 
@@ -626,7 +689,6 @@ public partial class TimingPrompt : Node2D
     /// </summary>
     private void ResetPrompt()
     {
-        // DEV ONLY: advance to next type so all three can be observed in one session.
         if (AutoLoop)
         {
             Type = Type switch
@@ -656,12 +718,6 @@ public partial class TimingPrompt : Node2D
     // DEBUG ONLY — everything below this line is gated by DebugMode
     // =========================================================================
 
-    /// <summary>
-    /// Records the start time and estimated perfect-window time for the new inward pass,
-    /// and clears the player-press record. Called at sequence start and at each
-    /// outward→inward transition.
-    /// DEBUG ONLY.
-    /// </summary>
     private void DbgStartNewInwardPass()
     {
         _dbgPassStartMs           = Time.GetTicksMsec();
@@ -671,14 +727,9 @@ public partial class TimingPrompt : Node2D
         _dbgPlayerPressMs         = 0;
     }
 
-    /// <summary>
-    /// Binary-searches for the t value (0–1) at which the inward-pass lerp produces
-    /// the given target radius. Used to predict the perfect input moment.
-    /// DEBUG ONLY.
-    /// </summary>
     private float DbgSolveTForRadius(float targetR)
     {
-        float inwardEndpoint = TargetRadius - OvershootDistance;
+        float inwardEndpoint = TargetRadius - RingLineWidth;
         float lo = 0f, hi = 1f;
         for (int i = 0; i < 20; i++)
         {
@@ -689,12 +740,6 @@ public partial class TimingPrompt : Node2D
         return (lo + hi) * 0.5f;
     }
 
-    /// <summary>
-    /// Draws a readable debug overlay at the top-left corner of the screen,
-    /// anchored to _shakeOrigin so it stays fixed during screen shake.
-    /// Displays per-frame, per-pass, and per-resolution diagnostics.
-    /// DEBUG ONLY — called from _Draw() only when DebugMode is true.
-    /// </summary>
     private void DrawDebugOverlay()
     {
         Font font = ThemeDB.Singleton.FallbackFont;
@@ -706,13 +751,11 @@ public partial class TimingPrompt : Node2D
         Color dimWhite = new Color(1.00f, 1.00f, 1.00f, 0.80f);
         Color active   = new Color(0.40f, 1.00f, 0.65f, 1.00f);
         Color heading  = new Color(1.00f, 0.85f, 0.30f, 1.00f);
+        Color warn     = new Color(1.00f, 0.50f, 0.20f, 1.00f);
 
-        // Anchor to screen top-left regardless of node position or active shake.
         float x = -_shakeOrigin.X + 12f;
         float y = -_shakeOrigin.Y + 20f;
 
-        // Local helper — draws one line then advances y.
-        // Captures x, y, font, fontSize by reference (C# local function semantics).
         void Ln(string text, Color col)
         {
             DrawString(font, new Vector2(x, y), text, HorizontalAlignment.Left, -1, fontSize, col);
@@ -724,23 +767,25 @@ public partial class TimingPrompt : Node2D
 
         // ── Per-frame ─────────────────────────────────────────────────────────
         Ln("  FRAME", heading);
-        Ln($"    Radius      : {_currentRadius:F1} px   (target {TargetRadius:F0})", dimWhite);
+        Ln($"    Radius      : {_currentRadius:F1} px   (target {TargetRadius:F0}, window ±{RingLineWidth:F0})", dimWhite);
         Ln($"    t           : {_t:F3}", dimWhite);
         Ln($"    Direction   : {(_movingInward ? "Inward" : "Outward")}", dimWhite);
+        Ln($"    Lockout     : {(_lockoutTimer > 0f ? $"{_lockoutTimer:F2}s remaining" : "—")}", _lockoutTimer > 0f ? warn : dimWhite);
+        Ln($"    Hit reg.    : {(_inputRegisteredThisPass ? _lastPassResult.ToString() : "—")}", _inputRegisteredThisPass ? active : dimWhite);
 
         // ── Per-pass ──────────────────────────────────────────────────────────
         int totalPasses = BounceCount + 1;
-        Ln($"  PASS  {_passIndex + 1} / {totalPasses}   [{Type}]", heading);
+        Ln($"  PASS  {_passIndex + 1} / {totalPasses}   [{Type}]  BounceDur: {BounceDuration:F2}s", heading);
 
-        long passStartRel  = (long)(_dbgPassStartMs    - _dbgSequenceStartMs);
-        long perfectRel    = (long)(_dbgPerfectWindowMs - _dbgSequenceStartMs);
+        long passStartRel = (long)(_dbgPassStartMs    - _dbgSequenceStartMs);
+        long perfectRel   = (long)(_dbgPerfectWindowMs - _dbgSequenceStartMs);
         Ln($"    Started     : +{passStartRel} ms", dimWhite);
         Ln($"    Perfect @   : +{perfectRel} ms", dimWhite);
 
         if (_dbgPlayerPressedThisPass)
         {
-            long pressRel = (long)(_dbgPlayerPressMs  - _dbgSequenceStartMs);
-            long offset   = (long)_dbgPlayerPressMs   - (long)_dbgPerfectWindowMs;
+            long pressRel = (long)(_dbgPlayerPressMs - _dbgSequenceStartMs);
+            long offset   = (long)_dbgPlayerPressMs  - (long)_dbgPerfectWindowMs;
             string sign   = offset >= 0 ? "+" : "";
             string tag    = offset >= 0 ? "late" : "early";
             Ln($"    Pressed @   : +{pressRel} ms", active);
@@ -752,8 +797,7 @@ public partial class TimingPrompt : Node2D
             Ln("    Offset      : —", dimWhite);
         }
 
-        Ln($"    Accuracy    : {_dbgLastAccuracy:F3}   (0 = perfect, 1 = edge/overshoot)", dimWhite);
-        Ln($"    Outward spd : {_dbgLastBounceSpeed:F1} px/s   (fixed return: {FixedReturnDuration:F2}s)", dimWhite);
+        Ln($"    Accuracy    : {_dbgLastAccuracy:F3}   (0 = perfect, 1 = edge)", dimWhite);
 
         // ── Per-resolution ────────────────────────────────────────────────────
         if (_dbgResolutionMs > 0)
