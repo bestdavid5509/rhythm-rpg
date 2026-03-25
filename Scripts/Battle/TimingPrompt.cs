@@ -128,7 +128,7 @@ public partial class TimingPrompt : Node2D
     /// When true, draws a per-frame / per-pass / per-resolution debug overlay
     /// in the top-left corner of the screen. Disable before shipping.
     /// </summary>
-    [Export] public bool DebugMode = true;
+    [Export] public bool DebugMode = false;
     // -------------------------------------------------------------------------
 
     // -------------------------------------------------------------------------
@@ -179,7 +179,7 @@ public partial class TimingPrompt : Node2D
     // Per-type ring colors
     private static readonly Color ColorStandard    = new Color(1.00f, 1.00f, 1.00f, 1.00f);  // white
     private static readonly Color ColorSlow        = new Color(0.35f, 0.65f, 1.00f, 1.00f);  // blue
-    private static readonly Color ColorBouncePass1 = new Color(0.20f, 0.85f, 0.80f, 1.00f);  // teal
+    private static readonly Color ColorBouncePass1 = new Color(0.18f, 0.80f, 0.80f, 1.00f);  // teal
     private static readonly Color ColorBouncePass2 = new Color(1.00f, 0.60f, 0.20f, 1.00f);  // orange
     // Pass 3 of Bouncing uses ColorStandard (white) — signals final approach to the player
 
@@ -753,8 +753,11 @@ public partial class TimingPrompt : Node2D
         Color heading  = new Color(1.00f, 0.85f, 0.30f, 1.00f);
         Color warn     = new Color(1.00f, 0.50f, 0.20f, 1.00f);
 
-        float x = -_shakeOrigin.X + 12f;
-        float y = -_shakeOrigin.Y + 20f;
+        // ToLocal converts the global screen origin (0,0) to this node's local coordinate
+        // space, giving a fixed screen-top-left anchor that holds even during screen shake.
+        Vector2 screenTopLeft = ToLocal(Vector2.Zero);
+        float x = screenTopLeft.X + 12f;
+        float y = screenTopLeft.Y + 20f;
 
         void Ln(string text, Color col)
         {

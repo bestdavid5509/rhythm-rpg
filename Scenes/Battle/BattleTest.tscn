@@ -1,0 +1,80 @@
+[gd_scene format=3 uid="uid://c836l6y8vexm8"]
+
+[ext_resource type="Script" uid="uid://dh4rjlvlickpi" path="res://Scripts/Battle/BattleTest.cs" id="1_battletest"]
+[ext_resource type="PackedScene" path="res://Scenes/Battle/TimingPrompt.tscn" id="2_timingprompt"]
+
+[node name="BattleTest" type="Node2D" unique_id=1582212467]
+script = ExtResource("1_battletest")
+
+[node name="Background" type="ColorRect" parent="." unique_id=1572392609]
+offset_right = 1920.0
+offset_bottom = 1080.0
+color = Color(0.07, 0.07, 0.13, 1)
+
+[node name="PlayerSprite" type="ColorRect" parent="." unique_id=577779961]
+offset_left = 230.0
+offset_top = 380.0
+offset_right = 330.0
+offset_bottom = 540.0
+color = Color(0.25, 0.5, 0.85, 1)
+
+[node name="PlayerLabel" type="Label" parent="PlayerSprite" unique_id=438963690]
+layout_mode = 0
+offset_top = 165.0
+offset_right = 100.0
+offset_bottom = 190.0
+text = "Player"
+
+[node name="EnemySprite" type="ColorRect" parent="." unique_id=1045893198]
+offset_left = 1570.0
+offset_top = 320.0
+offset_right = 1690.0
+offset_bottom = 520.0
+color = Color(0.75, 0.18, 0.12, 1)
+
+[node name="EnemyLabel" type="Label" parent="EnemySprite" unique_id=1960786868]
+layout_mode = 0
+offset_top = 205.0
+offset_right = 120.0
+offset_bottom = 230.0
+text = "Enemy"
+
+[node name="PlayerHP" type="Node2D" parent="." unique_id=1904299451]
+position = Vector2(50, 1010)
+
+[node name="HPBackground" type="ColorRect" parent="PlayerHP" unique_id=1051246761]
+offset_right = 300.0
+offset_bottom = 22.0
+color = Color(0.12, 0.03, 0.03, 1)
+
+[node name="Fill" type="ColorRect" parent="PlayerHP" unique_id=1726135321]
+offset_right = 300.0
+offset_bottom = 22.0
+color = Color(0.8, 0.12, 0.12, 1)
+
+[node name="HPLabel" type="Label" parent="PlayerHP" unique_id=1500123043]
+offset_top = -26.0
+offset_right = 150.0
+offset_bottom = -2.0
+text = "Player HP"
+
+[node name="EnemyHP" type="Node2D" parent="." unique_id=397066021]
+position = Vector2(1570, 42)
+
+[node name="HPBackground" type="ColorRect" parent="EnemyHP" unique_id=749812366]
+offset_right = 300.0
+offset_bottom = 22.0
+color = Color(0.12, 0.03, 0.03, 1)
+
+[node name="Fill" type="ColorRect" parent="EnemyHP" unique_id=2144443672]
+offset_right = 300.0
+offset_bottom = 22.0
+color = Color(0.8, 0.12, 0.12, 1)
+
+[node name="HPLabel" type="Label" parent="EnemyHP" unique_id=272319794]
+offset_top = 26.0
+offset_right = 150.0
+offset_bottom = 50.0
+text = "Enemy HP"
+
+[node name="TimingPrompt" parent="." unique_id=1263829250 instance=ExtResource("2_timingprompt")]
