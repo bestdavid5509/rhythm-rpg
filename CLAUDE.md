@@ -54,6 +54,35 @@ Only the Absorber can learn moves.
 - Enemies can have heals and debuffs the player **cannot interfere with** — these create urgency and strategic tension
 - Signature/learnable moves are a specific, marked subset of an enemy's attack pool
 
+### Input and Damage Are Simultaneous
+
+The button press IS the strike landing. Damage — to the player or enemy — is applied at the moment of each input resolution, not at the end of a sequence. This applies universally to both defending and attacking.
+
+### Enemy Attacks
+
+Enemy attacks always play their **full sequence** regardless of player input outcome. The player cannot cut a sequence short by missing. Each inward pass is an independent strike opportunity.
+
+### Perfect Parry
+
+A perfect parry occurs when the player registers a **Hit or Perfect on every pass** in an enemy attack sequence — no misses. A single miss at any point breaks the parry, including on intermediate passes of a Bouncing prompt.
+
+**Effect:** Triggers an automatic 20 counter-damage after the full sequence completes. No additional input required.
+
+### Player Attack Combos
+
+Player attack combos continue as long as every input is hit (Hit or Perfect). **The combo ends on the first missed input.** Total damage scales with how many inputs were landed before the miss.
+
+### Damage Model
+
+| Event | Effect |
+|---|---|
+| Enemy attack — Hit or Perfect per pass | 0 damage to player (strike blocked) |
+| Enemy attack — Miss per pass | Player takes 10 damage (unblocked strike) |
+| Perfect parry (all passes hit) | Enemy takes 20 damage (automatic counter) |
+| Player attack — Perfect | Enemy takes 13 damage |
+| Player attack — Hit | Enemy takes 10 damage |
+| Player attack — Miss | Enemy takes 5 damage, combo ends |
+
 ### Move Properties
 
 - Moves have **elemental typing** for matchup advantages

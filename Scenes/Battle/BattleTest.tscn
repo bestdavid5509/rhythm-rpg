@@ -1,7 +1,6 @@
 [gd_scene format=3 uid="uid://c836l6y8vexm8"]
 
 [ext_resource type="Script" uid="uid://dh4rjlvlickpi" path="res://Scripts/Battle/BattleTest.cs" id="1_battletest"]
-[ext_resource type="PackedScene" path="res://Scenes/Battle/TimingPrompt.tscn" id="2_timingprompt"]
 
 [node name="BattleTest" type="Node2D" unique_id=1582212467]
 script = ExtResource("1_battletest")
@@ -76,6 +75,3 @@ offset_top = 26.0
 offset_right = 150.0
 offset_bottom = 50.0
 text = "Enemy HP"
-
-[node name="TimingPrompt" parent="." unique_id=1263829250 instance=ExtResource("2_timingprompt")]
-position = Vector2(960, 540)
