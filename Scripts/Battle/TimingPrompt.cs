@@ -190,7 +190,7 @@ public partial class TimingPrompt : Node2D
 
     private const float SlowDuration   = 2.0f;
 
-    private const float FlashDuration  = 0.15f;
+    public const float  FlashDuration  = 0.3f;
     private const float ShakeDuration  = 0.30f;
     private const float ShakeIntensity = 6f;
 
@@ -232,6 +232,9 @@ public partial class TimingPrompt : Node2D
     // True when the flash ring was set by an auto-miss — overrides outward-pass suppression so
     // the ring shows during the bounce that immediately follows a missed inward pass.
     private bool    _flashRingIsAutoMiss = false;
+    // True when the flash ring was set by a successful input (Hit or Perfect).
+    // Prevents outward-pass suppression from hiding success flashes on Bouncing prompts.
+    private bool    _flashRingIsSuccess  = false;
 
     private Vector2 _shakeOrigin;
     private float   _shakeTimer       = 0f;
@@ -355,7 +358,8 @@ public partial class TimingPrompt : Node2D
             _flashRingRadius     = _currentRadius;
             _flashRingColor      = ColorFlashMiss;
             _flashRingTimer      = FlashDuration;
-            _flashRingIsAutoMiss = false;  // ensures outward-pass suppression applies
+            _flashRingIsAutoMiss = false;
+            _flashRingIsSuccess  = false;  // wrong-input — suppress during outward pass
             QueueRedraw();
             _lockoutTimer = InputLockoutDuration;
             return InputResult.Miss;
@@ -369,7 +373,8 @@ public partial class TimingPrompt : Node2D
             _flashRingRadius     = _currentRadius;
             _flashRingColor      = ColorFlashMiss;
             _flashRingTimer      = FlashDuration;
-            _flashRingIsAutoMiss = false;  // ensures outward-pass suppression applies
+            _flashRingIsAutoMiss = false;
+            _flashRingIsSuccess  = false;  // wrong-input — suppress during outward pass
             QueueRedraw();
             _lockoutTimer = InputLockoutDuration;
             return InputResult.Miss;
@@ -389,10 +394,14 @@ public partial class TimingPrompt : Node2D
         // Flash ring appears at a fixed position independent of the moving ring.
         // Perfect: snaps to TargetRadius. Hit: locked to the exact radius at press time.
         // The moving ring itself does not change color — it continues on its scripted path.
-        _flashRingRadius = (result == InputResult.Perfect) ? TargetRadius : _currentRadius;
-        _flashRingColor  = FlashColorFor(result);
-        _flashRingTimer  = FlashDuration;
+        _flashRingRadius    = (result == InputResult.Perfect) ? TargetRadius : _currentRadius;
+        _flashRingColor     = FlashColorFor(result);
+        _flashRingTimer     = FlashDuration;
+        _flashRingIsSuccess = true;  // success flash — always visible, never suppressed
         QueueRedraw();
+
+        if (result == InputResult.Perfect)
+            SpawnPerfectLabel();
 
         // DEBUG ONLY
         if (DebugMode && !_dbgPlayerPressedThisPass)
@@ -450,10 +459,9 @@ public partial class TimingPrompt : Node2D
         if (_showMovingRing)
             DrawArc(Vector2.Zero, Mathf.Max(0f, _currentRadius), 0f, Mathf.Tau, 64, _movingRingColor, RingLineWidth);
 
-        // Flash ring — wrong-input flashes are suppressed during outward passes (Bouncing only)
-        // to avoid cluttering the bounce animation. Auto-miss flashes override this suppression
-        // so the inner red ring is visible during the bounce that immediately follows a miss.
-        bool suppressFlashRing = Type == PromptType.Bouncing && !_movingInward && !_flashRingIsAutoMiss;
+        // Flash ring — wrong-input red flashes are suppressed during outward passes (Bouncing only)
+        // to avoid cluttering the bounce animation. Auto-miss and success flashes are always shown.
+        bool suppressFlashRing = Type == PromptType.Bouncing && !_movingInward && !_flashRingIsAutoMiss && !_flashRingIsSuccess;
         if (_flashRingTimer > 0f && !suppressFlashRing)
             DrawArc(Vector2.Zero, _flashRingRadius, 0f, Mathf.Tau, 64, _flashRingColor, RingLineWidth);
 
@@ -547,6 +555,10 @@ public partial class TimingPrompt : Node2D
         }
 
         QueueRedraw();
+        // Emit PassEvaluated here so Standard and Slow participate in the same
+        // per-pass signal contract as Bouncing. Subscribers (e.g. slam animations)
+        // can connect once to PassEvaluated and work for all prompt types.
+        EmitSignal(SignalName.PassEvaluated, (int)result, _passIndex);
         EmitSignal(SignalName.PromptCompleted, (int)result);
 
         if (AutoLoop)
@@ -664,6 +676,7 @@ public partial class TimingPrompt : Node2D
         _flashRingTimer          = 0f;
         _flashRingRadius         = 0f;
         _flashRingIsAutoMiss     = false;
+        _flashRingIsSuccess      = false;
         _inputRegisteredThisPass = false;
         _lastPassResult          = InputResult.Miss;
         _shakeTimer              = 0f;
@@ -701,6 +714,32 @@ public partial class TimingPrompt : Node2D
         }
 
         ResetState();
+    }
+
+    /// <summary>
+    /// Spawns a "PERFECT!" label at the prompt's world position that floats upward 60px
+    /// and fades out over 0.6 seconds. Added to the prompt's parent so it is unaffected
+    /// by the prompt's own transform or shake.
+    /// </summary>
+    private void SpawnPerfectLabel()
+    {
+        var label = new Label();
+        label.Text                = "PERFECT!";
+        label.Modulate            = ColorFlashPerfect;
+        label.HorizontalAlignment = HorizontalAlignment.Center;
+        label.CustomMinimumSize   = new Vector2(120f, 0f);
+        label.AddThemeFontSizeOverride("font_size", 28);
+
+        Vector2 startPos = GlobalPosition - new Vector2(60f, 0f);
+        Vector2 endPos   = startPos - new Vector2(0f, 60f);
+        label.Position   = startPos;
+        GetParent().AddChild(label);
+
+        var tween = label.CreateTween();
+        tween.SetParallel(true);
+        tween.TweenProperty(label, "position",   endPos, 0.6f);
+        tween.TweenProperty(label, "modulate:a", 0.0f,   0.6f);
+        tween.Finished += label.QueueFree;
     }
 
     /// <summary>
