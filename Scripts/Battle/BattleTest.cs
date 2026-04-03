@@ -94,10 +94,11 @@ public partial class BattleTest : Node2D
     private const float EnemySpriteOffsetY = 130f;
     private const float EffectOffsetY      =  14f;
 
-    private TimingPrompt    _activePrompt;
-    private PackedScene     _timingPromptScene;
-    private BattleSystem    _battleSystem;
+    private TimingPrompt     _activePrompt;
+    private PackedScene      _timingPromptScene;
+    private BattleSystem     _battleSystem;
     private AnimatedSprite2D _enemyAnimSprite;
+    private AnimatedSprite2D _playerAnimSprite;
 
 
     // =========================================================================
@@ -106,8 +107,9 @@ public partial class BattleTest : Node2D
 
     private ColorRect _playerSprite;
     private ColorRect _enemySprite;
-    private Vector2   _playerOrigin;   // position at scene load — always restored after teardown
+    private Vector2   _playerOrigin;         // ColorRect position at scene load — positioning math anchor
     private Vector2   _enemyOrigin;
+    private Vector2   _playerAnimSpriteOrigin;  // AnimatedSprite2D position after floor-anchoring in _Ready
 
     // Set at the start of each attack turn; used by the shared animation helpers.
     private ColorRect _attacker;
@@ -156,12 +158,24 @@ public partial class BattleTest : Node2D
         _camera.Zoom     = CameraDefaultZoom;
         AddChild(_camera);
 
+        // Player animated sprite — SpriteFrames built from separate per-animation PNGs.
+        // BuildPlayerSpriteFrames returns the frame height (80px) for floor-anchored Y.
+        // 0.5f factor: AnimatedSprite2D is center-anchored, so half the scaled height
+        // offsets the center up so the bottom of the frame lands exactly on FloorY.
+        _playerAnimSprite = GetNode<AnimatedSprite2D>("PlayerAnimatedSprite");
+        int playerFrameH = BuildPlayerSpriteFrames();
+        _playerAnimSprite.Scale             = new Vector2(3f, 3f);
+        _playerAnimSprite.Position          = new Vector2(_playerAnimSprite.Position.X,
+                                                          FloorY - playerFrameH * 3f * 0.5f);
+        _playerAnimSpriteOrigin             = _playerAnimSprite.Position;  // snapshot for teardown restoration
+        _playerAnimSprite.Play("idle");
+
         // Enemy animated sprite — SpriteFrames built programmatically from the sheet.
-        _enemyAnimSprite = GetNode<AnimatedSprite2D>("EnemyAnimatedSprite");
-        BuildEnemySpriteFrames();
         // Floor-anchored positioning: center Y = FloorY - (frameHeight * scale * 0.6)
         // places the sprite so its visual base sits on the ground line.
-        // EnemySpriteOffsetY is an inspector-tunable nudge on top of the base formula.
+        // EnemySpriteOffsetY is a tuned nudge on top of the base formula.
+        _enemyAnimSprite = GetNode<AnimatedSprite2D>("EnemyAnimatedSprite");
+        BuildEnemySpriteFrames();
         _enemyAnimSprite.Scale    = new Vector2(3f, 3f);
         _enemyAnimSprite.Position = new Vector2(_enemyAnimSprite.Position.X,
                                                 FloorY - 160f * 3f * 0.6f + EnemySpriteOffsetY);
@@ -257,6 +271,22 @@ public partial class BattleTest : Node2D
         if (!SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
         OnEnemyPassEvaluated(result, passIndex);
+
+        // Drive player sprite reactions per-pass.
+        // AnimationFinished handlers self-disconnect to prevent stacking on multi-step sequences.
+        var r = (TimingPrompt.InputResult)result;
+        if (r == TimingPrompt.InputResult.Hit || r == TimingPrompt.InputResult.Perfect)
+        {
+            // Successful block — deflect animation, then return to idle.
+            _playerAnimSprite.Play("parry");
+            _playerAnimSprite.AnimationFinished += OnParryFinished;
+        }
+        else if (r == TimingPrompt.InputResult.Miss)
+        {
+            // Strike landed — flinch animation, then return to idle.
+            _playerAnimSprite.Play("hit");
+            _playerAnimSprite.AnimationFinished += OnHitAnimFinished;
+        }
     }
 
     /// <summary>
@@ -436,6 +466,8 @@ public partial class BattleTest : Node2D
         }
 
         UpdateHPBars();
+        // Return to idle now that the attack prompt has resolved.
+        _playerAnimSprite.Play("idle");
         GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += FreeActivePrompt;
         bool over = CheckGameOver();
         PlayTeardown(over ? null : () => GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack);
@@ -501,6 +533,94 @@ public partial class BattleTest : Node2D
         tween.TweenProperty(label, "position",   endPos, 1.0f);
         tween.TweenProperty(label, "modulate:a", 0.0f,   1.0f);
         tween.Finished += label.QueueFree;
+    }
+
+    // =========================================================================
+    // Player sprite setup
+    // =========================================================================
+
+    /// <summary>
+    /// Builds and assigns SpriteFrames for the player AnimatedSprite2D.
+    /// Each animation is a separate horizontal-strip PNG in Assets/Characters/Knight/.
+    /// Frame size is derived at runtime from texture height (all knight frames are 80×80).
+    /// Returns the frame height so the caller can position the sprite floor-anchored.
+    /// </summary>
+    private int BuildPlayerSpriteFrames()
+    {
+        const string Base  = "res://Assets/Characters/Knight/";
+        const int    Fw    = 120;   // all knight frames are 120×80 (not square)
+        const int    Fh    = 80;
+        var frames = new SpriteFrames();
+        frames.RemoveAnimation("default");
+
+        // idle / run / attack1 / hit / death — each file maps to one animation.
+        // _Attack2NoMovement.png (720×80 = 6 frames) provides two animations:
+        //   attack2 — all 6 frames, for chained player attacks
+        //   parry   — frames 2–5 (4 frames), plays on every successful parry input
+        int frameH = AddPlayerAnimation(frames, "idle",    Base + "_Idle.png",              loop: true,  fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "run",     Base + "_Run.png",               loop: true,  fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "attack1", Base + "_AttackNoMovement.png",  loop: false, fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "attack2", Base + "_Attack2NoMovement.png", loop: false, fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "parry",   Base + "_Attack2NoMovement.png", loop: false, fw: Fw, fh: Fh, startFrame: 2);
+                     AddPlayerAnimation(frames, "hit",     Base + "_Hit.png",               loop: false, fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "death",   Base + "_DeathNoMovement.png",   loop: false, fw: Fw, fh: Fh);
+
+        _playerAnimSprite.SpriteFrames = frames;
+
+        // Diagnostic: confirm every animation and its actual frame count.
+        // A 0-frame entry means the PNG failed to load (missing .import file).
+        // Calling Play() on a 0-frame animation hides the sprite — the primary blink cause.
+        GD.Print("[BattleTest] Player sprite frames summary:");
+        foreach (string anim in frames.GetAnimationNames())
+            GD.Print($"[BattleTest]   {anim}: {frames.GetFrameCount(anim)} frame(s)");
+
+        return frameH > 0 ? frameH : Fh;
+    }
+
+    /// <summary>
+    /// Loads a horizontal-strip texture and adds it as a named animation.
+    /// All knight PNGs use 120×80 frames — pass fw=120, fh=80 explicitly.
+    /// <paramref name="startFrame"/> skips leading frames; the loop runs from startFrame to strip end.
+    ///
+    /// parry detail: _Attack2NoMovement.png is 720×80 → 6 frames of 120×80.
+    /// startFrame=2 adds regions Rect2(240,0,120,80)…Rect2(600,0,120,80) = 4 frames (indices 2–5).
+    ///
+    /// Returns the frame height for floor-anchored Y positioning; returns 0 on load failure.
+    /// </summary>
+    private static int AddPlayerAnimation(
+        SpriteFrames frames, string name, string path,
+        bool loop, int fw, int fh, float fps = 12f, int startFrame = 0)
+    {
+        var texture = GD.Load<Texture2D>(path);
+        if (texture == null)
+        {
+            // Most likely cause: PNG has no .import file yet.
+            // Open the Godot editor once to trigger auto-import, then re-run.
+            GD.PrintErr($"[BattleTest] LOAD FAILED — '{name}' will have 0 frames: {path}");
+            frames.AddAnimation(name);  // stub so Play() won't throw; sprite will hide until fixed
+            return 0;
+        }
+
+        int count = texture.GetWidth() / fw;
+        int used  = count - startFrame;
+
+        GD.Print($"[BattleTest]   '{name}': {texture.GetWidth()}x{texture.GetHeight()}  " +
+                 $"fw={fw} fh={fh}  strip={count}  startFrame={startFrame}  used={used}  " +
+                 $"firstRegion=Rect2({startFrame * fw},0,{fw},{fh})");
+
+        frames.AddAnimation(name);
+        frames.SetAnimationSpeed(name, fps);
+        frames.SetAnimationLoop(name, loop);
+
+        for (int i = startFrame; i < count; i++)
+        {
+            var atlas    = new AtlasTexture();
+            atlas.Atlas  = texture;
+            atlas.Region = new Rect2(i * fw, 0, fw, fh);
+            frames.AddFrame(name, atlas);
+        }
+
+        return fh;
     }
 
     // =========================================================================
@@ -581,6 +701,18 @@ public partial class BattleTest : Node2D
         _enemyAnimSprite.Play("idle");
     }
 
+    private void OnParryFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnParryFinished;
+        _playerAnimSprite.Play("idle");
+    }
+
+    private void OnHitAnimFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnHitAnimFinished;
+        _playerAnimSprite.Play("idle");
+    }
+
     // =========================================================================
     // Attack animation — setup, per-pass slam, teardown
     // =========================================================================
@@ -599,11 +731,40 @@ public partial class BattleTest : Node2D
         _defender         = defender;
         _attackerClosePos = ComputeClosePosition();
 
+        // Play run at double speed while the player hops in — snappy charge feel.
+        // Guard: only call Play("run") if the animation has frames. A 0-frame animation
+        // (caused by a missing .import file for _Run.png) hides the sprite entirely.
+        if (attacker == _playerSprite)
+        {
+            int runFrames = _playerAnimSprite.SpriteFrames?.GetFrameCount("run") ?? 0;
+            GD.Print($"[BattleTest] PlayHopIn — attacker={attacker.Name}  isPlayer=true  run frames={runFrames}");
+            if (runFrames > 0)
+            {
+                _playerAnimSprite.SpeedScale = 2f;
+                _playerAnimSprite.Play("run");
+            }
+            else
+            {
+                GD.PrintErr("[BattleTest] 'run' has 0 frames — staying on idle during hop-in. " +
+                            "Open the Godot editor to auto-import _Run.png.");
+            }
+        }
+
         var tween = CreateTween();
         tween.SetParallel(true);
         // Hop in — ease-out (fast start, decelerates on arrival = lunge).
         tween.TweenProperty(attacker, "position", _attackerClosePos, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+        // When the player is the attacker, the visible AnimatedSprite2D must move with the
+        // ColorRect. Compute the same X delta and apply it to the sprite's floor-anchored origin.
+        if (attacker == _playerSprite)
+        {
+            float   hopDeltaX    = _attackerClosePos.X - _playerOrigin.X;
+            Vector2 animTarget   = new Vector2(_playerAnimSpriteOrigin.X + hopDeltaX,
+                                               _playerAnimSpriteOrigin.Y);
+            tween.TweenProperty(_playerAnimSprite, "position", animTarget, SetupDuration)
+                 .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+        }
         // Camera zooms in centered between the two combatants.
         tween.TweenProperty(_camera, "position", ComputeCameraMidpoint(), SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
@@ -634,6 +795,14 @@ public partial class BattleTest : Node2D
 
         PlayHopIn(attacker, defender, () =>
         {
+            // Hop-in finished — switch player to attack1 so the swing is ready for input.
+            if (attacker == _playerSprite)
+            {
+                GD.Print($"[BattleTest] Hop-in finished — SpeedScale → 1, playing attack1. " +
+                         $"Was SpeedScale={_playerAnimSprite.SpeedScale:F1}");
+                _playerAnimSprite.SpeedScale = 1f;
+                _playerAnimSprite.Play("attack1");
+            }
             // Position is set here so ComputeCameraMidpoint() reflects the final close stance.
             prompt.Position = ComputeCameraMidpoint();
             AddChild(prompt);
@@ -669,6 +838,12 @@ public partial class BattleTest : Node2D
         // Hop out — ease-in (slow start, accelerates = snapping away).
         tween.TweenProperty(_attacker, "position", GetOrigin(_attacker), TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
+        // Return the visible player sprite to its scene origin alongside the ColorRect.
+        if (_attacker == _playerSprite)
+        {
+            tween.TweenProperty(_playerAnimSprite, "position", _playerAnimSpriteOrigin, TeardownDuration)
+                 .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
+        }
         // Camera zooms back out to default.
         tween.TweenProperty(_camera, "position", CameraDefaultPos, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);

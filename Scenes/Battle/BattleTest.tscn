@@ -4,8 +4,7 @@
 
 [node name="BattleTest" type="Node2D" unique_id=1582212467]
 script = ExtResource("1_battletest")
-EnemySpriteOffsetY = 130.0
-EffectOffsetY = 14.0
+SkipHopIn = true
 
 [node name="Background" type="ColorRect" parent="." unique_id=1572392609]
 offset_left = -7.0
@@ -15,6 +14,7 @@ offset_bottom = 1137.0
 color = Color(0.07, 0.07, 0.13, 1)
 
 [node name="PlayerSprite" type="ColorRect" parent="." unique_id=577779961]
+visible = false
 offset_left = 390.0
 offset_top = 590.0
 offset_right = 490.0
@@ -27,6 +27,9 @@ offset_top = 165.0
 offset_right = 100.0
 offset_bottom = 190.0
 text = "Player"
+
+[node name="PlayerAnimatedSprite" type="AnimatedSprite2D" parent="." unique_id=777777777]
+position = Vector2(440, 630)
 
 [node name="EnemySprite" type="ColorRect" parent="." unique_id=1045893198]
 visible = false
