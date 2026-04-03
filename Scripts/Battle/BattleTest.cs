@@ -85,8 +85,19 @@ public partial class BattleTest : Node2D
     // Prompt management
     // =========================================================================
 
-    private TimingPrompt _activePrompt;
-    private PackedScene  _timingPromptScene;
+    // When true, the enemy does not hop in to close stance before attacking.
+    // Use for large/stationary enemies that hold their ground (e.g. 8 Sword Warrior).
+    // Slam tweens are also skipped — the cross-screen lunge would look wrong for a non-hopping attacker.
+    [Export] public bool  SkipHopIn         = true;
+    // Tuned Y offsets — finalized visually, no longer need inspector exposure.
+    // Positive values move down; negative values move up.
+    private const float EnemySpriteOffsetY = 130f;
+    private const float EffectOffsetY      =  14f;
+
+    private TimingPrompt    _activePrompt;
+    private PackedScene     _timingPromptScene;
+    private BattleSystem    _battleSystem;
+    private AnimatedSprite2D _enemyAnimSprite;
 
 
     // =========================================================================
@@ -116,6 +127,7 @@ public partial class BattleTest : Node2D
     private const float SlamOutDuration  = 0.12f;  // pull back to close stance
 
     // Spacing constants (pixels).
+    private const float FloorY      = 750f;  // world-space Y of the ground line; characters and effects anchor their feet here
     private const float AttackGap   = 200f;  // gap between attacker and defender in close stance; sized so prompt circle (r=120, center X=960) has ~30-40px breathing room from nearest sprite edge
     private const float SlamOverlap = 20f;   // how far attacker overlaps defender on a slam
 
@@ -143,6 +155,22 @@ public partial class BattleTest : Node2D
         _camera.Position = CameraDefaultPos;
         _camera.Zoom     = CameraDefaultZoom;
         AddChild(_camera);
+
+        // Enemy animated sprite — SpriteFrames built programmatically from the sheet.
+        _enemyAnimSprite = GetNode<AnimatedSprite2D>("EnemyAnimatedSprite");
+        BuildEnemySpriteFrames();
+        // Floor-anchored positioning: center Y = FloorY - (frameHeight * scale * 0.6)
+        // places the sprite so its visual base sits on the ground line.
+        // EnemySpriteOffsetY is an inspector-tunable nudge on top of the base formula.
+        _enemyAnimSprite.Scale    = new Vector2(3f, 3f);
+        _enemyAnimSprite.Position = new Vector2(_enemyAnimSprite.Position.X,
+                                                FloorY - 160f * 3f * 0.6f + EnemySpriteOffsetY);
+        _enemyAnimSprite.Play("idle");
+
+        _battleSystem = new BattleSystem();
+        AddChild(_battleSystem);
+        _battleSystem.StepPassEvaluated += OnBattleSystemStepPassEvaluated;
+        _battleSystem.SequenceCompleted += OnEnemySequenceCompleted;
 
         BuildMenu();
         UpdateHPBars();
@@ -175,9 +203,31 @@ public partial class BattleTest : Node2D
         _state      = BattleState.EnemyAttack;
         _parryClean = true;
         GD.Print("[BattleTest] Enemy attacks.");
-        BeginAttack(_enemySprite, _playerSprite, TimingPrompt.PromptType.Bouncing, OnEnemyPromptCompleted);
-        // Connect the per-pass damage handler after BeginAttack sets _activePrompt.
-        _activePrompt.PassEvaluated += OnEnemyPassEvaluated;
+
+        if (SkipHopIn)
+        {
+            // Enemy stays at origin — set combat context without any setup animation.
+            // Camera stays at its default position and zoom; no hop-in, no zoom-in.
+            // _attackerClosePos = origin so PlayTeardown is a zero-distance no-op on the attacker.
+            _attacker         = _enemySprite;
+            _defender         = _playerSprite;
+            _attackerClosePos = GetOrigin(_enemySprite);
+
+            // Start the cast animation and kick off the sequence immediately.
+            _enemyAnimSprite.Play("cast_intro");
+            _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
+
+            Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
+            _battleSystem.StartSequence(this, defenderCenter, ComputeCameraMidpoint(), EffectOffsetY);
+        }
+        else
+        {
+            PlayHopIn(_enemySprite, _playerSprite, () =>
+            {
+                Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
+                _battleSystem.StartSequence(this, defenderCenter, ComputeCameraMidpoint(), EffectOffsetY);
+            });
+        }
     }
 
     private void OnEnemyPassEvaluated(int result, int passIndex)
@@ -196,9 +246,33 @@ public partial class BattleTest : Node2D
         }
     }
 
-    private void OnEnemyPromptCompleted(int result)
+    /// <summary>
+    /// Adapter: BattleSystem.StepPassEvaluated → slam animation + per-pass damage.
+    /// Called once per inward pass across all steps in the enemy's attack sequence.
+    /// Slam is skipped when SkipHopIn is true — the enemy never hopped in close,
+    /// so the cross-screen lunge ComputeSlamPosition() would produce looks wrong.
+    /// </summary>
+    private void OnBattleSystemStepPassEvaluated(int result, int passIndex, int stepIndex)
+    {
+        if (!SkipHopIn)
+            OnAttackPassEvaluated(result, passIndex);
+        OnEnemyPassEvaluated(result, passIndex);
+    }
+
+    /// <summary>
+    /// BattleSystem.SequenceCompleted — all steps in the enemy's attack have resolved.
+    /// Applies the perfect-parry counter if earned, then tears down the combat close-up.
+    /// BattleSystem owns its prompts and frees them internally — no FreeActivePrompt call needed.
+    /// </summary>
+    private void OnEnemySequenceCompleted()
     {
         GD.Print("[BattleTest] Enemy attack sequence complete.");
+
+        // Release pose: cast_end (3 frames @ 12fps ≈ 0.25s) plays concurrently with
+        // PlayTeardown (0.35s) and finishes before the 0.5s post-teardown timer fires,
+        // so idle is reached well before the player menu reappears.
+        _enemyAnimSprite.Play("cast_end");
+        _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
 
         // Per-pass damage and _parryClean are tracked in OnEnemyPassEvaluated.
         // Only the parry counter fires here, after all passes have been evaluated.
@@ -211,7 +285,6 @@ public partial class BattleTest : Node2D
         }
 
         UpdateHPBars();
-        GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += FreeActivePrompt;
         bool over = CheckGameOver();
         PlayTeardown(over ? null : () => GetTree().CreateTimer(0.5f).Timeout += ShowMenu);
     }
@@ -431,33 +504,100 @@ public partial class BattleTest : Node2D
     }
 
     // =========================================================================
+    // Enemy sprite setup
+    // =========================================================================
+
+    /// <summary>
+    /// Builds and assigns SpriteFrames for the enemy AnimatedSprite2D by slicing
+    /// the warrior sprite sheet into named animations. Mirrors the runtime AtlasTexture
+    /// construction used by BattleSystem.SpawnEffectSprite for one-shot effects.
+    ///
+    /// Sheet: 8_sword_warrior_red-Sheet.png — 160×160 per frame, 21 cols × 7 rows.
+    /// Row mapping: idle=0, run=1, attack=2, cast_full=3, cast_loop=4, death=6.
+    /// </summary>
+    private void BuildEnemySpriteFrames()
+    {
+        const string SheetPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior_red-Sheet.png";
+        var texture = GD.Load<Texture2D>(SheetPath);
+        if (texture == null)
+        {
+            GD.PrintErr($"[BattleTest] Could not load enemy sprite sheet: {SheetPath}");
+            return;
+        }
+
+        const int Fw = 160, Fh = 160;
+        var frames = new SpriteFrames();
+        frames.RemoveAnimation("default");  // SpriteFrames always starts with a "default" stub
+
+        AddEnemyAnimation(frames, texture, "idle",       row: 0, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: true);
+        AddEnemyAnimation(frames, texture, "run",        row: 1, count:  8, fw: Fw, fh: Fh, fps: 12f, loop: true);
+        AddEnemyAnimation(frames, texture, "attack",     row: 2, count: 15, fw: Fw, fh: Fh, fps: 12f, loop: false);
+        // cast_full row (row 3) is split into three phases:
+        //   cast_intro — frames 0–3  (wind-up, plays once before the prompt appears)
+        //   cast_loop  — row 4       (hold pose, loops for the duration of the prompt sequence)
+        //   cast_end   — frames 18–20 (release, plays once after the sequence resolves)
+        AddEnemyAnimation(frames, texture, "cast_intro", row: 3, count:  4, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol:  0);
+        AddEnemyAnimation(frames, texture, "cast_loop",  row: 4, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: true);
+        AddEnemyAnimation(frames, texture, "cast_end",   row: 3, count:  3, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: 18);
+        AddEnemyAnimation(frames, texture, "death",      row: 6, count: 15, fw: Fw, fh: Fh, fps: 12f, loop: false);
+
+        _enemyAnimSprite.SpriteFrames = frames;
+        GD.Print("[BattleTest] Enemy sprite frames built — 8 animations loaded.");
+    }
+
+    /// <param name="startCol">First column to read from (default 0). Use for sub-ranges of a row, e.g. cast_end starts at col 18.</param>
+    private static void AddEnemyAnimation(
+        SpriteFrames frames, Texture2D sheet,
+        string name, int row, int count, int fw, int fh, float fps, bool loop,
+        int startCol = 0)
+    {
+        frames.AddAnimation(name);
+        frames.SetAnimationSpeed(name, fps);
+        frames.SetAnimationLoop(name, loop);
+        for (int col = startCol; col < startCol + count; col++)
+        {
+            var atlas    = new AtlasTexture();
+            atlas.Atlas  = sheet;
+            atlas.Region = new Rect2(col * fw, row * fh, fw, fh);
+            frames.AddFrame(name, atlas);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Enemy cast animation handlers
+    // -------------------------------------------------------------------------
+    // Sequence: cast_intro (once) → cast_loop (until sequence ends) → cast_end (once) → idle
+    // Each handler disconnects itself before transitioning to prevent stacking on repeat turns.
+
+    private void OnCastIntroFinished()
+    {
+        _enemyAnimSprite.AnimationFinished -= OnCastIntroFinished;
+        _enemyAnimSprite.Play("cast_loop");
+    }
+
+    private void OnCastEndFinished()
+    {
+        _enemyAnimSprite.AnimationFinished -= OnCastEndFinished;
+        _enemyAnimSprite.Play("idle");
+    }
+
+    // =========================================================================
     // Attack animation — setup, per-pass slam, teardown
     // =========================================================================
 
     /// <summary>
-    /// Unified entry point for any attack turn.
-    /// Stores attacker/defender, plays the setup animation, then adds the prompt
-    /// to the scene tree when the animation completes (so the first prompt input
-    /// is only possible after the hop-in finishes).
+    /// Plays the hop-in animation: attacker lunges to close stance, camera zooms in.
+    /// Sets <see cref="_attacker"/>, <see cref="_defender"/>, and
+    /// <see cref="_attackerClosePos"/> before starting the tween, so
+    /// <see cref="ComputeCameraMidpoint"/> and <see cref="ComputeSlamPosition"/> are
+    /// usable immediately after this call returns. <paramref name="onComplete"/> fires
+    /// when the tween finishes; safe to pass null.
     /// </summary>
-    private void BeginAttack(
-        ColorRect attacker,
-        ColorRect defender,
-        TimingPrompt.PromptType promptType,
-        TimingPrompt.PromptCompletedEventHandler onComplete)
+    private void PlayHopIn(ColorRect attacker, ColorRect defender, Action onComplete)
     {
         _attacker         = attacker;
         _defender         = defender;
         _attackerClosePos = ComputeClosePosition();
-
-        // Build the prompt node but defer AddChild until the setup tween finishes.
-        var prompt = _timingPromptScene.Instantiate<TimingPrompt>();
-        prompt.Type     = promptType;
-        prompt.AutoLoop = false;
-        prompt.Position = ComputeCameraMidpoint();
-        prompt.PassEvaluated   += OnAttackPassEvaluated;
-        prompt.PromptCompleted += onComplete;
-        _activePrompt = prompt;
 
         var tween = CreateTween();
         tween.SetParallel(true);
@@ -469,8 +609,35 @@ public partial class BattleTest : Node2D
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         tween.TweenProperty(_camera, "zoom", CameraZoomIn, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        // Start the prompt only after the hop-in completes.
-        tween.Finished += () => AddChild(prompt);
+        if (onComplete != null)
+            tween.Finished += () => onComplete();
+    }
+
+    /// <summary>
+    /// Unified entry point for player attack turns.
+    /// Plays the hop-in animation, then adds the prompt to the scene tree when
+    /// the animation completes (so the first input is only possible after the hop-in).
+    /// </summary>
+    private void BeginAttack(
+        ColorRect attacker,
+        ColorRect defender,
+        TimingPrompt.PromptType promptType,
+        TimingPrompt.PromptCompletedEventHandler onComplete)
+    {
+        // Build the prompt node but defer AddChild until the hop-in tween finishes.
+        var prompt = _timingPromptScene.Instantiate<TimingPrompt>();
+        prompt.Type     = promptType;
+        prompt.AutoLoop = false;
+        prompt.PassEvaluated   += OnAttackPassEvaluated;
+        prompt.PromptCompleted += onComplete;
+        _activePrompt = prompt;
+
+        PlayHopIn(attacker, defender, () =>
+        {
+            // Position is set here so ComputeCameraMidpoint() reflects the final close stance.
+            prompt.Position = ComputeCameraMidpoint();
+            AddChild(prompt);
+        });
     }
 
     /// <summary>

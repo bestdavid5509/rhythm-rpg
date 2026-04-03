@@ -601,6 +601,14 @@ public partial class TimingPrompt : Node2D
     }
 
     /// <summary>
+    /// Returns the default inward pass duration for a given prompt type.
+    /// Mirrors the values set in ApplyTypeSettings() and is safe to call before
+    /// the node enters the tree — used by BattleSystem to compute animation offsets.
+    /// </summary>
+    public static float DefaultDurationForType(PromptType type) =>
+        type == PromptType.Slow ? SlowDuration : 1.0f;
+
+    /// <summary>
     /// Configures Duration and BounceCount from the current Type.
     /// Called on _Ready and before each AutoLoop reset when type cycling is active.
     /// </summary>
