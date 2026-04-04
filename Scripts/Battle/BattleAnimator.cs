@@ -23,7 +23,7 @@ public partial class BattleTest : Node2D
         const int    Fw   = 120;   // all knight frames are 120×80 (not square)
         const int    Fh   = 80;
         var frames = new SpriteFrames();
-        frames.RemoveAnimation("default");
+        if (frames.HasAnimation("default")) frames.RemoveAnimation("default");
 
         // idle / run / hit / death — each file maps to one animation.
         //
@@ -132,7 +132,7 @@ public partial class BattleTest : Node2D
 
         const int Fw = 160, Fh = 160;
         var frames = new SpriteFrames();
-        frames.RemoveAnimation("default");  // SpriteFrames always starts with a "default" stub
+        if (frames.HasAnimation("default")) frames.RemoveAnimation("default");  // guard: constructor may not always add it
 
         AddEnemyAnimation(frames, texture, "idle",       row: 0, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: true);
         AddEnemyAnimation(frames, texture, "run",        row: 1, count:  8, fw: Fw, fh: Fh, fps: 12f, loop: true);
@@ -176,13 +176,13 @@ public partial class BattleTest : Node2D
 
     private void OnCastIntroFinished()
     {
-        _enemyAnimSprite.AnimationFinished -= OnCastIntroFinished;
+        SafeDisconnectEnemyAnim(OnCastIntroFinished);
         PlayEnemy("cast_loop");
     }
 
     private void OnCastEndFinished()
     {
-        _enemyAnimSprite.AnimationFinished -= OnCastEndFinished;
+        SafeDisconnectEnemyAnim(OnCastEndFinished);
         PlayEnemy("idle");
     }
 
@@ -192,13 +192,13 @@ public partial class BattleTest : Node2D
 
     private void OnParryFinished()
     {
-        _playerAnimSprite.AnimationFinished -= OnParryFinished;
+        SafeDisconnectPlayerAnim(OnParryFinished);
         PlayPlayer("idle");  // OWNER: enemy pass resolved, parry complete
     }
 
     private void OnHitAnimFinished()
     {
-        _playerAnimSprite.AnimationFinished -= OnHitAnimFinished;
+        SafeDisconnectPlayerAnim(OnHitAnimFinished);
         PlayPlayer("idle");  // OWNER: enemy pass resolved, flinch complete
     }
 
@@ -212,7 +212,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnPlayerDeathFinished()
     {
-        _playerAnimSprite.AnimationFinished -= OnPlayerDeathFinished;
+        SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
         GD.Print("[BattleTest] Player died.");
         ShowEndLabel("Game Over");
     }
@@ -223,7 +223,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnEnemyDeathFinished()
     {
-        _enemyAnimSprite.AnimationFinished -= OnEnemyDeathFinished;
+        SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
         GD.Print("[BattleTest] Enemy defeated.");
         GetTree().CreateTimer(1.0f).Timeout += () => ShowEndLabel("Victory!");
     }
@@ -240,7 +240,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnComboPass0SlashFinished()
     {
-        _playerAnimSprite.AnimationFinished -= OnComboPass0SlashFinished;
+        SafeDisconnectPlayerAnim(OnComboPass0SlashFinished);
         if (_playerDead) return;
         _playerAnimSprite.Animation = "combo";
         StopPlayer();
@@ -254,7 +254,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnComboPass1SlashFinished()
     {
-        _playerAnimSprite.AnimationFinished -= OnComboPass1SlashFinished;
+        SafeDisconnectPlayerAnim(OnComboPass1SlashFinished);
         if (_playerDead) return;
         _playerAnimSprite.Animation = "combo";
         StopPlayer();
@@ -271,7 +271,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnFinalSlashFinished()
     {
-        _playerAnimSprite.AnimationFinished -= OnFinalSlashFinished;
+        SafeDisconnectPlayerAnim(OnFinalSlashFinished);
         StopPlayer();  // OWNER: OnFinalSlashFinished — hold last slash frame (sheet frame 3 or 9)
         // Godot 4 resets Frame to 0 when Stop() is called on a finished non-looping animation.
         // Re-apply the last frame index explicitly to counteract this and hold the final pose.
@@ -315,7 +315,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnRetreatFinished()
     {
-        _playerAnimSprite.AnimationFinished -= OnRetreatFinished;
+        SafeDisconnectPlayerAnim(OnRetreatFinished);
         _playerAnimSprite.SpeedScale = 1f;  // always reset — SpeedScale affects all animations
         // Restore looping on "run" — it was disabled before PlayBackwards so AnimationFinished
         // would fire once at frame 0. The forward hop-in on the next player turn needs it looping.
@@ -348,6 +348,29 @@ public partial class BattleTest : Node2D
 
     /// <summary>Calls _enemyAnimSprite.Play(anim) only if the enemy is not dead.</summary>
     private void PlayEnemy(string anim)           { if (!_enemyDead)  _enemyAnimSprite.Play(anim); }
+
+    /// <summary>
+    /// Disconnects <paramref name="handler"/> from _playerAnimSprite.AnimationFinished only if
+    /// it is currently connected. Prevents the "Attempt to disconnect a nonexistent connection"
+    /// error that fires when a pre-emptive or redundant -= is issued on an unconnected handler.
+    /// </summary>
+    private void SafeDisconnectPlayerAnim(Action handler)
+    {
+        var callable = Callable.From(handler);
+        if (_playerAnimSprite.IsConnected(AnimatedSprite2D.SignalName.AnimationFinished, callable))
+            _playerAnimSprite.Disconnect(AnimatedSprite2D.SignalName.AnimationFinished, callable);
+    }
+
+    /// <summary>
+    /// Disconnects <paramref name="handler"/> from _enemyAnimSprite.AnimationFinished only if
+    /// it is currently connected. Mirrors SafeDisconnectPlayerAnim for the enemy sprite.
+    /// </summary>
+    private void SafeDisconnectEnemyAnim(Action handler)
+    {
+        var callable = Callable.From(handler);
+        if (_enemyAnimSprite.IsConnected(AnimatedSprite2D.SignalName.AnimationFinished, callable))
+            _enemyAnimSprite.Disconnect(AnimatedSprite2D.SignalName.AnimationFinished, callable);
+    }
 
     // =========================================================================
     // End-of-battle overlay
