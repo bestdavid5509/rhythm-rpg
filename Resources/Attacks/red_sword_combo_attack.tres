@@ -1,4 +1,4 @@
-[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://c4yrmt8qp5dhs"]
+[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://b7xqm3tqakc2n"]
 
 [ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
 [ext_resource type="Script" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
@@ -15,7 +15,19 @@ DelayMs = 0
 FlipH = false
 Offset = Vector2(0, 0)
 
+[sub_resource type="Resource" id="AttackStep_2"]
+script = ExtResource("2_attackstep")
+SpritesheetPath = "res://Assets/Effects/Sword_Effects/Red_Sword_Plunge_Sheet.png"
+FrameWidth = 192
+FrameHeight = 256
+Fps = 12.0
+ImpactFrames = PackedInt32Array(6)
+CircleType = 0
+DelayMs = 0
+FlipH = false
+Offset = Vector2(0, 0)
+
 [resource]
 script = ExtResource("1_attackdata")
-Steps = Array[Object]([SubResource("AttackStep_1")])
+Steps = Array[Object]([SubResource("AttackStep_1"), SubResource("AttackStep_2")])
 BaseDamage = 10

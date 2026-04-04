@@ -32,10 +32,10 @@ All Size values are **per-frame dimensions** (width × height in pixels).
 | Ice_Sword_Swipe_Sheet.png | 16 | 176 × 160 | 2 rows, 8 cols | 10 |
 | Red_Fire_Hammer_Swipe_Sheet.png | 14 | 96 × 96 | 2 rows, 7 cols | 6 |
 | Red_Sword_Plunge_Sheet.png | 18 | 192 × 256 | 2 rows, 9 cols | 6 |
-| Red_Tripple_Sword_Plunge_Sheet.png | 19 | 320 × 256 | 4 rows, 5 cols | 6, 7, 8 |
+| Red_Triple_Sword_Plunge_Sheet.png | 19 | 320 × 256 | 4 rows, 5 cols | 6, 7, 8 |
 
 ## Notes
 
 - `Energy comet_many` has no defined impact frame — it is a looping or ambient effect.
-- Blue_Triple and Red_Tripple have multi-impact frames `[6, 7, 8]` mapping to the three hits in a multi-step AttackData sequence.
+- Blue_Triple and Red_Triple have multi-impact frames `[6, 7, 8]` mapping to the three hits in a multi-step AttackData sequence.
 - Res paths: `res://Assets/Effects/<subfolder>/<filename>`
