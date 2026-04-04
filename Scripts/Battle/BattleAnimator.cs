@@ -1,0 +1,386 @@
+using Godot;
+
+/// <summary>
+/// Partial — sprite frame construction, animation callbacks, dead-flag guards,
+/// and end-of-battle overlay for BattleTest.
+/// All members declared here are part of the same BattleTest class; fields and
+/// methods defined in BattleTest.cs and BattleMenu.cs are fully accessible.
+/// </summary>
+public partial class BattleTest : Node2D
+{
+    // =========================================================================
+    // Player sprite setup
+    // =========================================================================
+
+    /// <summary>
+    /// Builds and assigns SpriteFrames for the player AnimatedSprite2D.
+    /// Each animation is a separate horizontal-strip PNG in Assets/Characters/Knight/.
+    /// Returns the frame height so the caller can position the sprite floor-anchored.
+    /// </summary>
+    private int BuildPlayerSpriteFrames()
+    {
+        const string Base = "res://Assets/Characters/Knight/";
+        const int    Fw   = 120;   // all knight frames are 120×80 (not square)
+        const int    Fh   = 80;
+        var frames = new SpriteFrames();
+        frames.RemoveAnimation("default");
+
+        // idle / run / hit / death — each file maps to one animation.
+        //
+        // All player attack animations come from _AttackComboNoMovement.png (1200×80, 10 frames):
+        //   "combo"        — all 10 frames; used as the frame-index reference for wind-up holds
+        //   "combo_slash1" — frames 1–3; first strike (single attack resolve, combo passes 0 & 1)
+        //   "combo_slash2" — frames 6–9; second strike (combo final pass)
+        //
+        // _Attack2NoMovement.png (720×80, 6 frames) provides one animation:
+        //   "parry" — frames 2–5; plays on every successful enemy-attack parry
+        const string Combo = Base + "_AttackComboNoMovement.png";
+        int frameH = AddPlayerAnimation(frames, "idle",         Base + "_Idle.png",              loop: true,  fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "run",          Base + "_Run.png",               loop: true,  fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "combo",        Combo,                           loop: false, fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "combo_slash1", Combo,                           loop: false, fw: Fw, fh: Fh, startFrame: 1, endFrame: 3);
+                     AddPlayerAnimation(frames, "combo_slash2", Combo,                           loop: false, fw: Fw, fh: Fh, startFrame: 6, endFrame: 9);
+                     AddPlayerAnimation(frames, "parry",        Base + "_Attack2NoMovement.png", loop: false, fw: Fw, fh: Fh, startFrame: 2, endFrame: 5);
+                     AddPlayerAnimation(frames, "hit",          Base + "_Hit.png",               loop: false, fw: Fw, fh: Fh);
+                     AddPlayerAnimation(frames, "death",        Base + "_DeathNoMovement.png",   loop: false, fw: Fw, fh: Fh);
+
+        _playerAnimSprite.SpriteFrames = frames;
+
+        // Diagnostic: confirm every animation and its actual frame count.
+        // A 0-frame entry means the PNG failed to load (missing .import file).
+        // Calling Play() on a 0-frame animation hides the sprite — the primary blink cause.
+        GD.Print("[BattleTest] Player sprite frames summary:");
+        foreach (string anim in frames.GetAnimationNames())
+            GD.Print($"[BattleTest]   {anim}: {frames.GetFrameCount(anim)} frame(s)");
+
+        return frameH > 0 ? frameH : Fh;
+    }
+
+    /// <summary>
+    /// Loads a horizontal-strip texture and adds it as a named animation.
+    /// All knight PNGs use 120×80 frames — pass fw=120, fh=80 explicitly.
+    ///
+    /// <paramref name="startFrame"/> skips leading sheet frames (zero-based).
+    /// <paramref name="endFrame"/> is the last sheet frame to include (inclusive).
+    ///   Pass -1 (default) to include all frames from startFrame to the end of the strip.
+    ///
+    /// Examples (all from _AttackComboNoMovement.png, 1200×80 = 10 frames):
+    ///   "combo"        startFrame=0  endFrame=-1 → frames 0–9  (all 10)
+    ///   "combo_slash1" startFrame=1  endFrame=3  → frames 1–3  (3 frames, first strike)
+    ///   "combo_slash2" startFrame=6  endFrame=9  → frames 6–9  (4 frames, second strike)
+    ///   "parry"        startFrame=2  endFrame=5  → frames 2–5  (4 frames, defensive deflect)
+    ///
+    /// Returns the frame height for floor-anchored Y positioning; returns 0 on load failure.
+    /// </summary>
+    private static int AddPlayerAnimation(
+        SpriteFrames frames, string name, string path,
+        bool loop, int fw, int fh, float fps = 12f, int startFrame = 0, int endFrame = -1)
+    {
+        var texture = GD.Load<Texture2D>(path);
+        if (texture == null)
+        {
+            // Most likely cause: PNG has no .import file yet.
+            // Open the Godot editor once to trigger auto-import, then re-run.
+            GD.PrintErr($"[BattleTest] LOAD FAILED — '{name}' will have 0 frames: {path}");
+            frames.AddAnimation(name);  // stub so Play() won't throw; sprite will hide until fixed
+            return 0;
+        }
+
+        int stripCount = texture.GetWidth() / fw;
+        int last       = (endFrame < 0) ? stripCount - 1 : endFrame;
+        int used       = last - startFrame + 1;
+
+        GD.Print($"[BattleTest]   '{name}': {texture.GetWidth()}x{texture.GetHeight()}  " +
+                 $"fw={fw} fh={fh}  strip={stripCount}  frames={startFrame}–{last}  used={used}");
+
+        frames.AddAnimation(name);
+        frames.SetAnimationSpeed(name, fps);
+        frames.SetAnimationLoop(name, loop);
+
+        for (int i = startFrame; i <= last; i++)
+        {
+            var atlas    = new AtlasTexture();
+            atlas.Atlas  = texture;
+            atlas.Region = new Rect2(i * fw, 0, fw, fh);
+            frames.AddFrame(name, atlas);
+        }
+
+        return fh;
+    }
+
+    // =========================================================================
+    // Enemy sprite setup
+    // =========================================================================
+
+    /// <summary>
+    /// Builds and assigns SpriteFrames for the enemy AnimatedSprite2D by slicing
+    /// the warrior sprite sheet into named animations. Mirrors the runtime AtlasTexture
+    /// construction used by BattleSystem.SpawnEffectSprite for one-shot effects.
+    ///
+    /// Sheet: 8_sword_warrior_red-Sheet.png — 160×160 per frame, 21 cols × 7 rows.
+    /// Row mapping: idle=0, run=1, attack=2, cast_full=3, cast_loop=4, death=6.
+    /// </summary>
+    private void BuildEnemySpriteFrames()
+    {
+        const string SheetPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior_red-Sheet.png";
+        var texture = GD.Load<Texture2D>(SheetPath);
+        if (texture == null)
+        {
+            GD.PrintErr($"[BattleTest] Could not load enemy sprite sheet: {SheetPath}");
+            return;
+        }
+
+        const int Fw = 160, Fh = 160;
+        var frames = new SpriteFrames();
+        frames.RemoveAnimation("default");  // SpriteFrames always starts with a "default" stub
+
+        AddEnemyAnimation(frames, texture, "idle",       row: 0, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: true);
+        AddEnemyAnimation(frames, texture, "run",        row: 1, count:  8, fw: Fw, fh: Fh, fps: 12f, loop: true);
+        AddEnemyAnimation(frames, texture, "attack",     row: 2, count: 15, fw: Fw, fh: Fh, fps: 12f, loop: false);
+        // cast_full row (row 3) is split into three phases:
+        //   cast_intro — frames 0–3  (wind-up, plays once before the prompt appears)
+        //   cast_loop  — row 4       (hold pose, loops for the duration of the prompt sequence)
+        //   cast_end   — frames 18–20 (release, plays once after the sequence resolves)
+        AddEnemyAnimation(frames, texture, "cast_intro", row: 3, count:  4, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol:  0);
+        AddEnemyAnimation(frames, texture, "cast_loop",  row: 4, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: true);
+        AddEnemyAnimation(frames, texture, "cast_end",   row: 3, count:  3, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: 18);
+        AddEnemyAnimation(frames, texture, "death",      row: 6, count: 15, fw: Fw, fh: Fh, fps: 12f, loop: false);
+
+        _enemyAnimSprite.SpriteFrames = frames;
+        GD.Print("[BattleTest] Enemy sprite frames built — 8 animations loaded.");
+    }
+
+    /// <param name="startCol">First column to read from (default 0). Use for sub-ranges of a row, e.g. cast_end starts at col 18.</param>
+    private static void AddEnemyAnimation(
+        SpriteFrames frames, Texture2D sheet,
+        string name, int row, int count, int fw, int fh, float fps, bool loop,
+        int startCol = 0)
+    {
+        frames.AddAnimation(name);
+        frames.SetAnimationSpeed(name, fps);
+        frames.SetAnimationLoop(name, loop);
+        for (int col = startCol; col < startCol + count; col++)
+        {
+            var atlas    = new AtlasTexture();
+            atlas.Atlas  = sheet;
+            atlas.Region = new Rect2(col * fw, row * fh, fw, fh);
+            frames.AddFrame(name, atlas);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Enemy cast animation handlers
+    // -------------------------------------------------------------------------
+    // Sequence: cast_intro (once) → cast_loop (until sequence ends) → cast_end (once) → idle
+    // Each handler disconnects itself before transitioning to prevent stacking on repeat turns.
+
+    private void OnCastIntroFinished()
+    {
+        _enemyAnimSprite.AnimationFinished -= OnCastIntroFinished;
+        PlayEnemy("cast_loop");
+    }
+
+    private void OnCastEndFinished()
+    {
+        _enemyAnimSprite.AnimationFinished -= OnCastEndFinished;
+        PlayEnemy("idle");
+    }
+
+    // -------------------------------------------------------------------------
+    // Player reaction handlers
+    // -------------------------------------------------------------------------
+
+    private void OnParryFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnParryFinished;
+        PlayPlayer("idle");  // OWNER: enemy pass resolved, parry complete
+    }
+
+    private void OnHitAnimFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnHitAnimFinished;
+        PlayPlayer("idle");  // OWNER: enemy pass resolved, flinch complete
+    }
+
+    // -------------------------------------------------------------------------
+    // Death handlers
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Fires when the player death animation completes.
+    /// Does not return to idle — the sprite holds on the final death frame.
+    /// </summary>
+    private void OnPlayerDeathFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnPlayerDeathFinished;
+        GD.Print("[BattleTest] Player died.");
+        ShowEndLabel("Game Over");
+    }
+
+    /// <summary>
+    /// Fires when the enemy death animation completes (from player attack or parry counter).
+    /// Does not return to idle — the sprite holds on the final death frame.
+    /// </summary>
+    private void OnEnemyDeathFinished()
+    {
+        _enemyAnimSprite.AnimationFinished -= OnEnemyDeathFinished;
+        GD.Print("[BattleTest] Enemy defeated.");
+        GetTree().CreateTimer(1.0f).Timeout += () => ShowEndLabel("Victory!");
+    }
+
+    // -------------------------------------------------------------------------
+    // Combo and retreat handlers
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Fires when combo_slash1 (frames 1–3) finishes after pass 0.
+    /// Holds on "combo" frame 5 — the second wind-up — so the sprite is posed ready
+    /// for combo_slash2 while the outward bounce travels back out.
+    /// Stop() is called before setting Frame to counteract Godot 4's reset-to-0 on stop.
+    /// </summary>
+    private void OnComboPass0SlashFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnComboPass0SlashFinished;
+        if (_playerDead) return;
+        _playerAnimSprite.Animation = "combo";
+        StopPlayer();
+        SetPlayerFrame(5);  // OWNER: combo pass 0 resolved — wind-up before slash2 (sheet frame 5)
+    }
+
+    /// <summary>
+    /// Fires when combo_slash2 (frames 6–9) finishes after pass 1.
+    /// Holds on "combo" frame 0 — the first wind-up again — ready for combo_slash1 on the final pass.
+    /// Stop() is called before setting Frame to counteract Godot 4's reset-to-0 on stop.
+    /// </summary>
+    private void OnComboPass1SlashFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnComboPass1SlashFinished;
+        if (_playerDead) return;
+        _playerAnimSprite.Animation = "combo";
+        StopPlayer();
+        SetPlayerFrame(0);  // OWNER: combo pass 1 resolved — wind-up before slash1 again (sheet frame 0)
+    }
+
+    /// <summary>
+    /// Fires when the final slash animation completes (combo_slash1 for single, combo_slash2 for combo).
+    /// Holds the last frame for 0.3s so the strike reads, then starts the retreat:
+    /// disables looping on "run" so PlayBackwards fires AnimationFinished at frame 0,
+    /// then launches the position teardown and backwards run animation together.
+    /// PlayTeardown is called here rather than in OnPlayerPromptCompleted so the slash always
+    /// completes before the combatant starts moving back.
+    /// </summary>
+    private void OnFinalSlashFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnFinalSlashFinished;
+        StopPlayer();  // OWNER: OnFinalSlashFinished — hold last slash frame (sheet frame 3 or 9)
+        // Godot 4 resets Frame to 0 when Stop() is called on a finished non-looping animation.
+        // Re-apply the last frame index explicitly to counteract this and hold the final pose.
+        SetPlayerFrame(_playerAnimSprite.SpriteFrames.GetFrameCount("combo_slash1") - 1);
+
+        if (_pendingGameOver)
+        {
+            // Enemy HP reached zero from the player's attack.
+            // (Player cannot die during their own attack; _pendingGameOver here always means enemy defeated.)
+            // Interrupt the enemy's current animation and play death; reset camera without next turn.
+            _enemyDead = true;
+            _enemyAnimSprite.Play("death");         // OWNER: enemy death from player attack
+            _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+            PlayTeardown(null);
+            return;
+        }
+
+        // OWNER: OnFinalSlashFinished (player turn, retreat begins).
+        // Hold the last slash frame for 0.3s so it reads before the character moves,
+        // then start the retreat. PlayTeardown and PlayBackwards begin together after
+        // the pause so the position tween and animation are in sync.
+        GetTree().CreateTimer(0.3f).Timeout += () =>
+        {
+            // Disable looping on "run" for this one-shot backwards pass so that
+            // AnimationFinished fires when frame 0 is reached and OnRetreatFinished triggers.
+            // Looping is intentional for the forward hop-in; we restore it in OnRetreatFinished.
+            _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
+            _playerAnimSprite.SpeedScale = 2f;
+            PlayPlayerBackwards("run");  // OWNER: player turn, retreat hop-back
+            _playerAnimSprite.AnimationFinished += OnRetreatFinished;
+
+            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack);
+        };
+    }
+
+    /// <summary>
+    /// Called when the backwards run animation reaches frame 0 after the player hops back.
+    /// Always resets SpeedScale so subsequent animations aren't affected.
+    /// Only restores idle if the sprite is still on "run" — if an enemy-side handler (parry, hit)
+    /// took ownership while the retreat was in flight, that animation takes priority.
+    /// </summary>
+    private void OnRetreatFinished()
+    {
+        _playerAnimSprite.AnimationFinished -= OnRetreatFinished;
+        _playerAnimSprite.SpeedScale = 1f;  // always reset — SpeedScale affects all animations
+        // Restore looping on "run" — it was disabled before PlayBackwards so AnimationFinished
+        // would fire once at frame 0. The forward hop-in on the next player turn needs it looping.
+        _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", true);
+        // Guard: only return to idle if the retreat run still owns the sprite.
+        // OnBattleSystemStepPassEvaluated may have pre-empted this handler and started
+        // parry or hit; in that case let those complete without overriding them.
+        if (_playerAnimSprite.Animation == "run")
+            PlayPlayer("idle");  // OWNER: OnRetreatFinished — retreat complete
+    }
+
+    // =========================================================================
+    // Sprite play guards
+    // =========================================================================
+    // All Play / PlayBackwards / Stop / Frame= calls on the two animated sprites
+    // route through these helpers. Once a dead flag is set the sprite holds its
+    // final death frame — no subsequent animation call can override it.
+
+    /// <summary>Calls _playerAnimSprite.Play(anim) only if the player is not dead.</summary>
+    private void PlayPlayer(string anim)          { if (!_playerDead) _playerAnimSprite.Play(anim); }
+
+    /// <summary>Calls _playerAnimSprite.PlayBackwards(anim) only if the player is not dead.</summary>
+    private void PlayPlayerBackwards(string anim) { if (!_playerDead) _playerAnimSprite.PlayBackwards(anim); }
+
+    /// <summary>Calls _playerAnimSprite.Stop() only if the player is not dead.</summary>
+    private void StopPlayer()                     { if (!_playerDead) _playerAnimSprite.Stop(); }
+
+    /// <summary>Assigns _playerAnimSprite.Frame only if the player is not dead.</summary>
+    private void SetPlayerFrame(int frame)        { if (!_playerDead) _playerAnimSprite.Frame = frame; }
+
+    /// <summary>Calls _enemyAnimSprite.Play(anim) only if the enemy is not dead.</summary>
+    private void PlayEnemy(string anim)           { if (!_enemyDead)  _enemyAnimSprite.Play(anim); }
+
+    // =========================================================================
+    // End-of-battle overlay
+    // =========================================================================
+
+    /// <summary>
+    /// Creates a large white label — "Game Over" or "Victory!" — centered on screen
+    /// on a dedicated CanvasLayer so it renders above all game elements.
+    /// The label starts fully transparent and fades in to opaque over 0.5 seconds.
+    /// Called once; no battle restart follows.
+    /// </summary>
+    private void ShowEndLabel(string text)
+    {
+        var layer = new CanvasLayer();
+        AddChild(layer);
+
+        var label = new Label();
+        label.Text                = text;
+        label.HorizontalAlignment = HorizontalAlignment.Center;
+        label.VerticalAlignment   = VerticalAlignment.Center;
+        label.AddThemeFontSizeOverride("font_size", 64);
+        label.Modulate = new Color(1f, 1f, 1f, 0f);  // start transparent; Tween fades in below
+
+        // Stretch the label to fill the entire CanvasLayer viewport so the text centers
+        // correctly regardless of resolution. Anchors: (0,0)→(1,1), offsets cleared.
+        label.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        label.OffsetLeft   = 0f;
+        label.OffsetTop    = 0f;
+        label.OffsetRight  = 0f;
+        label.OffsetBottom = 0f;
+        layer.AddChild(label);
+
+        var tween = CreateTween();
+        tween.TweenProperty(label, "modulate:a", 1.0f, 0.5f);
+    }
+}
