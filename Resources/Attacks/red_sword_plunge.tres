@@ -1,15 +1,15 @@
-[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://e8gvlx3np6fqr"]
+[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://dlsci5d5vjkj"]
 
 [ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
 [ext_resource type="Script" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
 
 [sub_resource type="Resource" id="AttackStep_1"]
 script = ExtResource("2_attackstep")
-SpritesheetPath = "res://Assets/Effects/Sword_Effects/Blue_Triple_Sword_Plunge_Sheet.png"
-FrameWidth = 320
+SpritesheetPath = "res://Assets/Effects/Sword_Effects/Red_Sword_Plunge_Sheet.png"
+FrameWidth = 192
 FrameHeight = 256
 Fps = 12.0
-ImpactFrames = PackedInt32Array(6, 7, 8)
+ImpactFrames = PackedInt32Array(6)
 CircleType = 0
 DelayMs = 0
 FlipH = false

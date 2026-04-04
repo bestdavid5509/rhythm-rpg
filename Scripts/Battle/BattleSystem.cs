@@ -1,16 +1,19 @@
 using System;
+using System.Collections.Generic;
 using Godot;
 
 /// <summary>
 /// Core battle system — manages attack sequences driven by AttackData resources.
 ///
 /// An attack sequence is an ordered list of AttackStep objects. For each step:
-///   1. A circle prompt spawns at the combat midpoint.
-///   2. An AnimatedSprite2D spawns at the defender's position, timed so its impact
-///      frame lands exactly when the circle closes:
-///        animationStartDelay = circleCloseDuration - (impactFrame / fps)
-///   3. The next step begins only after the current step's circle resolves and
-///      the step's DelayMs has elapsed.
+///   1. One AnimatedSprite2D effect is spawned and plays the full animation once.
+///      Its start is delayed so ImpactFrames[0] lands exactly when circle 0 closes:
+///        animationStartDelay = circleCloseDuration - (ImpactFrames[0] / fps)
+///   2. One timing circle is spawned per entry in ImpactFrames, each staggered so
+///      it closes exactly when the animation reaches its impact frame:
+///        circleSpawnDelay[i] = (ImpactFrames[i] - ImpactFrames[0]) / fps
+///   3. The step completes only after ALL its circles have resolved.
+///      Then DelayMs elapses before the next step begins.
 ///
 /// Signals:
 ///   StepPassEvaluated — re-emitted from each step's TimingPrompt.PassEvaluated.
@@ -41,16 +44,17 @@ public partial class BattleSystem : Node
 
     // Test attack: hardcoded for visual verification in BattleTest.
     // Replace with dynamic assignment when the full battle system drives attack selection.
-    private const string TestAttackPath = "res://Resources/Attacks/blue_sword_plunge.tres";
+    private const string TestAttackPath = "res://Resources/Attacks/red_triple_sword_plunge.tres";
 
-    private PackedScene  _promptScene;
-    private AttackData   _currentAttack;   // the attack currently being executed
-    private Node2D       _spawnParent;     // node that owns spawned prompts and sprites
-    private Vector2      _defenderCenter;  // world-space center of the defender — effect origin
-    private Vector2      _promptPosition;  // world-space position for circle prompts
-    private int          _stepIndex;       // current index into _currentAttack.Steps
-    private TimingPrompt _stepPrompt;      // active prompt for the current step
-    private float        _effectOffsetY;   // per-sequence Y nudge passed in from BattleTest
+    private PackedScene              _promptScene;
+    private AttackData               _currentAttack;          // the attack currently being executed
+    private Node2D                   _spawnParent;            // node that owns spawned prompts and sprites
+    private Vector2                  _defenderCenter;         // world-space center of the defender — effect origin
+    private Vector2                  _promptPosition;         // world-space position for circle prompts
+    private int                      _stepIndex;              // current index into _currentAttack.Steps
+    private List<TimingPrompt>       _stepPrompts  = new();   // all active circles for the current step
+    private int                      _stepPromptsRemaining;   // decremented as each circle resolves; 0 → advance
+    private float                    _effectOffsetY;          // per-sequence Y nudge passed in from BattleTest
 
     // =========================================================================
     // Legacy battle state — used by stub methods below
@@ -122,52 +126,87 @@ public partial class BattleSystem : Node
             return;
         }
 
-        var step = _currentAttack.Steps[_stepIndex];
+        var step         = _currentAttack.Steps[_stepIndex];
+        int circleCount  = step.ImpactFrames.Length;
+        int firstImpact  = step.ImpactFrames[0];
+
         GD.Print($"[BattleSystem] Step {_stepIndex + 1}/{_currentAttack.Steps.Count}: " +
-                 $"CircleType={step.CircleType}  ImpactFrame={step.ImpactFrame}  Fps={step.Fps}");
+                 $"CircleType={step.CircleType}  ImpactFrames=[{string.Join(", ", step.ImpactFrames)}]  " +
+                 $"Fps={step.Fps}  Circles={circleCount}");
 
-        // Spawn the circle prompt at the combat midpoint.
-        var prompt  = _promptScene.Instantiate<TimingPrompt>();
-        prompt.Type     = step.CircleType;
-        prompt.AutoLoop = false;
-        prompt.Position = _promptPosition;
-        _stepPrompt     = prompt;
+        _stepPrompts.Clear();
+        _stepPromptsRemaining = circleCount;
 
-        int capturedStep = _stepIndex;
-        prompt.PassEvaluated   += (result, passIndex) =>
-            EmitSignal(SignalName.StepPassEvaluated, result, passIndex, capturedStep);
-        prompt.PromptCompleted += OnStepPromptCompleted;
-
-        _spawnParent.AddChild(prompt);
-
-        // Schedule the effect animation so its impact frame lands exactly when the circle closes.
-        //   animationStartDelay = circleCloseDuration - (impactFrame / fps)
-        // A positive delay means the animation starts mid-flight; a zero delay (clamped from
-        // negative) means the animation starts immediately and the impact frame is already past.
+        // Delay the animation start so ImpactFrames[0] coincides with circle 0 closing.
+        //   animationStartDelay = circleCloseDuration - (ImpactFrames[0] / fps)
+        // Clamped to 0 — a negative value means the first impact frame is already past the
+        // circle close time; start immediately and accept the minor visual desync.
         float circleCloseDuration = TimingPrompt.DefaultDurationForType(step.CircleType);
-        float animStartDelay      = Mathf.Max(0f, circleCloseDuration - step.ImpactFrame / step.Fps);
+        float animStartDelay      = Mathf.Max(0f, circleCloseDuration - firstImpact / step.Fps);
 
         GD.Print($"[BattleSystem]   circleCloseDuration={circleCloseDuration:F2}s  " +
                  $"animStartDelay={animStartDelay:F2}s");
 
-        GetTree().CreateTimer(animStartDelay).Timeout += () =>
+        GetTree().CreateTimer(animStartDelay).Timeout += () => SpawnEffectSprite(step);
+
+        // Spawn one circle per impact frame, staggered so each closes exactly when its
+        // frame plays in the animation:
+        //   circleSpawnDelay[i] = (ImpactFrames[i] - ImpactFrames[0]) / fps
+        // Circle 0 always spawns at delay 0 (its close time is the anchor for the animation).
+        int capturedStep = _stepIndex;
+        for (int i = 0; i < circleCount; i++)
         {
-            if (IsInstanceValid(prompt))
-                SpawnEffectSprite(step);
-        };
+            float spawnDelay = (step.ImpactFrames[i] - firstImpact) / step.Fps;
+            int   capturedI  = i;
+
+            void SpawnCircle()
+            {
+                var prompt      = _promptScene.Instantiate<TimingPrompt>();
+                prompt.Type     = step.CircleType;
+                prompt.AutoLoop = false;
+                prompt.Position = _promptPosition;
+                _stepPrompts.Add(prompt);
+
+                prompt.PassEvaluated += (result, passIndex) =>
+                    EmitSignal(SignalName.StepPassEvaluated, result, passIndex, capturedStep);
+
+                // Capture prompt reference so OnSingleCircleCompleted can clean it up.
+                var capturedPrompt = prompt;
+                prompt.PromptCompleted += result =>
+                    OnSingleCircleCompleted(capturedPrompt, result, capturedStep);
+
+                _spawnParent.AddChild(prompt);
+                GD.Print($"[BattleSystem]   Circle {capturedI + 1}/{circleCount} spawned " +
+                         $"(impact frame {step.ImpactFrames[capturedI]}, " +
+                         $"spawnDelay={spawnDelay:F3}s).");
+            }
+
+            if (spawnDelay <= 0f)
+                SpawnCircle();
+            else
+                GetTree().CreateTimer(spawnDelay).Timeout += SpawnCircle;
+        }
     }
 
-    private void OnStepPromptCompleted(int result)
+    /// <summary>
+    /// Called when a single circle within the current step resolves.
+    /// Schedules that circle's cleanup after the flash duration, then decrements the
+    /// step counter. When all circles in the step have resolved, advances to the next step.
+    /// </summary>
+    private void OnSingleCircleCompleted(TimingPrompt prompt, int result, int stepIndex)
     {
-        GD.Print($"[BattleSystem] Step {_stepIndex + 1} prompt resolved " +
-                 $"({(TimingPrompt.InputResult)result}).");
+        GD.Print($"[BattleSystem] Step {stepIndex + 1} circle resolved " +
+                 $"({(TimingPrompt.InputResult)result}). " +
+                 $"{_stepPromptsRemaining - 1} circle(s) remaining.");
 
-        // Hand off the prompt reference and schedule its cleanup after the flash.
-        var completed = _stepPrompt;
-        _stepPrompt   = null;
-        if (IsInstanceValid(completed))
-            GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += completed.QueueFree;
+        if (IsInstanceValid(prompt))
+            GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += prompt.QueueFree;
 
+        _stepPromptsRemaining--;
+        if (_stepPromptsRemaining > 0) return;
+
+        // All circles in this step resolved — clear the list and advance.
+        _stepPrompts.Clear();
         _stepIndex++;
 
         if (_stepIndex >= _currentAttack.Steps.Count)
@@ -177,7 +216,6 @@ public partial class BattleSystem : Node
             return;
         }
 
-        // Wait for the next step's inter-step delay before spawning its prompt.
         int delayMs = _currentAttack.Steps[_stepIndex].DelayMs;
         if (delayMs > 0)
         {

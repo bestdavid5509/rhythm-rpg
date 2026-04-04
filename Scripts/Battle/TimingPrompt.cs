@@ -200,6 +200,22 @@ public partial class TimingPrompt : Node2D
 
     private static readonly List<TimingPrompt> _activePrompts = new();
 
+    /// <summary>
+    /// Set to true by <see cref="ConfirmAll"/> when its pre-scan finds at least one
+    /// prompt that would accept the current input as Hit or Perfect.
+    /// Checked inside <see cref="EvaluateInput"/> to suppress miss flashes and lockout
+    /// on out-of-window circles — the press was correct, just aimed at a different circle.
+    ///
+    /// Persists until the next <see cref="ConfirmAll"/> call (i.e. the next button press),
+    /// which resets it before the new pre-scan. This covers both the ConfirmAll evaluation
+    /// pass and any subsequent same-frame <c>_Process</c> EvaluateInput calls on prompts
+    /// that checked <c>IsActionJustPressed</c> independently.
+    ///
+    /// Auto-misses (t = 1 without input) go through OnPassComplete, not EvaluateInput,
+    /// so this flag never incorrectly suppresses a genuine missed sequence.
+    /// </summary>
+    private static bool _anyAcceptedLastConfirm = false;
+
     // -------------------------------------------------------------------------
     // Runtime state
     // -------------------------------------------------------------------------
@@ -333,6 +349,21 @@ public partial class TimingPrompt : Node2D
     // -------------------------------------------------------------------------
 
     /// <summary>
+    /// Returns true if <see cref="EvaluateInput"/> would register a Hit or Perfect right
+    /// now — the prompt is active, on an inward pass, not locked out, not already hit this
+    /// pass, and the ring is within the valid zone.
+    /// Used by <see cref="ConfirmAll"/> to pre-scan before evaluating, so out-of-window
+    /// prompts can be told to suppress their miss penalty when another circle accepted
+    /// the same input.
+    /// </summary>
+    private bool WouldAcceptInput() =>
+        !_resolved
+        && _lockoutTimer   <= 0f
+        && _movingInward
+        && !_inputRegisteredThisPass
+        && Mathf.Abs(_currentRadius - TargetRadius) <= RingLineWidth;
+
+    /// <summary>
     /// Evaluates the player's input against the current ring position.
     ///
     /// In zone (inward pass, |_currentRadius - TargetRadius| &lt;= RingLineWidth):
@@ -340,7 +371,11 @@ public partial class TimingPrompt : Node2D
     ///   scripted path; the result is consumed at t = 1 by OnPassComplete.
     ///
     /// Outside zone OR during outward pass:
-    ///   Failed input. InputLockoutDuration lockout starts. Circle unaffected.
+    ///   Normally a failed input — red flash and InputLockoutDuration lockout.
+    ///   Suppressed when <see cref="_anyAcceptedLastConfirm"/> is true: another circle
+    ///   accepted this same press, so no penalty is applied to out-of-window circles.
+    ///   This check covers both the <see cref="ConfirmAll"/> evaluation pass and any
+    ///   subsequent same-frame <c>_Process</c> calls, since both read the same static flag.
     ///
     /// Locked out OR already hit this pass:
     ///   Completely ignored, no effect.
@@ -353,30 +388,38 @@ public partial class TimingPrompt : Node2D
         if (_lockoutTimer > 0f) return InputResult.Miss;
 
         // During outward pass: failed input, red flash at press position, lockout.
+        // Suppressed when another circle accepted this press (_anyAcceptedLastConfirm).
         if (!_movingInward)
         {
-            _flashRingRadius     = _currentRadius;
-            _flashRingColor      = ColorFlashMiss;
-            _flashRingTimer      = FlashDuration;
-            _flashRingIsAutoMiss = false;
-            _flashRingIsSuccess  = false;  // wrong-input — suppress during outward pass
-            QueueRedraw();
-            _lockoutTimer = InputLockoutDuration;
+            if (!_anyAcceptedLastConfirm)
+            {
+                _flashRingRadius     = _currentRadius;
+                _flashRingColor      = ColorFlashMiss;
+                _flashRingTimer      = FlashDuration;
+                _flashRingIsAutoMiss = false;
+                _flashRingIsSuccess  = false;
+                QueueRedraw();
+                _lockoutTimer = InputLockoutDuration;
+            }
             return InputResult.Miss;
         }
 
         float distance = Mathf.Abs(_currentRadius - TargetRadius);
 
         // Outside valid zone: failed input, red flash at press position, lockout.
+        // Suppressed when another circle accepted this press (_anyAcceptedLastConfirm).
         if (distance > RingLineWidth)
         {
-            _flashRingRadius     = _currentRadius;
-            _flashRingColor      = ColorFlashMiss;
-            _flashRingTimer      = FlashDuration;
-            _flashRingIsAutoMiss = false;
-            _flashRingIsSuccess  = false;  // wrong-input — suppress during outward pass
-            QueueRedraw();
-            _lockoutTimer = InputLockoutDuration;
+            if (!_anyAcceptedLastConfirm)
+            {
+                _flashRingRadius     = _currentRadius;
+                _flashRingColor      = ColorFlashMiss;
+                _flashRingTimer      = FlashDuration;
+                _flashRingIsAutoMiss = false;
+                _flashRingIsSuccess  = false;
+                QueueRedraw();
+                _lockoutTimer = InputLockoutDuration;
+            }
             return InputResult.Miss;
         }
 
@@ -417,12 +460,37 @@ public partial class TimingPrompt : Node2D
     /// <summary>
     /// Evaluates all active prompts against a single input event.
     /// Call once per input event from BattleSystem for multi-circle encounters.
-    /// Each prompt's EvaluateInput handles its own zone, direction, and lockout checks.
+    ///
+    /// Strategy:
+    ///   1. Reset <see cref="_anyAcceptedLastConfirm"/> so the previous press's state
+    ///      does not bleed into this one.
+    ///   2. Pre-scan: if any prompt would accept right now, set the flag to true BEFORE
+    ///      any evaluation runs. This covers both the evaluation loop below AND any
+    ///      same-frame <c>_Process</c> EvaluateInput calls that fire after _Input completes,
+    ///      since all paths read the same static flag.
+    ///   3. Evaluate all prompts. Out-of-window circles check the flag internally and
+    ///      suppress their miss flash / lockout when it is set.
     /// </summary>
     public static void ConfirmAll()
     {
-        // Iterate over a copy in case evaluation causes prompts to exit the tree.
-        foreach (var prompt in new List<TimingPrompt>(_activePrompts))
+        var snapshot = new List<TimingPrompt>(_activePrompts);
+
+        // Reset from previous press before doing anything else.
+        _anyAcceptedLastConfirm = false;
+
+        // Pre-scan — must run before any EvaluateInput call mutates prompt state.
+        // Setting the flag here means _Process EvaluateInput calls on the same frame
+        // also see the correct suppression state, fixing the double-evaluation bug.
+        foreach (var prompt in snapshot)
+        {
+            if (prompt.WouldAcceptInput())
+            {
+                _anyAcceptedLastConfirm = true;
+                break;
+            }
+        }
+
+        foreach (var prompt in snapshot)
             prompt.EvaluateInput();
     }
 
@@ -451,9 +519,9 @@ public partial class TimingPrompt : Node2D
 
     public override void _Draw()
     {
-        // Green rim and target ring — always visible; persist after resolution.
-        DrawBand(TargetRadius, RingLineWidth, ColorHitWindow);
-        DrawArc(Vector2.Zero, TargetRadius, 0f, Mathf.Tau, 64, ColorTarget, RingLineWidth);
+        // Target ring and hit-window band are drawn by the shared TargetZone node in
+        // BattleTest.tscn — not here. Multiple circles sharing one target must not each
+        // draw their own ring; TargetZone eliminates the stacking.
 
         // Moving ring — hidden after flash expires on a fully resolved prompt.
         if (_showMovingRing)

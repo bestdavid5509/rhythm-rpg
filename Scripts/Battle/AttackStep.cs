@@ -1,12 +1,20 @@
 using Godot;
 
 /// <summary>
-/// One step in an attack sequence — a single animation paired with one timing circle prompt.
+/// One step in an attack sequence — a single animation play paired with one or more
+/// timing circle prompts.
 ///
-/// Circle input counts:
-///   Standard and Slow each represent exactly one input opportunity per step.
-///   Bouncing represents a variable number of passes — the circle itself controls the
-///   pass count via BounceCount. Do not assume any fixed input count for Bouncing steps.
+/// One step = one animation play. ImpactFrames lists every frame within that animation
+/// at which a hit lands. Each entry produces one independent timing circle, staggered
+/// so each circle closes exactly when its impact frame plays:
+///
+///   animationStartDelay = circleCloseDuration - (ImpactFrames[0] / Fps)
+///   circleSpawnDelay[i] = (ImpactFrames[i] - ImpactFrames[0]) / Fps
+///
+/// All circles in a step share the same CircleType.
+///
+/// For a single-hit step, ImpactFrames has one entry and behaves identically to the
+/// old single ImpactFrame design.
 ///
 /// NOTE — Bouncing animation replay:
 ///   A Bouncing step's animation will need to replay once per pass in future so the
@@ -32,14 +40,17 @@ public partial class AttackStep : Resource
     [Export] public float Fps = 12f;
 
     /// <summary>
-    /// Zero-based index of the frame on which the hit lands — the frame that plays
-    /// at the moment the timing circle reaches the target zone.
+    /// Zero-based indices of the frames on which hits land — one entry per timing circle.
+    /// The animation plays once; each entry produces one circle timed so it closes
+    /// exactly when the animation reaches that frame.
+    /// ImpactFrames[0] determines when the animation starts relative to all circles;
+    /// subsequent entries are staggered by (ImpactFrames[i] - ImpactFrames[0]) / Fps seconds.
     /// </summary>
-    [Export] public int ImpactFrame = 0;
+    [Export] public int[] ImpactFrames = { 0 };
 
     /// <summary>
-    /// The type of timing circle shown for this step.
-    /// Standard and Slow each give exactly one input opportunity.
+    /// The type of timing circle shown for every circle in this step.
+    /// Standard and Slow each give exactly one input opportunity per circle.
     /// Bouncing gives a variable number of passes controlled by the circle's BounceCount.
     /// </summary>
     [Export] public TimingPrompt.PromptType CircleType = TimingPrompt.PromptType.Standard;

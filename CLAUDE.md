@@ -35,9 +35,10 @@ The Absorber accumulates a library of absorbed moves over time.
 | `BattleAnimator.cs` | Sprite frame construction, all `AnimationFinished` callbacks, dead-flag guards (`PlayPlayer`/`PlayEnemy`/etc.), safe-disconnect helpers, end-of-battle overlay |
 | `BattleMenu.cs` | Battle menu construction, navigation, input handling — main menu and Absorbed Moves submenu |
 | `BattleSystem.cs` | Attack sequence runner — drives `AttackData` steps, spawns `TimingPrompt` circles and timed effect `AnimatedSprite2D` nodes, emits `StepPassEvaluated` / `SequenceCompleted` |
-| `TimingPrompt.cs` | Single timing circle — Standard, Slow, and Bouncing variants; emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
+| `TimingPrompt.cs` | Single closing circle — Standard, Slow, and Bouncing variants; draws only the moving ring and hit/miss flash; does **not** draw the target ring (see `TargetZone`); emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
+| `TargetZone.cs` | Persistent shared target ring node in `BattleTest.tscn`; draws the stationary white ring and green hit-window band; shown/hidden by `BattleTest` at sequence start/end; has no knowledge of individual circles |
 | `AttackData.cs` | `[GlobalClass]` Resource — ordered list of `AttackStep` objects and a `BaseDamage` value; saved as `.tres` files |
-| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrame`, `CircleType`, `DelayMs`, `FlipH`, `Offset` |
+| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `DelayMs`, `FlipH`, `Offset` |
 
 All three `BattleTest` files are `public partial class BattleTest : Node2D` and compile as one class.
 
@@ -50,9 +51,11 @@ All three `BattleTest` files are `public partial class BattleTest : Node2D` and 
 
 | File | Description |
 |---|---|
-| `blue_sword_plunge.tres` | Single-step Standard circle; effect: `Blue_Sword_Plunge_Sheet.png` |
-| `blue_triple_sword_plunge.tres` | Three-step sequence; effect: `Blue_Triple_Sword_Plunge_Sheet.png` |
-| `effect_manifest.md` | Per-frame dimensions, frame counts, layout, and impact frame index for every spritesheet in `Assets/Effects/` |
+| `red_sword_plunge.tres` | 1 step, 1 circle — `Red_Sword_Plunge_Sheet.png`, `ImpactFrames=[6]` |
+| `red_triple_sword_plunge.tres` | 1 step, 3 circles — `Red_Tripple_Sword_Plunge_Sheet.png`, `ImpactFrames=[6,7,8]` ← active in `BattleSystem` |
+| `blue_sword_plunge.tres` | Misnamed legacy file — actually uses `Red_Sword_Plunge_Sheet.png`; superseded by `red_sword_plunge.tres`, safe to delete |
+| `blue_triple_sword_plunge.tres` | 1 step, 3 circles — `Blue_Triple_Sword_Plunge_Sheet.png`, `ImpactFrames=[6,7,8]` |
+| `effect_manifest.md` | Per-frame dimensions, frame counts, layout, and impact frame indices for every spritesheet in `Assets/Effects/` |
 
 ### Assets/
 ```
@@ -198,17 +201,52 @@ All active `TimingPrompt` instances register themselves in a static `List<Timing
 
 `TimingPrompt.ConfirmAll()` is a static method that calls `EvaluateInput()` on every registered prompt. BattleSystem calls this once per input event to resolve all in-window circles simultaneously. Prompts outside the window, locked out, or on outward passes are silently skipped by `EvaluateInput`'s existing guards.
 
+### Shared Target Zone
+
+A single persistent `TargetZone` node lives in `BattleTest.tscn`. It draws the stationary white ring and green hit-window band that all closing circles aim at.
+
+**Why shared:** with multiple `TimingPrompt` circles active simultaneously — staggered multi-hit steps, circles from different steps overlapping, rapid sequences — each prompt drawing its own target ring produced N identical stacked rings. The `TargetZone` node draws it exactly once regardless of how many circles are live.
+
+**Lifecycle:**
+- `BattleTest._Ready` grabs the node reference via `GetNode<TargetZone>("TargetZone")`.
+- Shown + positioned at `ComputeCameraMidpoint()` when an enemy sequence starts (`BeginEnemyAttack`) or a player attack prompt is added (`BeginAttack` hop-in callback).
+- Hidden in `OnEnemySequenceCompleted` and `OnPlayerPromptCompleted`.
+
+**`TimingPrompt` draws only:**
+- The moving ring (`_currentRadius` → `TargetRadius`)
+- Hit/miss flash feedback rings
+
+It does **not** draw the target ring or hit-window band — those belong exclusively to `TargetZone`.
+
+**Visual constants** in `TargetZone.cs` must stay in sync with `TimingPrompt.cs`:
+`TargetRadius = 28f`, `RingLineWidth = 6f`, `ColorTarget`, `ColorHitWindow`.
+
+### Attack Data Model
+
+**One `AttackStep` = one animation play + one or more timing circles.**
+
+`ImpactFrames` is an array of zero-based frame indices within that single animation play. Each entry produces one independent timing circle. The animation plays exactly once regardless of how many circles the step contains.
+
+**Multiple animation plays = multiple `AttackStep` objects** chained in `AttackData.Steps`. `DelayMs` on each step controls the pause between the previous step resolving and the next beginning.
+
+**Authoring guide:**
+- Single hit: `ImpactFrames = [6]` — one circle, animation starts delayed so frame 6 lands on close
+- Multi-hit in one animation: `ImpactFrames = [6, 7, 8]` — three circles staggered, one animation play
+- Two separate animations: two `AttackStep` objects each with their own `ImpactFrames` and `SpritesheetPath`
+
 ### Attack Timing System — Impact-Frame Sync
 
-`BattleSystem.SpawnEffectSprite` launches an `AnimatedSprite2D` effect timed so its **impact frame** lands exactly when the timing circle closes:
+`BattleSystem.RunCurrentStep` launches one `AnimatedSprite2D` per step and one `TimingPrompt` per `ImpactFrames` entry. All timings are derived from the first impact frame as an anchor:
 
 ```
-animationStartDelay = circleCloseDuration - (impactFrame / fps)
+animationStartDelay  = circleCloseDuration - (ImpactFrames[0] / fps)
+circleSpawnDelay[i]  = (ImpactFrames[i] - ImpactFrames[0]) / fps
 ```
 
 - `circleCloseDuration` comes from `TimingPrompt.DefaultDurationForType(step.CircleType)`.
-- `animStartDelay` is clamped to `≥ 0` — a negative value means the impact frame has already passed and the animation starts immediately.
-- Each `AttackStep` stores `ImpactFrame` (zero-based) and `Fps` so the formula is per-step.
+- `animationStartDelay` is clamped to `≥ 0` — a negative value means the first impact frame has already passed the circle close time; animation starts immediately.
+- Circle 0 always spawns at delay 0. Subsequent circles are staggered forward by one frame-time each (≈83 ms at 12 fps for consecutive frames).
+- All circles in a step must resolve before the step counter advances. `_stepPromptsRemaining` tracks this countdown.
 - Effect sprites free themselves when their animation finishes via a self-disconnecting `Action onFinished` delegate (avoids the Godot 4 double-disconnect error from `+= QueueFree`).
 
 ### Player Menu Structure

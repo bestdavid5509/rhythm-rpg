@@ -87,6 +87,7 @@ public partial class BattleTest : Node2D
     private BattleSystem     _battleSystem;
     private AnimatedSprite2D _enemyAnimSprite;
     private AnimatedSprite2D _playerAnimSprite;
+    private TargetZone       _targetZone;       // shared target ring — shown for the duration of any prompt sequence
 
     // =========================================================================
     // Characters and animations
@@ -187,6 +188,8 @@ public partial class BattleTest : Node2D
         _battleSystem.StepPassEvaluated += OnBattleSystemStepPassEvaluated;
         _battleSystem.SequenceCompleted += OnEnemySequenceCompleted;
 
+        _targetZone = GetNode<TargetZone>("TargetZone");
+
         BuildMenu();
         UpdateHPBars();
 
@@ -260,15 +263,21 @@ public partial class BattleTest : Node2D
             PlayEnemy("cast_intro");
             _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
-            Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
-            _battleSystem.StartSequence(this, defenderCenter, ComputeCameraMidpoint(), EffectOffsetY);
+            Vector2 defenderCenter  = GetOrigin(_defender) + _defender.Size / 2f;
+            Vector2 promptPos        = ComputeCameraMidpoint();
+            _targetZone.Position     = promptPos;
+            _targetZone.Visible      = true;
+            _battleSystem.StartSequence(this, defenderCenter, promptPos, EffectOffsetY);
         }
         else
         {
             PlayHopIn(_enemySprite, _playerSprite, () =>
             {
-                Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
-                _battleSystem.StartSequence(this, defenderCenter, ComputeCameraMidpoint(), EffectOffsetY);
+                Vector2 defenderCenter  = GetOrigin(_defender) + _defender.Size / 2f;
+                Vector2 promptPos        = ComputeCameraMidpoint();
+                _targetZone.Position     = promptPos;
+                _targetZone.Visible      = true;
+                _battleSystem.StartSequence(this, defenderCenter, promptPos, EffectOffsetY);
             });
         }
     }
@@ -333,6 +342,7 @@ public partial class BattleTest : Node2D
     private void OnEnemySequenceCompleted()
     {
         GD.Print("[BattleTest] Enemy attack sequence complete.");
+        _targetZone.Visible = false;
 
         // Per-pass damage and _parryClean are tracked in OnEnemyPassEvaluated.
         // Only the parry counter fires here, after all passes have been evaluated.
@@ -404,6 +414,7 @@ public partial class BattleTest : Node2D
     {
         var r = (TimingPrompt.InputResult)result;
         GD.Print($"[BattleTest] Player attack resolved: {r}.");
+        _targetZone.Visible = false;
 
         int damage = r switch
         {
@@ -627,7 +638,9 @@ public partial class BattleTest : Node2D
                 StopPlayer();
             }
             // Position is set here so ComputeCameraMidpoint() reflects the final close stance.
-            prompt.Position = ComputeCameraMidpoint();
+            prompt.Position      = ComputeCameraMidpoint();
+            _targetZone.Position = prompt.Position;
+            _targetZone.Visible  = true;
             AddChild(prompt);
         });
     }
