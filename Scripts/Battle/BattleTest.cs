@@ -114,6 +114,15 @@ public partial class BattleTest : Node2D
     private static readonly Vector2 CameraDefaultZoom = Vector2.One;
     private static readonly Vector2 CameraZoomIn      = new Vector2(1.8f, 1.8f);
 
+    // Camera shake — delta-based so the offset feels organic rather than linear.
+    // Shake is applied to _camera.Offset (not _camera.Position) so it operates on a
+    // completely separate property from the position tweens in PlayHopIn/PlayTeardown.
+    // No undo-last-frame bookkeeping needed: _camera.Offset is written fresh each frame
+    // and zeroed when the shake expires.
+    private float   _shakeIntensity;       // peak pixel radius of random offset
+    private float   _shakeTimeRemaining;   // seconds remaining in current shake
+    private float   _shakeDurationTotal;   // total duration of current shake (for fade-out)
+
     // Animation durations (seconds).
     private const float SetupDuration    = 0.35f;  // hop in + zoom in
     private const float TeardownDuration = 0.35f;  // hop out + zoom out
@@ -200,6 +209,31 @@ public partial class BattleTest : Node2D
         }
     }
 
+    public override void _Process(double delta)
+    {
+        if (_shakeTimeRemaining <= 0f) return;
+
+        _shakeTimeRemaining -= (float)delta;
+
+        if (_shakeTimeRemaining <= 0f)
+        {
+            // Shake expired — zero the offset so no residual displacement remains.
+            _shakeTimeRemaining = 0f;
+            _camera.Offset      = Vector2.Zero;
+            return;
+        }
+
+        // Scale intensity linearly down to zero as the shake decays, giving a natural
+        // fade-out feel rather than cutting off abruptly.
+        // _camera.Offset is written fresh each frame — no undo-last-frame step needed
+        // because Offset is independent of the position tweens in PlayHopIn/PlayTeardown.
+        float t = _shakeTimeRemaining / _shakeDurationTotal;
+        _camera.Offset = new Vector2(
+            (float)GD.RandRange(-_shakeIntensity, _shakeIntensity),
+            (float)GD.RandRange(-_shakeIntensity, _shakeIntensity)
+        ) * t;
+    }
+
     // =========================================================================
     // Enemy attack phase
     // =========================================================================
@@ -252,6 +286,7 @@ public partial class BattleTest : Node2D
             GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {_playerHP}/{PlayerMaxHP}");
             SpawnDamageNumber(PlayerDamageOrigin, damage, DmgColorPlayer);
             UpdateHPBars();
+            ShakeCamera(intensity: 8f, duration: 0.3f);  // shake — player takes a hit
         }
     }
 
@@ -307,6 +342,7 @@ public partial class BattleTest : Node2D
             _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
             GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
             SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
+            ShakeCamera(intensity: 10f, duration: 0.3f);  // heavy shake — counter lands hard
         }
 
         UpdateHPBars();
@@ -383,11 +419,15 @@ public partial class BattleTest : Node2D
             _                                => DmgColorMiss,
         };
 
+        if (r == TimingPrompt.InputResult.Perfect)
+            ShakeCamera(intensity: 6f, duration: 0.2f);  // shake — perfect timing feedback
+
         if (damage > 0)
         {
             _enemyHP = Mathf.Max(0, _enemyHP - damage);
             GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
             SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
+            ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
         }
         else
         {
@@ -423,6 +463,24 @@ public partial class BattleTest : Node2D
             _activePrompt.QueueFree();
             _activePrompt = null;
         }
+    }
+
+    /// <summary>
+    /// Starts a camera shake that writes a random <see cref="Camera2D.Offset"/> each frame,
+    /// fading the intensity linearly to zero over <paramref name="duration"/> seconds.
+    /// Calling this while a shake is already in progress replaces it immediately — the new
+    /// parameters take effect on the next <see cref="_Process"/> tick.
+    ///
+    /// Using <c>Offset</c> rather than <c>Position</c> means the shake is completely
+    /// decoupled from the position tweens in <see cref="PlayHopIn"/> and
+    /// <see cref="PlayTeardown"/> — neither can overwrite the other.
+    /// </summary>
+    private void ShakeCamera(float intensity, float duration)
+    {
+        GD.Print($"[BattleTest] ShakeCamera called: intensity={intensity} duration={duration}");
+        _shakeIntensity     = intensity;
+        _shakeDurationTotal = duration;
+        _shakeTimeRemaining = duration;
     }
 
     private bool CheckGameOver()

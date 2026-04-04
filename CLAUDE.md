@@ -26,6 +26,60 @@ The Absorber accumulates a library of absorbed moves over time.
 - **Language:** C#
 - **Runtime:** .NET 9
 
+## Project Structure
+
+### Scripts/Battle/
+| File | Responsibility |
+|---|---|
+| `BattleTest.cs` | Core turn loop, state machine, lifecycle (`_Ready`/`_Input`), all field declarations, tween helpers, position helpers, shared combat helpers |
+| `BattleAnimator.cs` | Sprite frame construction, all `AnimationFinished` callbacks, dead-flag guards (`PlayPlayer`/`PlayEnemy`/etc.), safe-disconnect helpers, end-of-battle overlay |
+| `BattleMenu.cs` | Battle menu construction, navigation, input handling — main menu and Absorbed Moves submenu |
+| `BattleSystem.cs` | Attack sequence runner — drives `AttackData` steps, spawns `TimingPrompt` circles and timed effect `AnimatedSprite2D` nodes, emits `StepPassEvaluated` / `SequenceCompleted` |
+| `TimingPrompt.cs` | Single timing circle — Standard, Slow, and Bouncing variants; emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
+| `AttackData.cs` | `[GlobalClass]` Resource — ordered list of `AttackStep` objects and a `BaseDamage` value; saved as `.tres` files |
+| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrame`, `CircleType`, `DelayMs`, `FlipH`, `Offset` |
+
+All three `BattleTest` files are `public partial class BattleTest : Node2D` and compile as one class.
+
+### Scenes/Battle/
+- `BattleTest.tscn` — main battle prototype scene
+- `TimingPrompt.tscn` — circle prompt scene instantiated per step
+
+### Resources/Attacks/
+`.tres` files are Godot Resource instances of `AttackData`, editable in the inspector.
+
+| File | Description |
+|---|---|
+| `blue_sword_plunge.tres` | Single-step Standard circle; effect: `Blue_Sword_Plunge_Sheet.png` |
+| `blue_triple_sword_plunge.tres` | Three-step sequence; effect: `Blue_Triple_Sword_Plunge_Sheet.png` |
+| `effect_manifest.md` | Per-frame dimensions, frame counts, layout, and impact frame index for every spritesheet in `Assets/Effects/` |
+
+### Assets/
+```
+Assets/
+  Characters/
+	Knight/               — player sprite strips (120×80 px per frame, horizontal)
+	  _Idle.png
+	  _Run.png
+	  _AttackNoMovement.png
+	  _AttackComboNoMovement.png   (1200×80, 10 frames — combo sheet)
+	  _Attack2NoMovement.png       (720×80, 6 frames — parry source)
+	  _Hit.png
+	  _DeathNoMovement.png
+	  _Crouch.png / _CrouchAttack.png / _CrouchTransition.png / _Roll.png
+  Enemies/
+	8_Sword_Warrior/
+	  8_Sword_Warrior_Red/         — active enemy in BattleTest (21 cols × 7 rows, 160×160 px)
+	  8_Sword_Warrior_Blue/
+	  8_Sword_Warrior_Black/
+	Warrior/                       — multiple colour variants (unused in current prototype)
+	NightBorne/                    — unused in current prototype
+  Effects/
+	Sword_Effects/                 — plunge, swipe, hammer attacks
+	Comet_Effects/                 — projectile / magic attacks
+	Support_Effects/               — buff/debuff circles
+```
+
 ## Design Decisions
 
 ### Party System
@@ -143,3 +197,121 @@ Removed: `OvershootDistance`, `FixedReturnDuration`, `_bounceSpeedMultiplier`, `
 All active `TimingPrompt` instances register themselves in a static `List<TimingPrompt> _activePrompts` on `_Ready` and remove themselves on `_ExitTree`.
 
 `TimingPrompt.ConfirmAll()` is a static method that calls `EvaluateInput()` on every registered prompt. BattleSystem calls this once per input event to resolve all in-window circles simultaneously. Prompts outside the window, locked out, or on outward passes are silently skipped by `EvaluateInput`'s existing guards.
+
+### Attack Timing System — Impact-Frame Sync
+
+`BattleSystem.SpawnEffectSprite` launches an `AnimatedSprite2D` effect timed so its **impact frame** lands exactly when the timing circle closes:
+
+```
+animationStartDelay = circleCloseDuration - (impactFrame / fps)
+```
+
+- `circleCloseDuration` comes from `TimingPrompt.DefaultDurationForType(step.CircleType)`.
+- `animStartDelay` is clamped to `≥ 0` — a negative value means the impact frame has already passed and the animation starts immediately.
+- Each `AttackStep` stores `ImpactFrame` (zero-based) and `Fps` so the formula is per-step.
+- Effect sprites free themselves when their animation finishes via a self-disconnecting `Action onFinished` delegate (avoids the Godot 4 double-disconnect error from `+= QueueFree`).
+
+### Player Menu Structure
+
+The battle menu is a `CanvasLayer` with two `PanelContainer` panels — only one visible at a time.
+
+**Main menu** (shown after every enemy turn):
+| Option | Action |
+|---|---|
+| Attack | Standard circle prompt; single-hit with `combo_slash1` animation |
+| Absorbed Moves | Opens the submenu |
+
+**Absorbed Moves submenu:**
+| Option | Action |
+|---|---|
+| Combo Strike | Bouncing circle prompt; three-pass combo animation sequence |
+| Back | Returns to main menu |
+
+Navigation: `ui_up` / `ui_down` to move, `battle_confirm` to select. Disabled options render in grey and are skipped during navigation.
+
+### Player Animation System — Knight Sprite
+
+All knight animations use 120×80 px frames from horizontal-strip PNGs at `res://Assets/Characters/Knight/`.
+
+**Combo sheet frame layout** (`_AttackComboNoMovement.png`, 10 frames 0–9):
+
+| Named animation | Sheet frames | Usage |
+|---|---|---|
+| `combo` | 0–9 (all) | Frame index reference for wind-up holds |
+| `combo_slash1` | 1–3 | First strike (single attack; combo passes 0 and final) |
+| `combo_slash2` | 6–9 | Second strike (combo pass 1) |
+
+**Parry** (`_Attack2NoMovement.png`, frames 2–5): plays on every successful enemy-attack block.
+
+**Wind-up hold behaviour:** after the hop-in completes, `Animation = "combo"`, `Stop()`, `Frame = 0` freezes the sprite on the first wind-up pose while the player waits to input. `Stop()` is called before `Frame =` to counteract Godot 4's reset-to-0 on a stopped non-looping animation.
+
+**Retreat (PlayBackwards):**
+1. Before retreat: `SpriteFrames.SetAnimationLoop("run", false)` so `AnimationFinished` fires at frame 0.
+2. `SpeedScale = 2f`, `PlayBackwards("run")` — snappy hop-back.
+3. `OnRetreatFinished` resets `SpeedScale = 1f`, restores `SetAnimationLoop("run", true)`, returns to `idle` only if `Animation == "run"` (guards against a concurrent parry/hit taking ownership).
+
+**Combo pass sequence:**
+- Pass 0: `combo_slash1` → `OnComboPass0SlashFinished` holds `combo` frame 5 (second wind-up)
+- Pass 1: `combo_slash2` → `OnComboPass1SlashFinished` holds `combo` frame 0 (first wind-up again)
+- Pass 2 (final): `combo_slash1` → `OnFinalSlashFinished` holds last frame 0.3 s, then starts retreat
+
+### Enemy Animation Arc — 8 Sword Warrior Red
+
+Sheet: `8_sword_warrior_red-Sheet.png` — 160×160 px per frame, 21 cols × 7 rows.
+
+| Animation | Row | Frames | Loop | Usage |
+|---|---|---|---|---|
+| `idle` | 0 | 14 | yes | Default between turns |
+| `run` | 1 | 8 | yes | (reserved) |
+| `attack` | 2 | 15 | no | (reserved) |
+| `cast_intro` | 3 | cols 0–3 | no | Wind-up once before prompt appears |
+| `cast_loop` | 4 | 14 | yes | Holds during entire prompt sequence |
+| `cast_end` | 3 | cols 18–20 | no | Release once after sequence resolves |
+| `death` | 6 | 15 + 1 blank | no | 15 sheet frames + 1 transparent 160×160 frame held 0.5 s |
+
+**Turn arc:** `cast_intro` → (`OnCastIntroFinished`) → `cast_loop` → (sequence resolves) → `cast_end` → (`OnCastEndFinished`) → `idle`
+
+**Blank death frame:** a fully transparent `ImageTexture` (160×160, RGBA8) is appended to the `death` animation with `duration: 6.0f` (at 12 fps → 0.5 s). This ensures the Victory label appears only after death particles have fully dissipated.
+
+### Dead-Flag Guards
+
+Once `_playerDead` or `_enemyDead` is set, no further animation calls can override the death pose. All sprite interaction routes through five helpers in `BattleAnimator.cs`:
+
+```csharp
+PlayPlayer(string anim)          // guarded by !_playerDead
+PlayPlayerBackwards(string anim) // guarded by !_playerDead
+StopPlayer()                     // guarded by !_playerDead
+SetPlayerFrame(int frame)        // guarded by !_playerDead
+PlayEnemy(string anim)           // guarded by !_enemyDead
+```
+
+### Safe Signal Disconnect Pattern
+
+All `AnimationFinished` disconnects route through `SafeDisconnectPlayerAnim(Action)` / `SafeDisconnectEnemyAnim(Action)`, which check `IsConnected` before calling `Disconnect`. This prevents the Godot 4 "Attempt to disconnect a nonexistent connection" error.
+
+Connect sites also call `SafeDisconnect` **before** `+=` to prevent handler stacking across turns:
+
+```csharp
+SafeDisconnectEnemyAnim(OnCastIntroFinished);
+_enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
+```
+
+### SkipHopIn Flag and FloorY Constant
+
+`[Export] public bool SkipHopIn = true` — when set, the enemy stays at origin for the entire turn. Setup and teardown tweens are skipped (no hop-in, no camera zoom). `_attackerClosePos` is set to the enemy origin so `PlayTeardown` is a zero-distance no-op. Used for large/stationary enemies like the 8 Sword Warrior.
+
+`const float FloorY = 750f` — world-space Y of the ground line. All character sprites are floor-anchored:
+- Player: `Position.Y = FloorY - frameHeight * scale * 0.5f` (center-anchored sprite)
+- Enemy: `Position.Y = FloorY - 160f * 3f * 0.6f + EnemySpriteOffsetY` (tuned nudge for visual ground contact)
+- Effects: `centerY = FloorY - step.FrameHeight * EffectScale * 0.5f` + `step.Offset`
+
+`const float EnemySpriteOffsetY = 130f` — additional downward nudge on the enemy sprite, finalized visually.
+
+## Known Next Steps
+
+- **Screen shake** — add a `Camera2D` shake tween on Miss (enemy hits player) and on player attack landing
+- **Audio** — hit/miss/parry/perfect SFX; music layers for phase transitions
+- **Real boss attack sequence** — replace `blue_sword_plunge.tres` with a multi-step `AttackData` resource representing the opening boss Phase 1 pattern
+- **Bouncing animation replay** — `AttackStep` has a documented hook: replay the effect animation once per pass by subscribing to `TimingPrompt.PassEvaluated` (currently the effect plays once regardless of bounce count)
+- **Learnable move signalling** — visual highlight on enemy and colored move-name label during learnable-move sequences
+- **Taunt ability** — player action that baits the enemy into using their signature/learnable move
