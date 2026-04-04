@@ -5,8 +5,9 @@ using Godot.Collections;
 /// A complete attack sequence — an ordered list of AttackStep objects that play out
 /// one after another, each paired with a timing circle prompt.
 ///
-/// Steps execute in array order. The DelayMs field on each step controls the pause
-/// between the previous step resolving and the next one beginning.
+/// Steps execute in order, but may overlap: the StartOffsetMs field on each step
+/// controls when it starts relative to the previous step's last circle resolving.
+/// Positive = gap, zero = immediate, negative = concurrent/overlapping.
 ///
 /// Damage model:
 ///   BaseDamage is applied once per successful input across all steps.

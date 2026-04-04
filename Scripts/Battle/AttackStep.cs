@@ -56,10 +56,22 @@ public partial class AttackStep : Resource
     [Export] public TimingPrompt.PromptType CircleType = TimingPrompt.PromptType.Standard;
 
     /// <summary>
-    /// Milliseconds to wait after the previous step resolves before this step begins.
-    /// Zero means this step starts immediately when the previous one completes.
+    /// Controls when this step starts relative to the previous step's last circle resolving.
+    ///
+    /// Positive — this step starts N milliseconds AFTER the previous step's last circle resolves.
+    ///            Use for a deliberate pause between animations (e.g. 300 for a short breath).
+    ///
+    /// Zero     — this step starts immediately when the previous step's last circle resolves.
+    ///
+    /// Negative — this step starts N milliseconds BEFORE the previous step's last circle resolves.
+    ///            Steps overlap: this step's animation and circles are live while the previous
+    ///            step's final circle(s) are still closing. Use for fast chained combos or
+    ///            simultaneous multi-animation hits.
+    ///            Clamped to 0 if the overlap would push the start before the sequence began.
+    ///
+    /// Ignored on step 0 — the first step always starts immediately.
     /// </summary>
-    [Export] public int DelayMs = 0;
+    [Export] public int StartOffsetMs = 0;
 
     /// <summary>
     /// When true, the effect sprite is mirrored horizontally.

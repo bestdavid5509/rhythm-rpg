@@ -38,7 +38,7 @@ The Absorber accumulates a library of absorbed moves over time.
 | `TimingPrompt.cs` | Single closing circle — Standard, Slow, and Bouncing variants; draws only the moving ring and hit/miss flash; does **not** draw the target ring (see `TargetZone`); emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
 | `TargetZone.cs` | Persistent shared target ring node in `BattleTest.tscn`; draws the stationary white ring and green hit-window band; shown/hidden by `BattleTest` at sequence start/end; has no knowledge of individual circles |
 | `AttackData.cs` | `[GlobalClass]` Resource — ordered list of `AttackStep` objects and a `BaseDamage` value; saved as `.tres` files |
-| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `DelayMs`, `FlipH`, `Offset` |
+| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `StartOffsetMs`, `FlipH`, `Offset` |
 
 All three `BattleTest` files are `public partial class BattleTest : Node2D` and compile as one class.
 
@@ -52,7 +52,8 @@ All three `BattleTest` files are `public partial class BattleTest : Node2D` and 
 | File | Description |
 |---|---|
 | `red_sword_plunge.tres` | 1 step, 1 circle — `Red_Sword_Plunge_Sheet.png`, `ImpactFrames=[6]` |
-| `red_triple_sword_plunge.tres` | 1 step, 3 circles — `Red_Tripple_Sword_Plunge_Sheet.png`, `ImpactFrames=[6,7,8]` ← active in `BattleSystem` |
+| `red_triple_sword_plunge.tres` | 1 step, 3 circles — `Red_Triple_Sword_Plunge_Sheet.png`, `ImpactFrames=[6,7,8]` |
+| `red_sword_combo_attack.tres` | 2 steps — triple plunge (3 circles) chained into single plunge (1 circle) ← active in `BattleSystem` |
 | `blue_sword_plunge.tres` | Misnamed legacy file — actually uses `Red_Sword_Plunge_Sheet.png`; superseded by `red_sword_plunge.tres`, safe to delete |
 | `blue_triple_sword_plunge.tres` | 1 step, 3 circles — `Blue_Triple_Sword_Plunge_Sheet.png`, `ImpactFrames=[6,7,8]` |
 | `effect_manifest.md` | Per-frame dimensions, frame counts, layout, and impact frame indices for every spritesheet in `Assets/Effects/` |
@@ -227,16 +228,25 @@ It does **not** draw the target ring or hit-window band — those belong exclusi
 
 `ImpactFrames` is an array of zero-based frame indices within that single animation play. Each entry produces one independent timing circle. The animation plays exactly once regardless of how many circles the step contains.
 
-**Multiple animation plays = multiple `AttackStep` objects** chained in `AttackData.Steps`. `DelayMs` on each step controls the pause between the previous step resolving and the next beginning.
+**Multiple animation plays = multiple `AttackStep` objects** chained in `AttackData.Steps`. `StartOffsetMs` on each step controls when it starts relative to the previous step's last circle resolving:
+
+| `StartOffsetMs` | Effect |
+|---|---|
+| `> 0` | Pause N ms after previous step's last circle resolves before starting this step |
+| `0` | Start immediately when previous step's last circle resolves |
+| `< 0` | Start N ms *before* previous step's last circle resolves — steps overlap/run concurrently |
+
+Negative values are clamped to 0 if the overlap would push the start before the sequence began. Ignored on step 0.
 
 **Authoring guide:**
 - Single hit: `ImpactFrames = [6]` — one circle, animation starts delayed so frame 6 lands on close
 - Multi-hit in one animation: `ImpactFrames = [6, 7, 8]` — three circles staggered, one animation play
 - Two separate animations: two `AttackStep` objects each with their own `ImpactFrames` and `SpritesheetPath`
+- Fast chained combo (overlapping): step 2 `StartOffsetMs = -300` starts while step 1's last circle is still closing
 
 ### Attack Timing System — Impact-Frame Sync
 
-`BattleSystem.RunCurrentStep` launches one `AnimatedSprite2D` per step and one `TimingPrompt` per `ImpactFrames` entry. All timings are derived from the first impact frame as an anchor:
+`BattleSystem.RunStep(int stepIndex)` launches one `AnimatedSprite2D` per step and one `TimingPrompt` per `ImpactFrames` entry. All timings are derived from the first impact frame as an anchor:
 
 ```
 animationStartDelay  = circleCloseDuration - (ImpactFrames[0] / fps)
@@ -246,7 +256,12 @@ circleSpawnDelay[i]  = (ImpactFrames[i] - ImpactFrames[0]) / fps
 - `circleCloseDuration` comes from `TimingPrompt.DefaultDurationForType(step.CircleType)`.
 - `animationStartDelay` is clamped to `≥ 0` — a negative value means the first impact frame has already passed the circle close time; animation starts immediately.
 - Circle 0 always spawns at delay 0. Subsequent circles are staggered forward by one frame-time each (≈83 ms at 12 fps for consecutive frames).
-- All circles in a step must resolve before the step counter advances. `_stepPromptsRemaining` tracks this countdown.
+- **Step scheduling is timer-driven, not completion-driven.** Each `RunStep` immediately schedules the next step's start timer:
+  ```
+  lastCircleResolveTime = (ImpactFrames[last] - ImpactFrames[0]) / fps + circleCloseDuration
+  nextStepDelay = max(0, lastCircleResolveTime + nextStep.StartOffsetMs / 1000)
+  ```
+- `_totalPromptsRemaining` counts all circles across all steps. `SequenceCompleted` fires when it reaches 0 — after the last circle of the last concurrent step resolves.
 - Effect sprites free themselves when their animation finishes via a self-disconnecting `Action onFinished` delegate (avoids the Godot 4 double-disconnect error from `+= QueueFree`).
 
 ### Player Menu Structure

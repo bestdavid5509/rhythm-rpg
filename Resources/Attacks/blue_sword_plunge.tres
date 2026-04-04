@@ -13,7 +13,7 @@ FrameHeight = 256
 Fps = 12.0
 ImpactFrame = 6
 CircleType = 0
-DelayMs = 0
+StartOffsetMs = 0
 FlipH = false
 Offset = Vector2(0, 0)
 
