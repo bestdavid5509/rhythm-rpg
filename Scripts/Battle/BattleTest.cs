@@ -322,14 +322,22 @@ public partial class BattleTest : Node2D
         var r = (TimingPrompt.InputResult)result;
         if (r == TimingPrompt.InputResult.Hit || r == TimingPrompt.InputResult.Perfect)
         {
-            // Successful block — deflect animation, then return to idle.
-            PlayPlayer("parry");  // OWNER: enemy pass, player defends
+            // Successful block — restart parry animation from frame 0.
+            // SafeDisconnect first so a parry already in flight doesn't stack a second
+            // OnParryFinished connection on top of the existing one.
+            // Stop() before Play() is required because Godot 4's AnimatedSprite2D.Play()
+            // is a no-op when the requested animation is already playing — Stop() halts
+            // the current playback so the subsequent Play("parry") always restarts fresh.
+            SafeDisconnectPlayerAnim(OnParryFinished);
+            StopPlayer();
+            PlayPlayer("parry");  // OWNER: enemy pass, player defends — always restarts from frame 0
             _playerAnimSprite.AnimationFinished += OnParryFinished;
         }
         else if (r == TimingPrompt.InputResult.Miss)
         {
             // Strike landed — flinch animation, then return to idle.
-            PlayPlayer("hit");    // OWNER: enemy pass, player takes damage
+            SafeDisconnectPlayerAnim(OnHitAnimFinished);
+            PlayPlayer("hit");    // OWNER: enemy pass, player takes damage — always restarts fresh
             _playerAnimSprite.AnimationFinished += OnHitAnimFinished;
         }
     }

@@ -137,17 +137,49 @@ public partial class BattleSystem : Node
         _stepPrompts.Clear();
         _stepPromptsRemaining = circleCount;
 
-        // Delay the animation start so ImpactFrames[0] coincides with circle 0 closing.
-        //   animationStartDelay = circleCloseDuration - (ImpactFrames[0] / fps)
-        // Clamped to 0 — a negative value means the first impact frame is already past the
-        // circle close time; start immediately and accept the minor visual desync.
+        // Synchronise the animation so its impact frame lands exactly when circle 0 closes.
+        //
+        //   rawDelay = circleCloseDuration - (ImpactFrames[0] / fps)
+        //
+        // Two cases:
+        //
+        //   rawDelay >= 0  → animation starts rawDelay seconds from now at frame 0.
+        //                    By the time the circle closes it has played exactly
+        //                    circleCloseDuration - rawDelay = ImpactFrames[0] / fps seconds
+        //                    = ImpactFrames[0] frames. Correct.
+        //
+        //   rawDelay < 0   → ImpactFrames[0] / fps > circleCloseDuration.
+        //                    At low fps the impact frame takes longer to reach than the circle
+        //                    close time. Clamping to 0 and starting at frame 0 means only
+        //                    circleCloseDuration * fps frames play before the circle closes —
+        //                    fewer than ImpactFrames[0] — causing the animation to lag behind
+        //                    the circle and appear out of sync.
+        //
+        //                    Fix: start the animation immediately (delay = 0) but skip ahead
+        //                    to startFrame = round(|rawDelay| * fps) so the impact frame still
+        //                    aligns with the circle close time. AnimatedSprite2D.Frame is set
+        //                    before Play() to begin mid-animation.
+        //
         float circleCloseDuration = TimingPrompt.DefaultDurationForType(step.CircleType);
-        float animStartDelay      = Mathf.Max(0f, circleCloseDuration - firstImpact / step.Fps);
+        float rawDelay            = circleCloseDuration - firstImpact / step.Fps;
+        float animStartDelay      = Mathf.Max(0f, rawDelay);
+        int   animStartFrame      = 0;
+
+        if (rawDelay < 0f)
+        {
+            animStartFrame = Mathf.RoundToInt(-rawDelay * step.Fps);
+            GD.PrintErr($"[BattleSystem] WARNING: ImpactFrames[0]({firstImpact}) / Fps({step.Fps}) " +
+                        $"= {firstImpact / step.Fps:F3}s exceeds circleCloseDuration({circleCloseDuration:F2}s). " +
+                        $"Animation will start at frame {animStartFrame} to stay in sync. " +
+                        $"Consider raising Fps or lowering ImpactFrames[0].");
+        }
 
         GD.Print($"[BattleSystem]   circleCloseDuration={circleCloseDuration:F2}s  " +
-                 $"animStartDelay={animStartDelay:F2}s");
+                 $"impactFrame[0]/fps={firstImpact / step.Fps:F3}s  " +
+                 $"rawDelay={rawDelay:F3}s  animStartDelay={animStartDelay:F3}s  " +
+                 $"animStartFrame={animStartFrame}");
 
-        GetTree().CreateTimer(animStartDelay).Timeout += () => SpawnEffectSprite(step);
+        GetTree().CreateTimer(animStartDelay).Timeout += () => SpawnEffectSprite(step, animStartFrame);
 
         // Spawn one circle per impact frame, staggered so each closes exactly when its
         // frame plays in the animation:
@@ -233,11 +265,16 @@ public partial class BattleSystem : Node
     /// AnimatedSprite2D at the defender's center plus the step's Offset.
     /// The sprite queues itself free when its animation finishes.
     ///
+    /// <paramref name="startFrame"/> is the frame index to begin playing from.
+    /// 0 in the normal case (animation starts at the beginning); a positive value
+    /// when the impact frame / fps exceeds circleCloseDuration — the animation skips
+    /// ahead so the impact frame still lands when circle 0 closes.
+    ///
     /// Frame grid is derived from texture dimensions divided by FrameWidth/FrameHeight.
     /// Any trailing empty cells (when total frames &lt; rows×cols) are included in the
     /// SpriteFrames but are never reached because the animation is non-looping.
     /// </summary>
-    private void SpawnEffectSprite(AttackStep step)
+    private void SpawnEffectSprite(AttackStep step, int startFrame = 0)
     {
         var texture = GD.Load<Texture2D>(step.SpritesheetPath);
         if (texture == null)
@@ -301,8 +338,17 @@ public partial class BattleSystem : Node
         _spawnParent.AddChild(sprite);
         sprite.Play("default");
 
-        GD.Print($"[BattleSystem]   Spawned effect ({cols}×{rows} grid, {cols * rows} frames) " +
-                 $"at {sprite.Position}.");
+        // Skip ahead to startFrame when the raw animation delay was negative —
+        // the animation needed to begin "mid-flight" to keep its impact frame aligned
+        // with the circle close time. Frame must be set after Play() because Play()
+        // resets Frame to 0 in Godot 4.
+        int totalFrames = cols * rows;
+        int clampedStart = Mathf.Clamp(startFrame, 0, Mathf.Max(0, totalFrames - 1));
+        if (clampedStart > 0)
+            sprite.Frame = clampedStart;
+
+        GD.Print($"[BattleSystem]   Spawned effect ({cols}×{rows} grid, {totalFrames} frames) " +
+                 $"startFrame={clampedStart}  Fps={step.Fps}  at {sprite.Position}.");
     }
 
     // =========================================================================
