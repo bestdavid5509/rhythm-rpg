@@ -123,6 +123,18 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void BuildEnemySpriteFrames()
     {
+        GD.Print("[BattleTest] BuildEnemySpriteFrames called.");
+
+        // Once-only guard — if the sprite already has its frames from a prior call, skip rebuild.
+        // This prevents a second SpriteFrames construction if anything calls this method again
+        // after _Ready (e.g. a hot-reload, mistaken double-call, or future refactor).
+        if (_enemyAnimSprite.SpriteFrames != null &&
+            _enemyAnimSprite.SpriteFrames.HasAnimation("idle"))
+        {
+            GD.Print("[BattleTest] BuildEnemySpriteFrames — already built, skipping.");
+            return;
+        }
+
         const string SheetPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior_red-Sheet.png";
         var texture = GD.Load<Texture2D>(SheetPath);
         if (texture == null)
@@ -146,6 +158,19 @@ public partial class BattleTest : Node2D
         AddEnemyAnimation(frames, texture, "cast_loop",  row: 4, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: true);
         AddEnemyAnimation(frames, texture, "cast_end",   row: 3, count:  3, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: 18);
         AddEnemyAnimation(frames, texture, "death",      row: 6, count: 15, fw: Fw, fh: Fh, fps: 12f, loop: false);
+
+        // Append one fully-transparent 160×160 frame at the end of the death animation,
+        // held for ~0.5 s so the Victory label appears only after death particles have
+        // fully dissipated rather than cutting in mid-effect.
+        //
+        // Godot 4's AddFrame(anim, texture, duration) multiplies the base frame time
+        // (1 / fps = 1/12 s) by the duration value, so 6.0 × (1/12 s) = 0.5 s exactly.
+        //
+        // Image.CreateEmpty fills with (0,0,0,0) by default — fully transparent black.
+        // ImageTexture.CreateFromImage uploads it to GPU memory as a normal Texture2D.
+        var blankImage   = Image.CreateEmpty(Fw, Fh, false, Image.Format.Rgba8);
+        var blankTexture = ImageTexture.CreateFromImage(blankImage);
+        frames.AddFrame("death", blankTexture, duration: 6.0f);  // 6.0 × (1/12 s) ≈ 0.5 s
 
         _enemyAnimSprite.SpriteFrames = frames;
         GD.Print("[BattleTest] Enemy sprite frames built — 8 animations loaded.");
@@ -177,12 +202,14 @@ public partial class BattleTest : Node2D
 
     private void OnCastIntroFinished()
     {
+        GD.Print("[BattleTest] OnCastIntroFinished fired.");
         SafeDisconnectEnemyAnim(OnCastIntroFinished);
         PlayEnemy("cast_loop");
     }
 
     private void OnCastEndFinished()
     {
+        GD.Print("[BattleTest] OnCastEndFinished fired.");
         SafeDisconnectEnemyAnim(OnCastEndFinished);
         PlayEnemy("idle");
     }

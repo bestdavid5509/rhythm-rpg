@@ -220,6 +220,9 @@ public partial class BattleTest : Node2D
             _attackerClosePos = GetOrigin(_enemySprite);
 
             // Start the cast animation and kick off the sequence immediately.
+            // SafeDisconnect first — prevents stacking if BeginEnemyAttack fires more than once
+            // (e.g. second turn) without the prior OnCastIntroFinished having run its own disconnect.
+            SafeDisconnectEnemyAnim(OnCastIntroFinished);
             PlayEnemy("cast_intro");
             _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
@@ -269,7 +272,7 @@ public partial class BattleTest : Node2D
         // If the backward run loop hasn't fired OnRetreatFinished yet, cancel it here so
         // it doesn't stomp the parry/hit animation or restore idle at the wrong moment.
         // SpeedScale must be reset regardless — it may still be 2 from the retreat.
-        _playerAnimSprite.AnimationFinished -= OnRetreatFinished;
+        SafeDisconnectPlayerAnim(OnRetreatFinished);
         _playerAnimSprite.SpeedScale = 1f;  // always reset — may still be 2 from retreat hop-back
 
         var r = (TimingPrompt.InputResult)result;
@@ -314,6 +317,8 @@ public partial class BattleTest : Node2D
             // Normal completion — enemy plays cast_end then returns to idle; menu reappears.
             // cast_end (≈0.25s) completes before the 0.5s post-teardown delay, so idle is
             // reached well before the player menu shows.
+            // SafeDisconnect first — prevents stacking across multiple enemy turns.
+            SafeDisconnectEnemyAnim(OnCastEndFinished);
             PlayEnemy("cast_end");
             _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
             PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += ShowMenu);
@@ -328,6 +333,8 @@ public partial class BattleTest : Node2D
         {
             // Enemy's attack landed the killing blow.
             // Enemy completes the cast_end pose normally; player plays death.
+            // SafeDisconnect first — prevents stacking if this path is reached after turn 1.
+            SafeDisconnectEnemyAnim(OnCastEndFinished);
             PlayEnemy("cast_end");
             _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
             _playerDead = true;

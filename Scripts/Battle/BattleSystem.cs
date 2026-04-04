@@ -1,3 +1,4 @@
+using System;
 using Godot;
 
 /// <summary>
@@ -211,6 +212,11 @@ public partial class BattleSystem : Node
         int rows = texture.GetHeight() / step.FrameHeight;
 
         var spriteFrames = new SpriteFrames();
+        // Guard: SpriteFrames constructor already adds "default" in Godot 4.
+        // Calling AddAnimation("default") again without removing it first throws
+        // "SpriteFrames already has animation default". Remove it if present, then re-add
+        // with the step's settings so the animation is always configured correctly.
+        if (spriteFrames.HasAnimation("default")) spriteFrames.RemoveAnimation("default");
         spriteFrames.AddAnimation("default");
         spriteFrames.SetAnimationSpeed("default", step.Fps);
         spriteFrames.SetAnimationLoop("default", false);
@@ -238,7 +244,21 @@ public partial class BattleSystem : Node
         sprite.FlipH        = step.FlipH;
         sprite.Scale        = new Vector2(EffectScale, EffectScale);
         sprite.Position     = new Vector2(_defenderCenter.X, centerY + _effectOffsetY) + step.Offset;
-        sprite.AnimationFinished += sprite.QueueFree;
+        // Use an explicit named delegate so the handler can disconnect itself before
+        // calling QueueFree. The direct `+= sprite.QueueFree` pattern causes Godot's
+        // automatic signal cleanup (which runs when the node is freed) to attempt a
+        // second disconnect of the same connection, producing "Attempt to disconnect a
+        // nonexistent connection". Disconnecting explicitly here — guarded with IsConnected —
+        // leaves nothing for Godot's cleanup to find.
+        Action onFinished = null;
+        onFinished = () =>
+        {
+            var callable = Callable.From(onFinished);
+            if (sprite.IsConnected(AnimatedSprite2D.SignalName.AnimationFinished, callable))
+                sprite.Disconnect(AnimatedSprite2D.SignalName.AnimationFinished, callable);
+            sprite.QueueFree();
+        };
+        sprite.AnimationFinished += onFinished;
 
         _spawnParent.AddChild(sprite);
         sprite.Play("default");
