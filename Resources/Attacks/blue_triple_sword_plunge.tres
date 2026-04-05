@@ -8,12 +8,13 @@ script = ExtResource("2_attackstep")
 SpritesheetPath = "res://Assets/Effects/Sword_Effects/Blue_Triple_Sword_Plunge_Sheet.png"
 FrameWidth = 320
 FrameHeight = 256
-Fps = 12.0
+Fps = 8.0
 ImpactFrames = PackedInt32Array(6, 7, 8)
 CircleType = 0
 StartOffsetMs = 0
 FlipH = false
-Offset = Vector2(0, 0)
+Scale = Vector2(3, 3)
+Offset = Vector2(-15, -336)
 
 [resource]
 script = ExtResource("1_attackdata")

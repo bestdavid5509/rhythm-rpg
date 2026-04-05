@@ -52,7 +52,7 @@ public partial class BattleSystem : Node
 
     // Test attack: hardcoded for visual verification in BattleTest.
     // Replace with dynamic assignment when the full battle system drives attack selection.
-    private const string TestAttackPath = "res://Resources/Attacks/red_sword_combo_attack.tres";
+    private const string TestAttackPath = "res://Resources/Attacks/blue_sword_plunge.tres";
 
     private PackedScene              _promptScene;
     private AttackData               _currentAttack;          // the attack currently being executed
@@ -60,7 +60,6 @@ public partial class BattleSystem : Node
     private Vector2                  _defenderCenter;         // world-space center of the defender — effect origin
     private Vector2                  _promptPosition;         // world-space position for circle prompts
     private int                      _totalPromptsRemaining;  // total circles across all steps; 0 → SequenceCompleted
-    private float                    _effectOffsetY;          // per-sequence Y nudge passed in from BattleTest
 
     // =========================================================================
     // Legacy battle state — used by stub methods below
@@ -101,8 +100,7 @@ public partial class BattleSystem : Node
     /// <param name="parent">Node to add prompts and AnimatedSprite2Ds to.</param>
     /// <param name="defenderCenter">World-space center of the defender — effect spawn origin.</param>
     /// <param name="promptPosition">World-space position for circle prompts (combat midpoint).</param>
-    /// <param name="effectOffsetY">Additional Y offset applied to every effect sprite this sequence (inspector-tunable from BattleTest).</param>
-    public void StartSequence(Node2D parent, Vector2 defenderCenter, Vector2 promptPosition, float effectOffsetY = 0f)
+    public void StartSequence(Node2D parent, Vector2 defenderCenter, Vector2 promptPosition)
     {
         if (_currentAttack == null || _currentAttack.Steps.Count == 0)
         {
@@ -114,7 +112,6 @@ public partial class BattleSystem : Node
         _spawnParent    = parent;
         _defenderCenter = defenderCenter;
         _promptPosition = promptPosition;
-        _effectOffsetY  = effectOffsetY;
 
         // Count every circle across all steps so SequenceCompleted fires only after
         // the last circle of the last concurrent step resolves.
@@ -325,18 +322,16 @@ public partial class BattleSystem : Node
             spriteFrames.AddFrame("default", atlas);
         }
 
-        // Floor-anchored positioning: center Y = FloorY - (frameHeight * scale * 0.5) so the
-        // bottom of the effect frame lands on the ground line. step.Offset applies on top as
-        // a per-step fine adjustment.
-        const float FloorY      = 750f;
-        const float EffectScale = 3f;
-        float       centerY     = FloorY - step.FrameHeight * EffectScale * 0.5f;
+        // Baseline position is the floor line. step.Offset is the sole positioning control —
+        // Offset.Y < 0 moves the effect up, Offset.Y > 0 moves it down. No hidden math.
+        const float FloorY = 750f;
 
         var sprite          = new AnimatedSprite2D();
         sprite.SpriteFrames = spriteFrames;
+        sprite.Centered     = true;
         sprite.FlipH        = step.FlipH;
-        sprite.Scale        = new Vector2(EffectScale, EffectScale);
-        sprite.Position     = new Vector2(_defenderCenter.X, centerY + _effectOffsetY) + step.Offset;
+        sprite.Scale        = step.Scale;
+        sprite.Position     = new Vector2(_defenderCenter.X, FloorY) + step.Offset;
         // Use an explicit named delegate so the handler can disconnect itself before
         // calling QueueFree. The direct `+= sprite.QueueFree` pattern causes Godot's
         // automatic signal cleanup (which runs when the node is freed) to attempt a

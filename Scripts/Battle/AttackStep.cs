@@ -80,6 +80,13 @@ public partial class AttackStep : Resource
     [Export] public bool FlipH = false;
 
     /// <summary>
+    /// Uniform scale applied to the effect AnimatedSprite2D.
+    /// Default (3, 3) matches the standard 3× world-space upscale used for all effect sheets.
+    /// Adjust per-step to shrink or enlarge specific animations without editing the spritesheet.
+    /// </summary>
+    [Export] public Vector2 Scale = new Vector2(3, 3);
+
+    /// <summary>
     /// World-space offset applied to the effect position relative to the target.
     /// Use this to fine-tune where the visual lands on the defender.
     /// </summary>

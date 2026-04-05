@@ -80,7 +80,6 @@ public partial class BattleTest : Node2D
     // Tuned Y offsets — finalized visually, no longer need inspector exposure.
     // Positive values move down; negative values move up.
     private const float EnemySpriteOffsetY = 130f;
-    private const float EffectOffsetY      =  14f;
 
     private TimingPrompt     _activePrompt;
     private PackedScene      _timingPromptScene;
@@ -267,7 +266,7 @@ public partial class BattleTest : Node2D
             Vector2 promptPos        = ComputeCameraMidpoint();
             _targetZone.Position     = promptPos;
             _targetZone.Visible      = true;
-            _battleSystem.StartSequence(this, defenderCenter, promptPos, EffectOffsetY);
+            _battleSystem.StartSequence(this, defenderCenter, promptPos);
         }
         else
         {
@@ -277,7 +276,7 @@ public partial class BattleTest : Node2D
                 Vector2 promptPos        = ComputeCameraMidpoint();
                 _targetZone.Position     = promptPos;
                 _targetZone.Visible      = true;
-                _battleSystem.StartSequence(this, defenderCenter, promptPos, EffectOffsetY);
+                _battleSystem.StartSequence(this, defenderCenter, promptPos);
             });
         }
     }

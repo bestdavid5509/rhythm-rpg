@@ -13,7 +13,8 @@ ImpactFrames = PackedInt32Array(6, 7, 8)
 CircleType = 0
 StartOffsetMs = 0
 FlipH = false
-Offset = Vector2(0, 0)
+Scale = Vector2(3, 3)
+Offset = Vector2(-15, -336)
 
 [resource]
 script = ExtResource("1_attackdata")

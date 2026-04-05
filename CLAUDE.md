@@ -38,7 +38,7 @@ The Absorber accumulates a library of absorbed moves over time.
 | `TimingPrompt.cs` | Single closing circle — Standard, Slow, and Bouncing variants; draws only the moving ring and hit/miss flash; does **not** draw the target ring (see `TargetZone`); emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
 | `TargetZone.cs` | Persistent shared target ring node in `BattleTest.tscn`; draws the stationary white ring and green hit-window band; shown/hidden by `BattleTest` at sequence start/end; has no knowledge of individual circles |
 | `AttackData.cs` | `[GlobalClass]` Resource — ordered list of `AttackStep` objects and a `BaseDamage` value; saved as `.tres` files |
-| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `StartOffsetMs`, `FlipH`, `Offset` |
+| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `StartOffsetMs`, `FlipH`, `Scale`, `Offset` |
 
 All three `BattleTest` files are `public partial class BattleTest : Node2D` and compile as one class.
 
@@ -356,7 +356,7 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 `const float FloorY = 750f` — world-space Y of the ground line. All character sprites are floor-anchored:
 - Player: `Position.Y = FloorY - frameHeight * scale * 0.5f` (center-anchored sprite)
 - Enemy: `Position.Y = FloorY - 160f * 3f * 0.6f + EnemySpriteOffsetY` (tuned nudge for visual ground contact)
-- Effects: `centerY = FloorY - step.FrameHeight * EffectScale * 0.5f` + `step.Offset`
+- Effects: `Position = (defenderCenter.X, FloorY) + step.Offset` — no hidden math; `step.Offset.Y < 0` moves up, `> 0` moves down
 
 `const float EnemySpriteOffsetY = 130f` — additional downward nudge on the enemy sprite, finalized visually.
 

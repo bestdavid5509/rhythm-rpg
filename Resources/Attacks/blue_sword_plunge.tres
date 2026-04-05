@@ -7,15 +7,16 @@
 
 [sub_resource type="Resource" id="AttackStep_1"]
 script = ExtResource("2_attackstep")
-SpritesheetPath = "res://Assets/Effects/Sword_Effects/Red_Sword_Plunge_Sheet.png"
+SpritesheetPath = "res://Assets/Effects/Sword_Effects/Blue_Sword_Plunge_Sheet.png"
 FrameWidth = 192
 FrameHeight = 256
 Fps = 12.0
-ImpactFrame = 6
+ImpactFrames = PackedInt32Array(6)
 CircleType = 0
 StartOffsetMs = 0
 FlipH = false
-Offset = Vector2(0, 0)
+Scale = Vector2(3, 3)
+Offset = Vector2(-15, -369) 
 
 [resource]
 script = ExtResource("1_attackdata")
