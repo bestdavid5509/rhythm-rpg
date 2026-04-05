@@ -53,8 +53,9 @@ All three `BattleTest` files are `public partial class BattleTest : Node2D` and 
 |---|---|
 | `red_sword_plunge.tres` | 1 step, 1 circle — `Red_Sword_Plunge_Sheet.png`, `ImpactFrames=[6]` |
 | `red_triple_sword_plunge.tres` | 1 step, 3 circles — `Red_Triple_Sword_Plunge_Sheet.png`, `ImpactFrames=[6,7,8]` |
-| `red_sword_combo_attack.tres` | 2 steps — triple plunge (3 circles) chained into single plunge (1 circle) ← active in `BattleSystem` |
-| `blue_sword_plunge.tres` | Misnamed legacy file — actually uses `Red_Sword_Plunge_Sheet.png`; superseded by `red_sword_plunge.tres`, safe to delete |
+| `red_sword_combo_attack.tres` | 2 steps — triple plunge (3 circles) chained into single plunge (1 circle) |
+| `red_hammer_swipe.tres` | 1 step, 1 circle — `Red_Fire_Hammer_Swipe_Sheet.png`, `ImpactFrames=[6]` ← active in `BattleSystem` |
+| `blue_sword_plunge.tres` | 1 step, 1 circle — `Blue_Sword_Plunge_Sheet.png`, `ImpactFrames=[6]` |
 | `blue_triple_sword_plunge.tres` | 1 step, 3 circles — `Blue_Triple_Sword_Plunge_Sheet.png`, `ImpactFrames=[6,7,8]` |
 | `effect_manifest.md` | Per-frame dimensions, frame counts, layout, and impact frame indices for every spritesheet in `Assets/Effects/` |
 
@@ -254,7 +255,7 @@ circleSpawnDelay[i]  = (ImpactFrames[i] - ImpactFrames[0]) / fps
 ```
 
 - `circleCloseDuration` comes from `TimingPrompt.DefaultDurationForType(step.CircleType)`.
-- `animationStartDelay` is clamped to `≥ 0` — a negative value means the first impact frame has already passed the circle close time; animation starts immediately.
+- `animationStartDelay` is clamped to `≥ 0`. When `rawDelay < 0` the first impact frame takes longer to reach than `circleCloseDuration` — starting at frame 0 would cause the animation to lag behind the circle. Fix: start immediately (`delay = 0`) but skip ahead to `animStartFrame = round(|rawDelay| × fps)` by setting `sprite.Frame` **after** `sprite.Play()` (Godot 4 resets `Frame` to 0 on `Play()`, so the assignment must come after).
 - Circle 0 always spawns at delay 0. Subsequent circles are staggered forward by one frame-time each (≈83 ms at 12 fps for consecutive frames).
 - **Step scheduling is timer-driven, not completion-driven.** Each `RunStep` immediately schedules the next step's start timer:
   ```
@@ -356,15 +357,18 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 `const float FloorY = 750f` — world-space Y of the ground line. All character sprites are floor-anchored:
 - Player: `Position.Y = FloorY - frameHeight * scale * 0.5f` (center-anchored sprite)
 - Enemy: `Position.Y = FloorY - 160f * 3f * 0.6f + EnemySpriteOffsetY` (tuned nudge for visual ground contact)
-- Effects: `Position = (defenderCenter.X, FloorY) + step.Offset` — no hidden math; `step.Offset.Y < 0` moves up, `> 0` moves down
+- Effects: `Position = (defenderCenter.X, FloorY) + step.Offset` — no hidden math; `step.Offset.Y < 0` moves up, `> 0` moves down. `sprite.Centered = true` is set explicitly in `SpawnEffectSprite` — the floor-baseline formula depends on this being true. `step.Scale` controls the sprite scale; default `Vector2(3, 3)` is the standard 3× world-space upscale used for all effect sheets.
 
 `const float EnemySpriteOffsetY = 130f` — additional downward nudge on the enemy sprite, finalized visually.
 
+## Future Architecture Goals
+
+- **Reusable `AttackStep` resources** — `AttackStep` sub-resources are currently embedded directly inside each `AttackData` `.tres` file. They should eventually be refactored into standalone `.tres` files that can be referenced by multiple `AttackData` resources, rather than duplicated. This avoids needing to update shared values (frame dimensions, Fps, spritesheet path, etc.) in multiple places when an animation changes.
+
 ## Known Next Steps
 
-- **Screen shake** — add a `Camera2D` shake tween on Miss (enemy hits player) and on player attack landing
 - **Audio** — hit/miss/parry/perfect SFX; music layers for phase transitions
-- **Real boss attack sequence** — replace `blue_sword_plunge.tres` with a multi-step `AttackData` resource representing the opening boss Phase 1 pattern
+- **Real boss attack sequence** — author a multi-step `AttackData` resource representing the opening boss Phase 1 attack pattern and wire it into the enemy turn loop
 - **Bouncing animation replay** — `AttackStep` has a documented hook: replay the effect animation once per pass by subscribing to `TimingPrompt.PassEvaluated` (currently the effect plays once regardless of bounce count)
 - **Learnable move signalling** — visual highlight on enemy and colored move-name label during learnable-move sequences
 - **Taunt ability** — player action that baits the enemy into using their signature/learnable move
