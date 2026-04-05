@@ -216,6 +216,21 @@ public partial class TimingPrompt : Node2D
     /// </summary>
     private static bool _anyAcceptedLastConfirm = false;
 
+    /// <summary>
+    /// The single prompt that will show the red miss flash when no circle accepted the
+    /// press (<see cref="_anyAcceptedLastConfirm"/> is false).
+    /// Set by <see cref="ConfirmAll"/> to the active, non-resolved prompt with the highest
+    /// <c>_t</c> — i.e. the one closest to completing its current pass. All other circles
+    /// resolve as misses internally (damage applied) but suppress the red flash so the
+    /// screen is not cluttered with simultaneous red rings.
+    ///
+    /// Null when <see cref="_anyAcceptedLastConfirm"/> is true (miss flash is irrelevant)
+    /// or when there are no eligible prompts.
+    /// Persists until the next <see cref="ConfirmAll"/> call, covering same-frame
+    /// <c>_Process</c> EvaluateInput calls exactly as <see cref="_anyAcceptedLastConfirm"/> does.
+    /// </summary>
+    private static TimingPrompt _flashLeader = null;
+
     // -------------------------------------------------------------------------
     // Runtime state
     // -------------------------------------------------------------------------
@@ -389,16 +404,20 @@ public partial class TimingPrompt : Node2D
 
         // During outward pass: failed input, red flash at press position, lockout.
         // Suppressed when another circle accepted this press (_anyAcceptedLastConfirm).
+        // When no circle accepted, only the flash leader (highest _t) shows the red flash.
         if (!_movingInward)
         {
             if (!_anyAcceptedLastConfirm)
             {
-                _flashRingRadius     = _currentRadius;
-                _flashRingColor      = ColorFlashMiss;
-                _flashRingTimer      = FlashDuration;
-                _flashRingIsAutoMiss = false;
-                _flashRingIsSuccess  = false;
-                QueueRedraw();
+                if (this == _flashLeader)
+                {
+                    _flashRingRadius     = _currentRadius;
+                    _flashRingColor      = ColorFlashMiss;
+                    _flashRingTimer      = FlashDuration;
+                    _flashRingIsAutoMiss = false;
+                    _flashRingIsSuccess  = false;
+                    QueueRedraw();
+                }
                 _lockoutTimer = InputLockoutDuration;
             }
             return InputResult.Miss;
@@ -408,16 +427,20 @@ public partial class TimingPrompt : Node2D
 
         // Outside valid zone: failed input, red flash at press position, lockout.
         // Suppressed when another circle accepted this press (_anyAcceptedLastConfirm).
+        // When no circle accepted, only the flash leader (highest _t) shows the red flash.
         if (distance > RingLineWidth)
         {
             if (!_anyAcceptedLastConfirm)
             {
-                _flashRingRadius     = _currentRadius;
-                _flashRingColor      = ColorFlashMiss;
-                _flashRingTimer      = FlashDuration;
-                _flashRingIsAutoMiss = false;
-                _flashRingIsSuccess  = false;
-                QueueRedraw();
+                if (this == _flashLeader)
+                {
+                    _flashRingRadius     = _currentRadius;
+                    _flashRingColor      = ColorFlashMiss;
+                    _flashRingTimer      = FlashDuration;
+                    _flashRingIsAutoMiss = false;
+                    _flashRingIsSuccess  = false;
+                    QueueRedraw();
+                }
                 _lockoutTimer = InputLockoutDuration;
             }
             return InputResult.Miss;
@@ -477,9 +500,10 @@ public partial class TimingPrompt : Node2D
 
         // Reset from previous press before doing anything else.
         _anyAcceptedLastConfirm = false;
+        _flashLeader            = null;
 
         // Pre-scan — must run before any EvaluateInput call mutates prompt state.
-        // Setting the flag here means _Process EvaluateInput calls on the same frame
+        // Setting the flags here means _Process EvaluateInput calls on the same frame
         // also see the correct suppression state, fixing the double-evaluation bug.
         foreach (var prompt in snapshot)
         {
@@ -487,6 +511,26 @@ public partial class TimingPrompt : Node2D
             {
                 _anyAcceptedLastConfirm = true;
                 break;
+            }
+        }
+
+        // When no circle would accept the input, elect the circle furthest along its
+        // current pass (_t closest to 1) as the sole flash leader. Only that circle
+        // shows the red miss flash; all others resolve as misses silently so the screen
+        // is not cluttered with simultaneous red rings.
+        // When a circle did accept (_anyAcceptedLastConfirm), _flashLeader stays null —
+        // miss flashes are already suppressed for out-of-window circles in that path.
+        if (!_anyAcceptedLastConfirm)
+        {
+            float bestT = -1f;
+            foreach (var prompt in snapshot)
+            {
+                if (prompt._resolved) continue;
+                if (prompt._t > bestT)
+                {
+                    bestT        = prompt._t;
+                    _flashLeader = prompt;
+                }
             }
         }
 
