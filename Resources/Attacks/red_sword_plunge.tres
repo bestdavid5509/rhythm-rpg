@@ -18,5 +18,6 @@ Offset = Vector2(-15, -369)
 
 [resource]
 script = ExtResource("1_attackdata")
+Category = 1
 Steps = Array[Object]([SubResource("AttackStep_1")])
 BaseDamage = 10

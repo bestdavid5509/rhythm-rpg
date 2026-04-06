@@ -95,10 +95,17 @@ public partial class AttackStep : Resource
     [Export] public Vector2 Scale = new Vector2(3, 3);
 
     /// <summary>
-    /// World-space offset applied to the effect position relative to the target.
-    /// Use this to fine-tune where the visual lands on the defender.
+    /// World-space offset applied to the effect position when the enemy uses this attack
+    /// against the player. Use this to fine-tune where the visual lands on the defender.
     /// </summary>
     [Export] public Vector2 Offset = Vector2.Zero;
+
+    /// <summary>
+    /// World-space offset applied to the effect position when the player uses this attack
+    /// against the enemy. Mirrors Offset but targets the enemy's position instead.
+    /// Defaults to Vector2.Zero; adjust per-step to position the visual on the enemy.
+    /// </summary>
+    [Export] public Vector2 PlayerOffset = Vector2.Zero;
 
     /// <summary>
     /// Extra hold time in milliseconds after this step's animation completes before the

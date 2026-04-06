@@ -20,6 +20,7 @@ PostAnimationDelayMs = 200
 
 [resource]
 script = ExtResource("1_attackdata")
+Category = 0
 IsHopIn = true
 Steps = Array[Object]([SubResource("AttackStep_1")])
 BaseDamage = 15

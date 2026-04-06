@@ -60,6 +60,7 @@ public partial class BattleSystem : Node
     private Vector2                  _defenderCenter;         // world-space center of the defender — effect origin
     private Vector2                  _promptPosition;         // world-space position for circle prompts
     private int                      _totalPromptsRemaining;  // total circles across all steps; 0 → SequenceCompleted
+    private bool                     _isPlayerAttack;         // true when player is the attacker — uses step.PlayerOffset
 
     // =========================================================================
     // Legacy battle state — used by stub methods below
@@ -126,6 +127,18 @@ public partial class BattleSystem : Node
         : null;
 
     /// <summary>
+    /// Returns the currently loaded attack. Called by BattleTest after AddChild so it can
+    /// cache the enemy attack reference and restore it before each enemy turn.
+    /// </summary>
+    public AttackData GetCurrentAttack() => _currentAttack;
+
+    /// <summary>
+    /// Overrides the current attack. Call before StartSequence to select a different
+    /// attack (e.g. a player-chosen absorbed move) without reloading from disk.
+    /// </summary>
+    public void SetAttack(AttackData attack) => _currentAttack = attack;
+
+    /// <summary>
     /// Returns the PostAnimationDelayMs for step 0 — used by BattleTest to hold the
     /// melee impact pose before calling PlayTeardown.
     /// Returns 0 if no attack is loaded or the attack has no steps.
@@ -146,7 +159,13 @@ public partial class BattleSystem : Node
     /// <param name="parent">Node to add prompts and AnimatedSprite2Ds to.</param>
     /// <param name="defenderCenter">World-space center of the defender — effect spawn origin.</param>
     /// <param name="promptPosition">World-space position for circle prompts (combat midpoint).</param>
-    public void StartSequence(Node2D parent, Vector2 defenderCenter, Vector2 promptPosition)
+    /// <param name="isPlayerAttack">
+    /// When true, effect sprites use <see cref="AttackStep.PlayerOffset"/> for positioning
+    /// (target is the enemy). When false, <see cref="AttackStep.Offset"/> is used (target
+    /// is the player). Default false.
+    /// </param>
+    public void StartSequence(Node2D parent, Vector2 defenderCenter, Vector2 promptPosition,
+                              bool isPlayerAttack = false)
     {
         if (_currentAttack == null || _currentAttack.Steps.Count == 0)
         {
@@ -155,9 +174,10 @@ public partial class BattleSystem : Node
             return;
         }
 
-        _spawnParent    = parent;
-        _defenderCenter = defenderCenter;
-        _promptPosition = promptPosition;
+        _spawnParent     = parent;
+        _defenderCenter  = defenderCenter;
+        _promptPosition  = promptPosition;
+        _isPlayerAttack  = isPlayerAttack;
 
         // Count every circle across all steps so SequenceCompleted fires only after
         // the last circle of the last concurrent step resolves.
@@ -401,16 +421,18 @@ public partial class BattleSystem : Node
             spriteFrames.AddFrame("default", atlas);
         }
 
-        // Baseline position is the floor line. step.Offset is the sole positioning control —
-        // Offset.Y < 0 moves the effect up, Offset.Y > 0 moves it down. No hidden math.
+        // Baseline position is the floor line. The active offset is step.Offset for enemy
+        // attacks (targeting the player) or step.PlayerOffset for player attacks (targeting
+        // the enemy). Offset.Y < 0 moves the effect up, Offset.Y > 0 moves it down.
         const float FloorY = 750f;
+        Vector2 activeOffset = _isPlayerAttack ? step.PlayerOffset : step.Offset;
 
         var sprite          = new AnimatedSprite2D();
         sprite.SpriteFrames = spriteFrames;
         sprite.Centered     = true;
         sprite.FlipH        = step.FlipH;
         sprite.Scale        = step.Scale;
-        sprite.Position     = new Vector2(_defenderCenter.X, FloorY) + step.Offset;
+        sprite.Position     = new Vector2(_defenderCenter.X, FloorY) + activeOffset;
         // Use an explicit named delegate so the handler can disconnect itself before
         // calling QueueFree. The direct `+= sprite.QueueFree` pattern causes Godot's
         // automatic signal cleanup (which runs when the node is freed) to attempt a

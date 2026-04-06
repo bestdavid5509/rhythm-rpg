@@ -2,6 +2,18 @@ using Godot;
 using Godot.Collections;
 
 /// <summary>
+/// Broad category of an attack — used for elemental matchups, visual theming,
+/// and determining which animation path BattleTest uses (hop-in vs cast).
+/// </summary>
+public enum AttackCategory
+{
+    /// <summary>Close-range strike — pairs with the hop-in animation path.</summary>
+    Physical,
+    /// <summary>Ranged or elemental cast — pairs with the cast_intro/loop/end path.</summary>
+    Magic,
+}
+
+/// <summary>
 /// A complete attack sequence — an ordered list of AttackStep objects that play out
 /// one after another, each paired with a timing circle prompt.
 ///
@@ -17,6 +29,13 @@ using Godot.Collections;
 [GlobalClass]
 public partial class AttackData : Resource
 {
+    /// <summary>
+    /// Broad category of the attack — Physical or Magic.
+    /// Used for elemental matchups, visual theming, and future damage calculation.
+    /// Default Magic covers all ranged/cast attacks; set to Physical for melee hop-ins.
+    /// </summary>
+    [Export] public AttackCategory Category = AttackCategory.Magic;
+
     /// <summary>
     /// When true, the attacker hops in close before the sequence starts and the camera
     /// zooms in. BattleTest plays PlayHopIn, triggers the attacker's melee animation,

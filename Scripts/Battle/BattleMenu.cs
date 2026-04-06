@@ -14,13 +14,17 @@ public partial class BattleTest : Node2D
     private static readonly string[] MenuOptionLabels  = { "Attack", "Absorbed Moves" };
     private static readonly bool[]   MenuOptionEnabled = { true,     true             };
 
-    // Absorbed Moves submenu — populated with the player's learned moves plus a Back option.
-    private static readonly string[] SubMenuOptionLabels  = { "Combo Strike", "Back" };
-    private static readonly bool[]   SubMenuOptionEnabled = { true,           true   };
+    // Absorbed Moves submenu — absorbed attack entries followed by "Back".
+    // SubMenuOptionCategories mirrors the labels array; null means no category (Back, etc.).
+    private static readonly string[]          SubMenuOptionLabels     = { "Combo Strike", "Comet", "Back" };
+    private static readonly bool[]            SubMenuOptionEnabled    = { true,           true,    true   };
+    private static readonly AttackCategory?[] SubMenuOptionCategories = { AttackCategory.Physical, AttackCategory.Magic, null };
 
-    private static readonly Color ColorMenuSelected = new Color(1.00f, 0.90f, 0.20f, 1.00f);  // yellow
-    private static readonly Color ColorMenuNormal   = new Color(1.00f, 1.00f, 1.00f, 1.00f);  // white
-    private static readonly Color ColorMenuDisabled = new Color(0.45f, 0.45f, 0.45f, 1.00f);  // grey
+    private static readonly Color ColorMenuSelected      = new Color(1.00f, 0.90f, 0.20f, 1.00f);  // yellow — selected item
+    private static readonly Color ColorMenuNormal        = new Color(1.00f, 1.00f, 1.00f, 1.00f);  // white  — unselected, no category
+    private static readonly Color ColorMenuDisabled      = new Color(0.45f, 0.45f, 0.45f, 1.00f);  // grey   — disabled item
+    private static readonly Color ColorCategoryPhysical  = new Color(1.00f, 0.50f, 0.00f, 1.00f);  // orange — Physical attacks in submenu
+    private static readonly Color ColorCategoryMagic     = new Color(0.60f, 0.30f, 1.00f, 1.00f);  // purple — Magic attacks in submenu
 
     private bool           _inSubMenu;      // true while the Absorbed Moves submenu is open
     private int            _menuIndex;
@@ -166,8 +170,9 @@ public partial class BattleTest : Node2D
         GD.Print($"[BattleTest] Player selects submenu: {SubMenuOptionLabels[_subMenuIndex]}.");
         switch (_subMenuIndex)
         {
-            case 0: HideMenu(); _isComboAttack = true; BeginPlayerAttack(); break;  // Combo Strike
-            case 1: ShowMenu(); break;  // Back — return to main menu
+            case 0: HideMenu(); _isComboAttack = true; BeginPlayerAttack(); break;   // Combo Strike
+            case 1: HideMenu(); BeginPlayerMagicAttack(); break;                     // Comet
+            case 2: ShowMenu(); break;                                               // Back
         }
     }
 
@@ -192,9 +197,19 @@ public partial class BattleTest : Node2D
             bool selected = (i == _subMenuIndex);
             bool enabled  = SubMenuOptionEnabled[i];
             string prefix = (selected && enabled) ? "▶ " : "  ";
-            _subMenuLabels[i].Text     = prefix + SubMenuOptionLabels[i];
+            _subMenuLabels[i].Text = prefix + SubMenuOptionLabels[i];
+
+            // Unselected enabled items use their category color when set; white otherwise.
+            // Selected items always use yellow regardless of category.
+            Color baseColor = SubMenuOptionCategories[i] switch
+            {
+                AttackCategory.Physical => ColorCategoryPhysical,
+                AttackCategory.Magic    => ColorCategoryMagic,
+                _                       => ColorMenuNormal,  // null (Back, future no-category items)
+            };
+
             _subMenuLabels[i].Modulate = enabled
-                ? (selected ? ColorMenuSelected : ColorMenuNormal)
+                ? (selected ? ColorMenuSelected : baseColor)
                 : ColorMenuDisabled;
         }
     }

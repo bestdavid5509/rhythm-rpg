@@ -42,6 +42,8 @@ public partial class BattleTest : Node2D
                      AddPlayerAnimation(frames, "combo_slash1", Combo,                           loop: false, fw: Fw, fh: Fh, startFrame: 1, endFrame: 3);
                      AddPlayerAnimation(frames, "combo_slash2", Combo,                           loop: false, fw: Fw, fh: Fh, startFrame: 6, endFrame: 9);
                      AddPlayerAnimation(frames, "parry",        Base + "_Attack2NoMovement.png", loop: false, fw: Fw, fh: Fh, startFrame: 2, endFrame: 5);
+                     AddPlayerAnimation(frames, "cast",            Base + "_CrouchAttack.png",    loop: false, fw: Fw, fh: Fh, startFrame: 0, endFrame: 3);
+                     AddPlayerAnimation(frames, "cast_transition", Base + "_CrouchTransition.png", loop: false, fw: Fw, fh: Fh, startFrame: 0, endFrame: 0);
                      AddPlayerAnimation(frames, "hit",          Base + "_Hit.png",               loop: false, fw: Fw, fh: Fh);
                      AddPlayerAnimation(frames, "death",        Base + "_DeathNoMovement.png",   loop: false, fw: Fw, fh: Fh);
 
@@ -233,6 +235,40 @@ public partial class BattleTest : Node2D
     // -------------------------------------------------------------------------
     // Player reaction handlers
     // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Fires when the player's cast animation completes during a magic attack turn.
+    /// Shows the target zone and starts the BattleSystem sequence now that the wind-up
+    /// has played. The sequence runs the timing circle and spawns the effect sprite.
+    /// </summary>
+    private void OnPlayerCastFinished()
+    {
+        SafeDisconnectPlayerAnim(OnPlayerCastFinished);
+        if (_playerDead) return;
+
+        // Godot 4 resets Frame to 0 when Stop() is called on a finished non-looping animation.
+        // Re-apply the last frame index explicitly so the knight holds the sword-extended pose.
+        StopPlayer();       // OWNER: OnPlayerCastFinished — hold last cast frame during spell sequence
+        SetPlayerFrame(3);  // frame 3 = last frame of cast; must come after Stop() due to Godot 4 reset
+        GetTree().CreateTimer(0.2f).Timeout += () =>
+        {
+            if (_playerDead) return;
+            _targetZone.Position = _playerMagicPromptPos;
+            _targetZone.Visible  = true;
+            _battleSystem.SetAttack(_playerMagicAttack);
+            _battleSystem.StartSequence(this, _playerMagicDefenderCenter, _playerMagicPromptPos, isPlayerAttack: true);
+        };
+    }
+
+    /// <summary>
+    /// Fires when cast_transition completes after a magic attack resolves.
+    /// Returns the player to idle — the transition frame bridges the held cast pose and rest.
+    /// </summary>
+    private void OnPlayerCastTransitionFinished()
+    {
+        SafeDisconnectPlayerAnim(OnPlayerCastTransitionFinished);
+        PlayPlayer("idle");  // OWNER: OnPlayerCastTransitionFinished — magic resolved, return to rest
+    }
 
     private void OnParryFinished()
     {

@@ -106,8 +106,18 @@ public partial class BattleTest : Node2D
     private bool      _pendingGameOver;   // cached result of CheckGameOver(); read by OnFinalSlashFinished
     private bool      _playerDead;        // true once player death animation begins; guards all subsequent sprite calls
     private bool      _enemyDead;         // true once enemy death animation begins; guards all subsequent sprite calls
-    private bool      _isComboAttack;     // true when the current player turn uses Combo Strike (Bouncing prompt)
-    private int       _comboPassIndex;    // which Bouncing pass just resolved; set in OnAttackPassEvaluated
+    private bool      _isComboAttack;       // true when the current player turn uses Combo Strike (Bouncing prompt)
+    private bool      _isPlayerMagicAttack; // true when the current player turn uses a magic attack via BattleSystem
+    private int       _comboPassIndex;      // which Bouncing pass just resolved; set in OnAttackPassEvaluated
+
+    // Loaded once in _Ready; used to restore the enemy attack after a player magic turn.
+    private AttackData _enemyAttackData;
+    private AttackData _playerMagicAttack;
+
+    // Cached in BeginPlayerMagicAttack; consumed by OnPlayerCastFinished once the
+    // cast animation completes and it is safe to start the sequence.
+    private Vector2    _playerMagicDefenderCenter;
+    private Vector2    _playerMagicPromptPos;
 
     // Hop-in coordination — two-flag rendezvous so ProceedAfterHopInAnim fires only after
     // BOTH the sequence completes AND the attack animation finishes (whichever is last).
@@ -192,9 +202,14 @@ public partial class BattleTest : Node2D
         _enemyAnimSprite.Play("idle");
 
         _battleSystem = new BattleSystem();
-        AddChild(_battleSystem);
+        AddChild(_battleSystem);  // triggers BattleSystem._Ready, which loads _currentAttack
+        _enemyAttackData  = _battleSystem.GetCurrentAttack();  // cache for restoration after player turns
+        _playerMagicAttack = GD.Load<AttackData>("res://Resources/Attacks/player_magic_attack.tres");
+        if (_playerMagicAttack == null)
+            GD.PrintErr("[BattleTest] Failed to load player_magic_attack.tres");
+
         _battleSystem.StepPassEvaluated += OnBattleSystemStepPassEvaluated;
-        _battleSystem.SequenceCompleted += OnEnemySequenceCompleted;
+        _battleSystem.SequenceCompleted += OnSequenceCompleted;
 
         _targetZone = GetNode<TargetZone>("TargetZone");
 
@@ -251,9 +266,14 @@ public partial class BattleTest : Node2D
 
     private void BeginEnemyAttack()
     {
-        _state      = BattleState.EnemyAttack;
-        _parryClean = true;
+        _state               = BattleState.EnemyAttack;
+        _parryClean          = true;
+        _isPlayerMagicAttack = false;
         GD.Print("[BattleTest] Enemy attacks.");
+
+        // Always restore the enemy attack before each enemy turn — a preceding player
+        // magic turn may have called SetAttack(_playerMagicAttack) on BattleSystem.
+        _battleSystem.SetAttack(_enemyAttackData);
 
         if (_battleSystem.CurrentAttackIsHopIn)
         {
@@ -356,6 +376,12 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnBattleSystemStepPassEvaluated(int result, int passIndex, int stepIndex)
     {
+        if (_isPlayerMagicAttack)
+        {
+            OnPlayerMagicPassEvaluated(result, passIndex);
+            return;
+        }
+
         if (_battleSystem.CurrentAttackIsHopIn || !SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
         OnEnemyPassEvaluated(result, passIndex);
@@ -396,6 +422,17 @@ public partial class BattleTest : Node2D
     /// Applies the perfect-parry counter if earned, then tears down the combat close-up.
     /// BattleSystem owns its prompts and frees them internally — no FreeActivePrompt call needed.
     /// </summary>
+    /// <summary>
+    /// Routes BattleSystem.SequenceCompleted to the correct handler based on who is attacking.
+    /// </summary>
+    private void OnSequenceCompleted()
+    {
+        if (_isPlayerMagicAttack)
+            OnPlayerMagicSequenceCompleted();
+        else
+            OnEnemySequenceCompleted();
+    }
+
     private void OnEnemySequenceCompleted()
     {
         GD.Print("[BattleTest] Enemy attack sequence complete.");
@@ -484,11 +521,45 @@ public partial class BattleTest : Node2D
 
     private void BeginPlayerAttack()
     {
-        _state = BattleState.PlayerAttack;
+        _state               = BattleState.PlayerAttack;
+        _isPlayerMagicAttack = false;
         GD.Print(_isComboAttack ? "[BattleTest] Player uses Combo Strike." : "[BattleTest] Player attacks.");
         _comboPassIndex = 0;
         var promptType = _isComboAttack ? TimingPrompt.PromptType.Bouncing : TimingPrompt.PromptType.Standard;
         BeginAttack(_playerSprite, _enemySprite, promptType, OnPlayerPromptCompleted);
+    }
+
+    /// <summary>
+    /// Begins a player magic attack turn using BattleSystem's sequence runner.
+    /// No hop-in — the player stays at origin and casts a ranged effect at the enemy.
+    /// BattleSystem handles spawning the timing circle and the effect sprite.
+    /// </summary>
+    private void BeginPlayerMagicAttack()
+    {
+        _state               = BattleState.PlayerAttack;
+        _isPlayerMagicAttack = true;
+        _isComboAttack       = false;
+        GD.Print("[BattleTest] Player uses magic attack.");
+
+        // Set combat context so ComputeCameraMidpoint() returns a sensible midpoint.
+        // No hop-in — attackerClosePos = player origin so the camera midpoint is the
+        // natural center between the two combatants.
+        _attacker         = _playerSprite;
+        _defender         = _enemySprite;
+        _attackerClosePos = GetOrigin(_playerSprite);
+
+        Vector2 defenderCenter = GetOrigin(_enemySprite) + _enemySprite.Size / 2f;
+        Vector2 promptPos      = ComputeCameraMidpoint();
+
+        // Play cast animation; defer StartSequence until it finishes so the wind-up
+        // completes before the timing circle appears and the effect fires.
+        SafeDisconnectPlayerAnim(OnPlayerCastFinished);
+        PlayPlayer("cast");  // OWNER: BeginPlayerMagicAttack — cast wind-up before sequence
+        _playerAnimSprite.AnimationFinished += OnPlayerCastFinished;
+
+        // Capture locals for the callback closure.
+        _playerMagicDefenderCenter = defenderCenter;
+        _playerMagicPromptPos      = promptPos;
     }
 
     private void OnPlayerPromptCompleted(int result)
@@ -547,6 +618,77 @@ public partial class BattleTest : Node2D
     // =========================================================================
     // Shared helpers
     // =========================================================================
+
+    /// <summary>
+    /// Called once per pass when the player's magic attack circle resolves.
+    /// Applies damage to the enemy identically to the physical attack damage table.
+    /// </summary>
+    private void OnPlayerMagicPassEvaluated(int result, int passIndex)
+    {
+        var r = (TimingPrompt.InputResult)result;
+        GD.Print($"[BattleTest] Player magic pass {passIndex + 1} resolved: {r}.");
+
+        int damage = r switch
+        {
+            TimingPrompt.InputResult.Perfect => 13,
+            TimingPrompt.InputResult.Hit     => 10,
+            _                                => 5,   // Miss — glancing hit still lands
+        };
+
+        Color dmgColor = r switch
+        {
+            TimingPrompt.InputResult.Perfect => DmgColorPerfect,
+            TimingPrompt.InputResult.Hit     => DmgColorHit,
+            _                                => DmgColorMiss,
+        };
+
+        if (r == TimingPrompt.InputResult.Perfect)
+            ShakeCamera(intensity: 6f, duration: 0.2f);
+
+        _enemyHP = Mathf.Max(0, _enemyHP - damage);
+        GD.Print($"[BattleTest] Magic hit deals {damage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+        SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
+        ShakeCamera(intensity: 8f, duration: 0.25f);
+        UpdateHPBars();
+    }
+
+    /// <summary>
+    /// Called when the player's magic attack sequence fully resolves.
+    /// Hides the target zone, checks for game over, then returns to the player menu.
+    /// </summary>
+    private void OnPlayerMagicSequenceCompleted()
+    {
+        GD.Print("[BattleTest] Player magic sequence complete.");
+        _targetZone.Visible = false;
+
+        // Play cast_transition once to smoothly exit the held cast pose, then return to idle.
+        SafeDisconnectPlayerAnim(OnPlayerCastTransitionFinished);
+        PlayPlayer("cast_transition");  // OWNER: OnPlayerMagicSequenceCompleted — exit cast pose
+        _playerAnimSprite.AnimationFinished += OnPlayerCastTransitionFinished;
+
+        bool over = CheckGameOver();
+        if (!over)
+        {
+            // Mirror the physical attack flow: short pause then enemy takes their turn.
+            // ShowMenu is intentionally skipped here — magic attacks transition directly
+            // to BeginEnemyAttack, matching the behaviour after OnFinalSlashFinished.
+            GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
+            return;
+        }
+
+        if (_enemyHP <= 0)
+        {
+            _enemyDead = true;
+            _enemyAnimSprite.Play("death");
+            _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+        }
+        else
+        {
+            _playerDead = true;
+            _playerAnimSprite.Play("death");
+            _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+        }
+    }
 
     private void FreeActivePrompt()
     {
