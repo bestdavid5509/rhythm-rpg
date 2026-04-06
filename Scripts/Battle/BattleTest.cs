@@ -19,9 +19,11 @@ using Godot;
 ///   Enemy attack — Miss per pass  → player takes 10 (unblocked strike)
 ///   Enemy attack — Hit or Perfect → 0 damage to player (strike blocked)
 ///   Perfect parry (all passes)    → enemy takes 20 (automatic counter)
-///   Player attack — Perfect       → enemy takes 13
-///   Player attack — Hit           → enemy takes 10
-///   Player attack — Miss          → enemy takes 5, attack ends
+///   Player attack damage is computed by ComputePlayerDamage(BaseDamage, result):
+///     Perfect → RoundToInt(BaseDamage × 1.5)    Hit → BaseDamage    Miss → RoundToInt(BaseDamage × 0.5)
+///   Basic attack (BaseDamage 10): Perfect=15  Hit=10  Miss=5 — single pass, always resolves
+///   Combo strike (BaseDamage  6): Perfect= 9  Hit= 6  Miss=3 — per pass; combo ends on first miss
+///   Magic attack (BaseDamage 10): Perfect=15  Hit=10  Miss=5 — per pass, always plays through
 /// </summary>
 public partial class BattleTest : Node2D
 {
@@ -37,7 +39,7 @@ public partial class BattleTest : Node2D
     // =========================================================================
 
     private const int PlayerMaxHP = 100;
-    private const int EnemyMaxHP  = 100;
+    private const int EnemyMaxHP  = 200;
 
     private int _playerHP = PlayerMaxHP;
     private int _enemyHP  = EnemyMaxHP;
@@ -113,6 +115,12 @@ public partial class BattleTest : Node2D
     // Loaded once in _Ready; used to restore the enemy attack after a player magic turn.
     private AttackData _enemyAttackData;
     private AttackData _playerMagicAttack;
+    private AttackData _playerBasicAttack;   // player_basic_attack.tres — Physical, BaseDamage 10
+    private AttackData _playerComboStrike;   // player_combo_strike.tres — Physical, BaseDamage 6
+
+    // Set at the start of each combo turn; cleared in BeginPlayerAttack and BeginComboMissRetreat.
+    // When true, OnComboPassNSlashFinished skips the wind-up hold and triggers the retreat instead.
+    private bool       _comboMissed;
 
     // Cached in BeginPlayerMagicAttack; consumed by OnPlayerCastFinished once the
     // cast animation completes and it is safe to start the sequence.
@@ -207,6 +215,14 @@ public partial class BattleTest : Node2D
         _playerMagicAttack = GD.Load<AttackData>("res://Resources/Attacks/player_magic_attack.tres");
         if (_playerMagicAttack == null)
             GD.PrintErr("[BattleTest] Failed to load player_magic_attack.tres");
+
+        _playerBasicAttack = GD.Load<AttackData>("res://Resources/Attacks/player_basic_attack.tres");
+        if (_playerBasicAttack == null)
+            GD.PrintErr("[BattleTest] Failed to load player_basic_attack.tres");
+
+        _playerComboStrike = GD.Load<AttackData>("res://Resources/Attacks/player_combo_strike.tres");
+        if (_playerComboStrike == null)
+            GD.PrintErr("[BattleTest] Failed to load player_combo_strike.tres");
 
         _battleSystem.StepPassEvaluated += OnBattleSystemStepPassEvaluated;
         _battleSystem.SequenceCompleted += OnSequenceCompleted;
@@ -523,6 +539,7 @@ public partial class BattleTest : Node2D
     {
         _state               = BattleState.PlayerAttack;
         _isPlayerMagicAttack = false;
+        _comboMissed         = false;
         GD.Print(_isComboAttack ? "[BattleTest] Player uses Combo Strike." : "[BattleTest] Player attacks.");
         _comboPassIndex = 0;
         var promptType = _isComboAttack ? TimingPrompt.PromptType.Bouncing : TimingPrompt.PromptType.Standard;
@@ -568,12 +585,22 @@ public partial class BattleTest : Node2D
         GD.Print($"[BattleTest] Player attack resolved: {r}.");
         _targetZone.Visible = false;
 
-        int damage = r switch
+        if (_isComboAttack)
         {
-            TimingPrompt.InputResult.Perfect => 13,
-            TimingPrompt.InputResult.Hit     => 10,
-            _                                => 5,   // Miss — glancing strike still lands
-        };
+            // Per-pass damage was already applied in OnAttackPassEvaluated for every pass.
+            // _pendingGameOver was set there on a miss exit; set it here for the all-hits case.
+            if (!_comboMissed)
+                _pendingGameOver = CheckGameOver();
+            // Free the prompt — for miss exits it is already scheduled; duplicating is safe
+            // because FreeActivePrompt guards with IsInstanceValid.
+            GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += FreeActivePrompt;
+            // Retreat flow is already in motion via OnFinalSlashFinished (subscribed at pass 2).
+            return;
+        }
+
+        // ── Basic attack (single Standard pass) ──────────────────────────────────
+        int baseDamage = _playerBasicAttack?.BaseDamage ?? 10;
+        int damage     = ComputePlayerDamage(baseDamage, r);
 
         Color dmgColor = r switch
         {
@@ -585,28 +612,14 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);  // shake — perfect timing feedback
 
-        if (damage > 0)
-        {
-            _enemyHP = Mathf.Max(0, _enemyHP - damage);
-            GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
-            SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
-            ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
-        }
-        else
-        {
-            GD.Print("[BattleTest] Player missed — no damage.");
-        }
+        _enemyHP = Mathf.Max(0, _enemyHP - damage);
+        GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+        SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
+        ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
 
         UpdateHPBars();
         _pendingGameOver = CheckGameOver();
         GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += FreeActivePrompt;
-
-        if (_isComboAttack)
-        {
-            // Combo: pass 2 in OnAttackPassEvaluated already plays combo_slash1 and subscribes
-            // OnFinalSlashFinished — the retreat flow is already in motion, nothing to do here.
-            return;
-        }
 
         // Single attack: play the slash now that the circle has resolved.
         // combo_slash1 covers sheet frames 1–3; frame 0 was already shown as the wind-up.
@@ -625,15 +638,10 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnPlayerMagicPassEvaluated(int result, int passIndex)
     {
-        var r = (TimingPrompt.InputResult)result;
-        GD.Print($"[BattleTest] Player magic pass {passIndex + 1} resolved: {r}.");
-
-        int damage = r switch
-        {
-            TimingPrompt.InputResult.Perfect => 13,
-            TimingPrompt.InputResult.Hit     => 10,
-            _                                => 5,   // Miss — glancing hit still lands
-        };
+        var r          = (TimingPrompt.InputResult)result;
+        int baseDamage = _playerMagicAttack?.BaseDamage ?? 10;
+        int damage     = ComputePlayerDamage(baseDamage, r);
+        GD.Print($"[BattleTest] Player magic pass {passIndex + 1} resolved: {r}  ({damage} damage).");
 
         Color dmgColor = r switch
         {
@@ -698,6 +706,25 @@ public partial class BattleTest : Node2D
             _activePrompt = null;
         }
     }
+
+    // =========================================================================
+    // Shared combat helpers
+    // =========================================================================
+
+    /// <summary>
+    /// Computes damage from a base value and input quality.
+    ///   Perfect → RoundToInt(baseDamage × 1.5)
+    ///   Hit     → baseDamage
+    ///   Miss    → RoundToInt(baseDamage × 0.5)
+    /// Used by all player attack paths so a single .tres BaseDamage field drives all outcomes.
+    /// </summary>
+    private static int ComputePlayerDamage(int baseDamage, TimingPrompt.InputResult result) =>
+        result switch
+        {
+            TimingPrompt.InputResult.Perfect => Mathf.RoundToInt(baseDamage * 1.5f),
+            TimingPrompt.InputResult.Hit     => baseDamage,
+            _                                => Mathf.RoundToInt(baseDamage * 0.5f),  // Miss
+        };
 
     /// <summary>
     /// Called once both conditions are met for a hop-in turn:
@@ -973,12 +1000,47 @@ public partial class BattleTest : Node2D
                 break;
             case 2:
                 // Final strike — OnFinalSlashFinished handles the 0.3s hold and retreat.
-                // _pendingGameOver is set moments later by OnPlayerPromptCompleted (PromptCompleted
-                // fires in the same frame as the last PassEvaluated), so it is always written
-                // before the animation timer in OnFinalSlashFinished reads it.
+                // _pendingGameOver is set in OnPlayerPromptCompleted (PromptCompleted fires in
+                // the same frame as the last PassEvaluated) for the all-hits case, or here when
+                // the miss branch runs.
                 PlayPlayer("combo_slash1");  // OWNER: combo pass 2, final strike (frames 1–3)
                 _playerAnimSprite.AnimationFinished += OnFinalSlashFinished;
                 break;
+        }
+
+        // ── Combo per-pass damage ─────────────────────────────────────────────────
+        // Apply damage on every pass. On a miss, cancel the remaining bounces:
+        //   • Free the active prompt after the flash (stops the circle visually).
+        //   • Hide the target zone — PromptCompleted will not fire for a mid-combo miss.
+        //   • OnComboPassNSlashFinished detects _comboMissed and calls BeginComboMissRetreat
+        //     instead of holding the wind-up pose (pass 0 and 1 only; pass 2 uses OnFinalSlashFinished).
+        if (_comboMissed) return;  // already cancelled; ignore subsequent pass evaluations
+
+        var comboDmgResult = (TimingPrompt.InputResult)result;
+        int comboBase      = _playerComboStrike?.BaseDamage ?? 6;
+        int comboDamage    = ComputePlayerDamage(comboBase, comboDmgResult);
+        Color comboDmgColor = comboDmgResult switch
+        {
+            TimingPrompt.InputResult.Perfect => DmgColorPerfect,
+            TimingPrompt.InputResult.Hit     => DmgColorHit,
+            _                                => DmgColorMiss,
+        };
+        if (comboDmgResult == TimingPrompt.InputResult.Perfect)
+            ShakeCamera(intensity: 6f, duration: 0.2f);
+        _enemyHP = Mathf.Max(0, _enemyHP - comboDamage);
+        GD.Print($"[BattleTest] Combo pass {passIndex + 1} {comboDmgResult}: {comboDamage} damage. " +
+                 $"Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+        SpawnDamageNumber(EnemyDamageOrigin, comboDamage, comboDmgColor);
+        ShakeCamera(intensity: 8f, duration: 0.25f);
+        UpdateHPBars();
+
+        if (comboDmgResult == TimingPrompt.InputResult.Miss)
+        {
+            _comboMissed        = true;
+            _pendingGameOver    = CheckGameOver();
+            _targetZone.Visible = false;  // PromptCompleted won't fire — hide zone here
+            // TODO: dismiss remaining active circles with grey flash (stop-on-miss visual)
+            GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += FreeActivePrompt;
         }
     }
 

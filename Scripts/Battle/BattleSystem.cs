@@ -61,6 +61,7 @@ public partial class BattleSystem : Node
     private Vector2                  _promptPosition;         // world-space position for circle prompts
     private int                      _totalPromptsRemaining;  // total circles across all steps; 0 → SequenceCompleted
     private bool                     _isPlayerAttack;         // true when player is the attacker — uses step.PlayerOffset
+    private bool                     _sequenceCancelled;      // set on Physical miss — prevents new steps from spawning
 
     // =========================================================================
     // Legacy battle state — used by stub methods below
@@ -174,10 +175,11 @@ public partial class BattleSystem : Node
             return;
         }
 
-        _spawnParent     = parent;
-        _defenderCenter  = defenderCenter;
-        _promptPosition  = promptPosition;
-        _isPlayerAttack  = isPlayerAttack;
+        _spawnParent       = parent;
+        _defenderCenter    = defenderCenter;
+        _promptPosition    = promptPosition;
+        _isPlayerAttack    = isPlayerAttack;
+        _sequenceCancelled = false;
 
         // Count every circle across all steps so SequenceCompleted fires only after
         // the last circle of the last concurrent step resolves.
@@ -206,6 +208,12 @@ public partial class BattleSystem : Node
     /// </summary>
     private void RunStep(int stepIndex)
     {
+        if (_sequenceCancelled)
+        {
+            GD.Print($"[BattleSystem] RunStep({stepIndex}) skipped — sequence cancelled by Physical miss.");
+            return;
+        }
+
         var step        = _currentAttack.Steps[stepIndex];
         int circleCount = step.ImpactFrames.Length;
         int firstImpact = step.ImpactFrames[0];
@@ -364,6 +372,18 @@ public partial class BattleSystem : Node
 
         if (IsInstanceValid(prompt))
             GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += prompt.QueueFree;
+
+        // Physical attacks stop on first miss — cancel pending steps so no new circles spawn.
+        // Circles already spawned (staggered within the current step) still resolve normally;
+        // _totalPromptsRemaining continues to drain until every in-flight circle finishes.
+        // TODO: dismiss already-spawned circles with a grey flash when cancelling (stop-on-miss visual).
+        if (!_sequenceCancelled &&
+            _currentAttack?.Category == AttackCategory.Physical &&
+            (TimingPrompt.InputResult)result == TimingPrompt.InputResult.Miss)
+        {
+            GD.Print("[BattleSystem] Physical miss — cancelling remaining steps.");
+            _sequenceCancelled = true;
+        }
 
         _totalPromptsRemaining--;
         if (_totalPromptsRemaining > 0) return;

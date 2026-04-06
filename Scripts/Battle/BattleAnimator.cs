@@ -322,6 +322,13 @@ public partial class BattleTest : Node2D
     {
         SafeDisconnectPlayerAnim(OnComboPass0SlashFinished);
         if (_playerDead) return;
+        if (_comboMissed)
+        {
+            // Pass 0 was a miss — skip the wind-up hold and retreat immediately.
+            _comboMissed = false;
+            BeginComboMissRetreat();
+            return;
+        }
         _playerAnimSprite.Animation = "combo";
         StopPlayer();
         SetPlayerFrame(5);  // OWNER: combo pass 0 resolved — wind-up before slash2 (sheet frame 5)
@@ -336,9 +343,42 @@ public partial class BattleTest : Node2D
     {
         SafeDisconnectPlayerAnim(OnComboPass1SlashFinished);
         if (_playerDead) return;
+        if (_comboMissed)
+        {
+            // Pass 1 was a miss — skip the wind-up hold and retreat immediately.
+            _comboMissed = false;
+            BeginComboMissRetreat();
+            return;
+        }
         _playerAnimSprite.Animation = "combo";
         StopPlayer();
         SetPlayerFrame(0);  // OWNER: combo pass 1 resolved — wind-up before slash1 again (sheet frame 0)
+    }
+
+    /// <summary>
+    /// Triggered when the combo is cancelled by a miss on pass 0 or pass 1.
+    /// Mirrors the retreat logic in OnFinalSlashFinished: short hold then hop-back + enemy turn.
+    /// </summary>
+    private void BeginComboMissRetreat()
+    {
+        StopPlayer();  // OWNER: BeginComboMissRetreat — hold current slash frame during the delay
+        if (_pendingGameOver)
+        {
+            // Damage from the miss somehow killed the enemy (edge case).
+            _enemyDead = true;
+            _enemyAnimSprite.Play("death");  // OWNER: enemy death from combo miss damage
+            _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+            PlayTeardown(null);
+            return;
+        }
+        GetTree().CreateTimer(0.3f).Timeout += () =>
+        {
+            _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
+            _playerAnimSprite.SpeedScale = 2f;
+            PlayPlayerBackwards("run");  // OWNER: BeginComboMissRetreat — retreat hop-back
+            _playerAnimSprite.AnimationFinished += OnRetreatFinished;
+            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack);
+        };
     }
 
     /// <summary>
