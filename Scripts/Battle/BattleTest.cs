@@ -625,6 +625,7 @@ public partial class BattleTest : Node2D
         // Build the prompt node but defer AddChild until the hop-in tween finishes.
         var prompt = _timingPromptScene.Instantiate<TimingPrompt>();
         prompt.Type            = promptType;
+        prompt.BounceCount     = 2;  // Combo Strike uses 3 passes (2 bounces); ignored for Standard
         prompt.AutoLoop        = false;
         prompt.PassEvaluated   += OnAttackPassEvaluated;
         prompt.PromptCompleted += onComplete;

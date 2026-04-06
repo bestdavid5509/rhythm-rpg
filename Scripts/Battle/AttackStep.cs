@@ -16,11 +16,11 @@ using Godot;
 /// For a single-hit step, ImpactFrames has one entry and behaves identically to the
 /// old single ImpactFrame design.
 ///
-/// NOTE — Bouncing animation replay:
-///   A Bouncing step's animation will need to replay once per pass in future so the
-///   visual stays in sync with each inward approach. This is not yet implemented.
-///   When wiring up animation playback, hook into TimingPrompt.PassEvaluated to
-///   restart the animation at the start of each new inward pass.
+/// Bouncing animation replay:
+///   For Bouncing steps, BattleSystem subscribes to TimingPrompt.PassEvaluated on
+///   circle 0 and replays SpawnEffectSprite after each outward pass so the animation
+///   stays in sync with each inward approach. The animStartFrame compensation applies
+///   on every replay so impact-frame sync is maintained across all passes.
 /// </summary>
 [GlobalClass]
 public partial class AttackStep : Resource
@@ -51,9 +51,17 @@ public partial class AttackStep : Resource
     /// <summary>
     /// The type of timing circle shown for every circle in this step.
     /// Standard and Slow each give exactly one input opportunity per circle.
-    /// Bouncing gives a variable number of passes controlled by the circle's BounceCount.
+    /// Bouncing gives a variable number of passes controlled by BounceCount below.
     /// </summary>
     [Export] public TimingPrompt.PromptType CircleType = TimingPrompt.PromptType.Standard;
+
+    /// <summary>
+    /// Number of additional bounces after the first inward pass for Bouncing circles.
+    /// Total input opportunities = BounceCount + 1.
+    /// Ignored for Standard and Slow circle types.
+    /// Default of 2 gives three passes total (first approach + two bounces).
+    /// </summary>
+    [Export] public int BounceCount = 2;
 
     /// <summary>
     /// Controls when this step starts relative to the previous step's last circle resolving.

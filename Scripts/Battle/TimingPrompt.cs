@@ -9,7 +9,7 @@ using System.Collections.Generic;
 /// Prompt types:
 ///   Standard — white ring, ease-in inward, standard speed.
 ///   Slow     — blue ring, half speed.
-///   Bouncing — pink → orange → white across three inward passes; BounceCount forced to 2.
+///   Bouncing — deep purple → white gradient across all inward passes; BounceCount forced to 2.
 ///              Color shift signals the final pass.
 ///
 /// Movement — fully scripted; player input never alters the path:
@@ -48,7 +48,7 @@ public partial class TimingPrompt : Node2D
     {
         Standard,  // white ring, default speed
         Slow,      // blue ring, half speed
-        Bouncing,  // pink→orange→white; scripted three-pass sequence, BounceCount = 2
+        Bouncing,  // deep purple→white gradient; scripted multi-pass sequence, BounceCount = 2
     }
 
     // -------------------------------------------------------------------------
@@ -179,9 +179,9 @@ public partial class TimingPrompt : Node2D
     // Per-type ring colors
     private static readonly Color ColorStandard    = new Color(1.00f, 1.00f, 1.00f, 1.00f);  // white
     private static readonly Color ColorSlow        = new Color(0.35f, 0.65f, 1.00f, 1.00f);  // blue
-    private static readonly Color ColorBouncePass1 = new Color(0.18f, 0.80f, 0.80f, 1.00f);  // teal
-    private static readonly Color ColorBouncePass2 = new Color(1.00f, 0.60f, 0.20f, 1.00f);  // orange
-    // Pass 3 of Bouncing uses ColorStandard (white) — signals final approach to the player
+    // Bouncing gradient: lerps from deep purple (first pass) to white (final pass).
+    // Intermediate passes are evenly distributed along the lerp based on pass index.
+    private static readonly Color ColorBounceStart = new Color(0.50f, 0.00f, 1.00f, 1.00f);  // deep purple
 
     // Result flash colors (always override type color)
     private static readonly Color ColorFlashPerfect = new Color(0.30f, 1.00f, 0.40f, 1.00f);  // green
@@ -738,7 +738,9 @@ public partial class TimingPrompt : Node2D
                 break;
             case PromptType.Bouncing:
                 Duration    = 1.0f;
-                BounceCount = 2;
+                // BounceCount is not reset here — it is set by the caller (BattleSystem via
+                // step.BounceCount) before AddChild so ResetState picks up the correct value.
+                // Defaults to 2 via the [Export] field if never explicitly assigned.
                 break;
         }
     }
@@ -749,17 +751,16 @@ public partial class TimingPrompt : Node2D
     /// </summary>
     private Color GetBaseColor()
     {
-        return Type switch
+        if (Type == PromptType.Bouncing)
         {
-            PromptType.Slow     => ColorSlow,
-            PromptType.Bouncing => _passIndex switch
-            {
-                0 => ColorBouncePass1,  // teal   — first approach
-                1 => ColorBouncePass2,  // orange — second approach (color shifts at start of outward pass)
-                _ => ColorStandard,     // white  — final approach (color shifts at start of outward pass)
-            },
-            _                   => ColorStandard,
-        };
+            // Lerp from deep purple (pass 0) to white (final pass).
+            // t = 0 → ColorBounceStart (full purple); t = 1 → ColorStandard (white).
+            // Color shifts at the start of each outward pass so the player sees the new
+            // color for the full outward travel before the next inward approach begins.
+            float t = BounceCount > 0 ? _passIndex / (float)BounceCount : 1f;
+            return ColorBounceStart.Lerp(ColorStandard, t);
+        }
+        return Type == PromptType.Slow ? ColorSlow : ColorStandard;
     }
 
     /// <summary>Returns the flash color corresponding to a given result.</summary>

@@ -52,7 +52,7 @@ public partial class BattleSystem : Node
 
     // Test attack: hardcoded for visual verification in BattleTest.
     // Replace with dynamic assignment when the full battle system drives attack selection.
-    private const string TestAttackPath = "res://Resources/Attacks/red_sword_combo_attack.tres";
+    private const string TestAttackPath = "res://Resources/Attacks/repeating_red_magic_comet.tres";
 
     private PackedScene              _promptScene;
     private AttackData               _currentAttack;          // the attack currently being executed
@@ -226,10 +226,11 @@ public partial class BattleSystem : Node
 
             void SpawnCircle()
             {
-                var prompt      = _promptScene.Instantiate<TimingPrompt>();
-                prompt.Type     = step.CircleType;
-                prompt.AutoLoop = false;
-                prompt.Position = _promptPosition;
+                var prompt        = _promptScene.Instantiate<TimingPrompt>();
+                prompt.Type       = step.CircleType;
+                prompt.BounceCount = step.BounceCount;  // set before AddChild so _Ready/ResetState picks it up
+                prompt.AutoLoop   = false;
+                prompt.Position   = _promptPosition;
 
                 prompt.PassEvaluated += (result, passIndex) =>
                     EmitSignal(SignalName.StepPassEvaluated, result, passIndex, stepIndex);
@@ -239,6 +240,35 @@ public partial class BattleSystem : Node
                     OnAnyCircleCompleted(capturedPrompt, result, stepIndex);
 
                 _spawnParent.AddChild(prompt);
+
+                // For Bouncing steps, replay the effect animation from the start on each
+                // subsequent inward pass. Subscribe only on circle 0 — the animation is
+                // shared across all circles in the step; one replay per bounce is correct.
+                //
+                // Replay timing: PassEvaluated fires at the end of each inward pass, then
+                // the outward pass runs for exactly BounceDuration seconds, then the new
+                // inward pass begins. The animation start delay is applied on top so the
+                // impact frame lands on the circle close time exactly as on the first play.
+                //
+                //   replayDelay = BounceDuration + animStartDelay
+                if (step.CircleType == TimingPrompt.PromptType.Bouncing && capturedI == 0)
+                {
+                    int   totalBounces = prompt.BounceCount;   // set by ApplyTypeSettings in _Ready
+                    float bounceDur    = prompt.BounceDuration;
+                    float replayDelay  = bounceDur + animStartDelay;
+
+                    prompt.PassEvaluated += (result, passIndex) =>
+                    {
+                        // passIndex is the pass that just completed (0-based).
+                        // If passIndex < totalBounces, at least one more inward pass follows.
+                        if (passIndex < totalBounces)
+                        {
+                            GetTree().CreateTimer(replayDelay).Timeout +=
+                                () => SpawnEffectSprite(step, animStartFrame);
+                        }
+                    };
+                }
+
                 GD.Print($"[BattleSystem]   Circle {capturedI + 1}/{circleCount} spawned " +
                          $"(impact frame {step.ImpactFrames[capturedI]}, " +
                          $"spawnDelay={spawnDelay:F3}s).");

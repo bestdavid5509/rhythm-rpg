@@ -38,7 +38,7 @@ The Absorber accumulates a library of absorbed moves over time.
 | `TimingPrompt.cs` | Single closing circle — Standard, Slow, and Bouncing variants; draws only the moving ring and hit/miss flash; does **not** draw the target ring (see `TargetZone`); emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
 | `TargetZone.cs` | Persistent shared target ring node in `BattleTest.tscn`; draws the stationary white ring and green hit-window band; shown/hidden by `BattleTest` at sequence start/end; has no knowledge of individual circles |
 | `AttackData.cs` | `[GlobalClass]` Resource — ordered list of `AttackStep` objects and a `BaseDamage` value; saved as `.tres` files |
-| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `StartOffsetMs`, `FlipH`, `Scale`, `Offset` |
+| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `BounceCount`, `StartOffsetMs`, `FlipH`, `Scale`, `Offset` |
 
 All three `BattleTest` files are `public partial class BattleTest : Node2D` and compile as one class.
 
@@ -369,6 +369,6 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
 - **Audio** — hit/miss/parry/perfect SFX; music layers for phase transitions
 - **Real boss attack sequence** — author a multi-step `AttackData` resource representing the opening boss Phase 1 attack pattern and wire it into the enemy turn loop
-- **Bouncing animation replay** — `AttackStep` has a documented hook: replay the effect animation once per pass by subscribing to `TimingPrompt.PassEvaluated` (currently the effect plays once regardless of bounce count)
+- **Bouncing circle color customisation** — color gradient (purple→white) and pass count are currently fixed per-type in `ApplyTypeSettings`; could be exposed as per-step inspector fields for more expressive attack authoring
 - **Learnable move signalling** — visual highlight on enemy and colored move-name label during learnable-move sequences
 - **Taunt ability** — player action that baits the enemy into using their signature/learnable move
