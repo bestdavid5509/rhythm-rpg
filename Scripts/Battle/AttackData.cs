@@ -18,12 +18,18 @@ using Godot.Collections;
 public partial class AttackData : Resource
 {
     /// <summary>
-    /// Ordered sequence of steps that make up this attack.
+    /// When true, the attacker hops in close before the sequence starts and the camera
+    /// zooms in. BattleTest plays PlayHopIn, triggers the attacker's melee animation,
+    /// then calls StartSequence. On completion, PlayTeardown retreats the attacker.
     ///
-    /// NOTE — Bouncing steps: A Bouncing circle runs multiple inward passes.
-    /// Future work — the animation for a Bouncing step will need to replay once per
-    /// pass so the visual stays in sync with each approach. Not yet implemented;
-    /// see the matching note in AttackStep.cs for the hook point.
+    /// When false, the enemy stays at origin and uses the cast_intro/loop/end path.
+    /// </summary>
+    [Export] public bool IsHopIn = false;
+
+    /// <summary>
+    /// Ordered sequence of steps that make up this attack.
+    /// Bouncing steps replay their animation once per pass — BattleSystem subscribes
+    /// to PassEvaluated on circle 0 and schedules a replay after each outward pass.
     /// </summary>
     [Export] public Array<AttackStep> Steps = new();
 

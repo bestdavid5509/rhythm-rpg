@@ -52,7 +52,7 @@ public partial class BattleSystem : Node
 
     // Test attack: hardcoded for visual verification in BattleTest.
     // Replace with dynamic assignment when the full battle system drives attack selection.
-    private const string TestAttackPath = "res://Resources/Attacks/repeating_red_magic_comet.tres";
+    private const string TestAttackPath = "res://Resources/Attacks/red_sword_combo_attack.tres";
 
     private PackedScene              _promptScene;
     private AttackData               _currentAttack;          // the attack currently being executed
@@ -86,6 +86,52 @@ public partial class BattleSystem : Node
             GD.Print($"[BattleSystem] Loaded \"{TestAttackPath}\" — " +
                      $"{_currentAttack.Steps.Count} step(s), {_currentAttack.BaseDamage} base damage.");
     }
+
+    // =========================================================================
+    // Sequence runner — public helpers for BattleTest
+    // =========================================================================
+
+    /// <summary>
+    /// True when the currently loaded attack uses the hop-in melee path.
+    /// BattleTest reads this to branch BeginEnemyAttack and OnEnemySequenceCompleted.
+    /// </summary>
+    public bool CurrentAttackIsHopIn => _currentAttack?.IsHopIn ?? false;
+
+    /// <summary>
+    /// Returns the animation start delay for step 0 — the time between StartSequence and
+    /// when BattleTest should play the attacker's melee animation so its impact frame lands
+    /// exactly when circle 0 closes.
+    ///
+    ///   animStartDelay = max(0, circleCloseDuration - ImpactFrames[0] / Fps)
+    ///
+    /// Returns 0 if no attack is loaded or the attack has no steps.
+    /// </summary>
+    public float ComputeFirstStepAnimDelay()
+    {
+        if (_currentAttack == null || _currentAttack.Steps.Count == 0) return 0f;
+        var   step                = _currentAttack.Steps[0];
+        float circleCloseDuration = TimingPrompt.DefaultDurationForType(step.CircleType);
+        float rawDelay            = circleCloseDuration - step.ImpactFrames[0] / step.Fps;
+        return Mathf.Max(0f, rawDelay);
+    }
+
+    /// <summary>
+    /// Returns step 0 of the currently loaded attack, or null if no attack is loaded
+    /// or the attack has no steps. Used by BattleTest to read per-step fields (Offset,
+    /// PostAnimationDelayMs, etc.) without BattleTest coupling to AttackData internals.
+    /// </summary>
+    public AttackStep GetFirstStep() =>
+        (_currentAttack != null && _currentAttack.Steps.Count > 0)
+        ? _currentAttack.Steps[0]
+        : null;
+
+    /// <summary>
+    /// Returns the PostAnimationDelayMs for step 0 — used by BattleTest to hold the
+    /// melee impact pose before calling PlayTeardown.
+    /// Returns 0 if no attack is loaded or the attack has no steps.
+    /// </summary>
+    public int GetFirstStepPostAnimDelayMs() =>
+        GetFirstStep()?.PostAnimationDelayMs ?? 0;
 
     // =========================================================================
     // Sequence runner — public entry point
@@ -213,7 +259,8 @@ public partial class BattleSystem : Node
             GetTree().CreateTimer(nextStepDelay).Timeout += () => RunStep(nextStepIndex);
         }
 
-        GetTree().CreateTimer(animStartDelay).Timeout += () => SpawnEffectSprite(step, animStartFrame);
+        if (!string.IsNullOrEmpty(step.SpritesheetPath))
+            GetTree().CreateTimer(animStartDelay).Timeout += () => SpawnEffectSprite(step, animStartFrame);
 
         // Spawn one circle per impact frame, staggered so each closes exactly when its
         // frame plays in the animation:
@@ -321,6 +368,8 @@ public partial class BattleSystem : Node
     /// </summary>
     private void SpawnEffectSprite(AttackStep step, int startFrame = 0)
     {
+        if (string.IsNullOrEmpty(step.SpritesheetPath)) return;
+
         var texture = GD.Load<Texture2D>(step.SpritesheetPath);
         if (texture == null)
         {
@@ -374,7 +423,12 @@ public partial class BattleSystem : Node
             var callable = Callable.From(onFinished);
             if (sprite.IsConnected(AnimatedSprite2D.SignalName.AnimationFinished, callable))
                 sprite.Disconnect(AnimatedSprite2D.SignalName.AnimationFinished, callable);
-            sprite.QueueFree();
+            // Hold the sprite for PostAnimationDelayMs before freeing it, so the last
+            // frame of the animation stays visible for the configured duration.
+            if (step.PostAnimationDelayMs > 0)
+                GetTree().CreateTimer(step.PostAnimationDelayMs / 1000f).Timeout += sprite.QueueFree;
+            else
+                sprite.QueueFree();
         };
         sprite.AnimationFinished += onFinished;
 

@@ -97,6 +97,7 @@ public partial class BattleTest : Node2D
     private Vector2   _playerOrigin;          // ColorRect position at scene load — positioning math anchor
     private Vector2   _enemyOrigin;
     private Vector2   _playerAnimSpriteOrigin; // AnimatedSprite2D position after floor-anchoring in _Ready
+    private Vector2   _enemyAnimSpriteOrigin;  // AnimatedSprite2D position after floor-anchoring in _Ready
 
     // Set at the start of each attack turn; used by the shared animation helpers.
     private ColorRect _attacker;
@@ -107,6 +108,13 @@ public partial class BattleTest : Node2D
     private bool      _enemyDead;         // true once enemy death animation begins; guards all subsequent sprite calls
     private bool      _isComboAttack;     // true when the current player turn uses Combo Strike (Bouncing prompt)
     private int       _comboPassIndex;    // which Bouncing pass just resolved; set in OnAttackPassEvaluated
+
+    // Hop-in coordination — two-flag rendezvous so ProceedAfterHopInAnim fires only after
+    // BOTH the sequence completes AND the attack animation finishes (whichever is last).
+    // Reset at the start of each hop-in turn in BeginEnemyAttack.
+    private bool      _hopInSequenceCompleted; // set by OnEnemySequenceCompleted
+    private bool      _hopInAnimFinished;      // set by OnEnemyAttackAnimFinished
+    private bool      _hopInOver;              // cached CheckGameOver() result from OnEnemySequenceCompleted
 
     // Camera — created in _Ready; controls zoom and pan during combat close-ups.
     private Camera2D  _camera;
@@ -180,6 +188,7 @@ public partial class BattleTest : Node2D
         _enemyAnimSprite.Scale    = new Vector2(3f, 3f);
         _enemyAnimSprite.Position = new Vector2(_enemyAnimSprite.Position.X,
                                                 FloorY - 160f * 3f * 0.6f + EnemySpriteOffsetY);
+        _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;  // snapshot for teardown restoration
         _enemyAnimSprite.Play("idle");
 
         _battleSystem = new BattleSystem();
@@ -246,6 +255,47 @@ public partial class BattleTest : Node2D
         _parryClean = true;
         GD.Print("[BattleTest] Enemy attacks.");
 
+        if (_battleSystem.CurrentAttackIsHopIn)
+        {
+            // Reset rendezvous flags for this turn — both must be true before teardown runs.
+            _hopInSequenceCompleted = false;
+            _hopInAnimFinished      = false;
+            _hopInOver              = false;
+
+            // Melee hop-in attack — enemy lunges close, plays the melee animation timed to
+            // the circle, then retreats once both the circle AND the animation have resolved.
+            // Apply the first step's Offset to the close position so the .tres file can tune
+            // where the enemy stands during the zoom-in (e.g. push further left to overlap the player).
+            Vector2 hopInOffset = _battleSystem.GetFirstStep()?.Offset ?? Vector2.Zero;
+            PlayHopIn(_enemySprite, _playerSprite, () =>
+            {
+                Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
+                Vector2 promptPos      = ComputeCameraMidpoint();
+                _targetZone.Position   = promptPos;
+                _targetZone.Visible    = true;
+                _battleSystem.StartSequence(this, defenderCenter, promptPos);
+
+                // Delay the attack animation so its impact frame lands when the first circle closes.
+                // ComputeFirstStepAnimDelay() returns 0 when impact frame / fps <= circleCloseDuration,
+                // in which case we start the animation immediately.
+                // Subscribe OnEnemyAttackAnimFinished to detect when the animation completes
+                // so ProceedAfterHopInAnim can run (after any PostAnimationDelayMs hold).
+                void PlayAttack()
+                {
+                    SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
+                    PlayEnemy("attack");
+                    _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
+                }
+
+                float animDelay = _battleSystem.ComputeFirstStepAnimDelay();
+                if (animDelay > 0f)
+                    GetTree().CreateTimer(animDelay).Timeout += PlayAttack;
+                else
+                    PlayAttack();
+            }, hopInOffset);
+            return;
+        }
+
         if (SkipHopIn)
         {
             // Enemy stays at origin — set combat context without any setup animation.
@@ -306,7 +356,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnBattleSystemStepPassEvaluated(int result, int passIndex, int stepIndex)
     {
-        if (!SkipHopIn)
+        if (_battleSystem.CurrentAttackIsHopIn || !SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
         OnEnemyPassEvaluated(result, passIndex);
 
@@ -350,6 +400,30 @@ public partial class BattleTest : Node2D
     {
         GD.Print("[BattleTest] Enemy attack sequence complete.");
         _targetZone.Visible = false;
+
+        if (_battleSystem.CurrentAttackIsHopIn)
+        {
+            // Apply the parry counter before checking game over.
+            if (_parryClean)
+            {
+                const int CounterDamage = 20;
+                _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
+                GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+                SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
+                ShakeCamera(intensity: 10f, duration: 0.3f);
+            }
+
+            UpdateHPBars();
+            _hopInOver              = CheckGameOver();
+            _hopInSequenceCompleted = true;
+
+            // Don't call PlayTeardown here — OnEnemyAttackAnimFinished handles it once the
+            // animation finishes (and PostAnimationDelayMs has elapsed). If the animation
+            // already finished before us, fire the proceed path now.
+            if (_hopInAnimFinished)
+                ProceedAfterHopInAnim();
+            return;
+        }
 
         // Per-pass damage and _parryClean are tracked in OnEnemyPassEvaluated.
         // Only the parry counter fires here, after all passes have been evaluated.
@@ -484,6 +558,55 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
+    /// Called once both conditions are met for a hop-in turn:
+    ///   1. The timing sequence has completed (OnEnemySequenceCompleted set _hopInSequenceCompleted).
+    ///   2. The enemy attack animation has finished (OnEnemyAttackAnimFinished set _hopInAnimFinished).
+    ///
+    /// Applies PostAnimationDelayMs (via a timer if > 0) then runs PlayTeardown for normal
+    /// completion or handles death/game-over if _hopInOver is true.
+    /// </summary>
+    private void ProceedAfterHopInAnim()
+    {
+        void DoTeardown()
+        {
+            if (!_hopInOver)
+            {
+                // Normal completion — enemy retreats then returns to idle; menu reappears.
+                PlayTeardown(() =>
+                {
+                    PlayEnemy("idle");
+                    GetTree().CreateTimer(0.5f).Timeout += ShowMenu;
+                });
+            }
+            else
+            {
+                // Game over — retreat enemy without scheduling next turn, then handle death.
+                PlayTeardown(null);
+
+                if (_playerHP <= 0)
+                {
+                    _playerDead = true;
+                    _playerAnimSprite.Play("death");
+                    _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+                }
+                else  // _enemyHP <= 0 — parry counter killed the enemy
+                {
+                    _enemyDead = true;
+                    _enemyAnimSprite.Play("death");
+                    _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+                    PlayPlayer("idle");
+                }
+            }
+        }
+
+        int delayMs = _battleSystem.GetFirstStepPostAnimDelayMs();
+        if (delayMs > 0)
+            GetTree().CreateTimer(delayMs / 1000f).Timeout += DoTeardown;
+        else
+            DoTeardown();
+    }
+
+    /// <summary>
     /// Starts a camera shake that writes a random <see cref="Camera2D.Offset"/> each frame,
     /// fading the intensity linearly to zero over <paramref name="duration"/> seconds.
     /// Calling this while a shake is already in progress replaces it immediately — the new
@@ -562,11 +685,19 @@ public partial class BattleTest : Node2D
     /// usable immediately after this call returns. <paramref name="onComplete"/> fires
     /// when the tween finishes; safe to pass null.
     /// </summary>
-    private void PlayHopIn(ColorRect attacker, ColorRect defender, Action onComplete)
+    /// <param name="attackerOffset">
+    /// Optional offset for hop-in melee attacks. Only the X component is added to
+    /// <see cref="_attackerClosePos"/> — this keeps the camera midpoint and slam
+    /// positions unaffected by vertical adjustment. The Y component is applied solely
+    /// to the enemy AnimatedSprite2D tween destination so the sprite moves vertically
+    /// without shifting the camera or target zone.
+    /// </param>
+    private void PlayHopIn(ColorRect attacker, ColorRect defender, Action onComplete,
+                           Vector2 attackerOffset = default)
     {
         _attacker         = attacker;
         _defender         = defender;
-        _attackerClosePos = ComputeClosePosition();
+        _attackerClosePos = ComputeClosePosition() + new Vector2(attackerOffset.X, 0f);
 
         // Play run at double speed while the player hops in — snappy charge feel.
         // Guard: only call Play("run") if the animation has frames. A 0-frame animation
@@ -600,6 +731,17 @@ public partial class BattleTest : Node2D
             Vector2 animTarget = new Vector2(_playerAnimSpriteOrigin.X + hopDeltaX,
                                              _playerAnimSpriteOrigin.Y);
             tween.TweenProperty(_playerAnimSprite, "position", animTarget, SetupDuration)
+                 .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+        }
+        // When the enemy is the attacker, move the enemy AnimatedSprite2D by the same X delta
+        // plus the full attackerOffset (X already in _attackerClosePos; Y applied here only
+        // so the sprite moves vertically without affecting the camera or target zone).
+        if (attacker == _enemySprite)
+        {
+            float   hopDeltaX  = _attackerClosePos.X - _enemyOrigin.X;
+            Vector2 animTarget = new Vector2(_enemyAnimSpriteOrigin.X + hopDeltaX,
+                                             _enemyAnimSpriteOrigin.Y + attackerOffset.Y);
+            tween.TweenProperty(_enemyAnimSprite, "position", animTarget, SetupDuration)
                  .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         }
         // Camera zooms in centered between the two combatants.
@@ -714,6 +856,12 @@ public partial class BattleTest : Node2D
         if (_attacker == _playerSprite)
         {
             tween.TweenProperty(_playerAnimSprite, "position", _playerAnimSpriteOrigin, TeardownDuration)
+                 .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
+        }
+        // Return the visible enemy sprite to its scene origin alongside the ColorRect.
+        if (_attacker == _enemySprite)
+        {
+            tween.TweenProperty(_enemyAnimSprite, "position", _enemyAnimSpriteOrigin, TeardownDuration)
                  .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
         }
         // Camera zooms back out to default.

@@ -207,6 +207,22 @@ public partial class BattleTest : Node2D
         PlayEnemy("cast_loop");
     }
 
+    /// <summary>
+    /// Fires when the enemy's melee "attack" animation completes during a hop-in turn.
+    /// Sets _hopInAnimFinished and, if the sequence has already completed, hands off to
+    /// ProceedAfterHopInAnim which applies PostAnimationDelayMs then calls PlayTeardown.
+    /// </summary>
+    private void OnEnemyAttackAnimFinished()
+    {
+        GD.Print("[BattleTest] OnEnemyAttackAnimFinished fired.");
+        SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
+        if (_enemyDead) return;  // death already in progress — don't interfere
+        PlayEnemy("idle");  // OWNER: OnEnemyAttackAnimFinished — return to idle during PostAnimationDelayMs hold
+        _hopInAnimFinished = true;
+        if (_hopInSequenceCompleted)
+            ProceedAfterHopInAnim();
+    }
+
     private void OnCastEndFinished()
     {
         GD.Print("[BattleTest] OnCastEndFinished fired.");

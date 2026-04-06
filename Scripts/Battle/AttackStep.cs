@@ -99,4 +99,19 @@ public partial class AttackStep : Resource
     /// Use this to fine-tune where the visual lands on the defender.
     /// </summary>
     [Export] public Vector2 Offset = Vector2.Zero;
+
+    /// <summary>
+    /// Extra hold time in milliseconds after this step's animation completes before the
+    /// sequence or teardown proceeds.
+    ///
+    /// For effect-sprite steps (SpritesheetPath non-empty): the sprite stays visible for
+    /// this duration after its animation finishes, then frees itself.
+    ///
+    /// For melee hop-in steps (IsHopIn = true on AttackData): BattleTest waits this long
+    /// after the attacker's animation finishes before calling PlayTeardown. Use to let
+    /// the impact pose read before the enemy retreats.
+    ///
+    /// Default 0 — no hold; sprite frees / teardown begins immediately on animation end.
+    /// </summary>
+    [Export] public int PostAnimationDelayMs = 0;
 }
