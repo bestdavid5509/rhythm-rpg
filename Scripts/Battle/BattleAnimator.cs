@@ -361,7 +361,9 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void BeginComboMissRetreat()
     {
-        StopPlayer();  // OWNER: BeginComboMissRetreat — hold current slash frame during the delay
+        // The animation already finished (that's what triggered the callback), so the sprite
+        // is naturally holding its last frame. Calling Stop() here would reset Frame to 0 in
+        // Godot 4 — don't touch the frame; just start the retreat from the current pose.
         if (_pendingGameOver)
         {
             // Damage from the miss somehow killed the enemy (edge case).

@@ -1,4 +1,4 @@
-[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://cplayercombo01"]
+[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://cfpo0k1eq2b3y"]
 
 [ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
 
