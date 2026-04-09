@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://cfpo0kyyw8x3y"]
+
+[ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
+
+[resource]
+script = ExtResource("1_attackdata")
+Category = 0
+IsHopIn = false
+Steps = Array[Object]([])
+BaseDamage = 10

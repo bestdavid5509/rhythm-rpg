@@ -1,0 +1,80 @@
+[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://dfhb4la4wom6k"]
+
+[ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
+[ext_resource type="Script" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
+
+[sub_resource type="Resource" id="AttackStep_1"]
+script = ExtResource("2_attackstep")
+SpritesheetPath = "res://Assets/Effects/Comet_Effects/Energy comet_vertical-Sheet.png"
+FrameWidth = 112
+FrameHeight = 224
+Fps = 12.0
+ImpactFrames = PackedInt32Array(11)
+CircleType = 2
+BounceCount = 4
+StartOffsetMs = 0
+FlipH = false
+Scale = Vector2(3, 3)
+Offset = Vector2(-15, -310)
+
+[sub_resource type="Resource" id="AttackStep_2"]
+script = ExtResource("2_attackstep")
+SpritesheetPath = "res://Assets/Effects/Comet_Effects/Energy comet_30_deg-Sheet.png"
+FrameWidth = 148
+FrameHeight = 232
+Fps = 12.0
+ImpactFrames = PackedInt32Array(11)
+CircleType = 0
+BounceCount = 0
+StartOffsetMs = -250
+FlipH = true
+Scale = Vector2(3, 3)
+Offset = Vector2(-30, -320)
+
+[sub_resource type="Resource" id="AttackStep_3"]
+script = ExtResource("2_attackstep")
+SpritesheetPath = "res://Assets/Effects/Comet_Effects/Energy comet_30_deg-Sheet.png"
+FrameWidth = 148
+FrameHeight = 232
+Fps = 12.0
+ImpactFrames = PackedInt32Array(11)
+CircleType = 0
+BounceCount = 0
+StartOffsetMs = 500
+FlipH = false
+Scale = Vector2(3, 3)
+Offset = Vector2(0, -320)
+
+[sub_resource type="Resource" id="AttackStep_4"]
+script = ExtResource("2_attackstep")
+SpritesheetPath = "res://Assets/Effects/Comet_Effects/Energy comet_30_deg-Sheet.png"
+FrameWidth = 148
+FrameHeight = 232
+Fps = 12.0
+ImpactFrames = PackedInt32Array(11)
+CircleType = 0
+BounceCount = 0
+StartOffsetMs = 500
+FlipH = true
+Scale = Vector2(3, 3)
+Offset = Vector2(-30, -320)
+
+[sub_resource type="Resource" id="AttackStep_5"]
+script = ExtResource("2_attackstep")
+SpritesheetPath = "res://Assets/Effects/Comet_Effects/Energy comet_30_deg-Sheet.png"
+FrameWidth = 148
+FrameHeight = 232
+Fps = 12.0
+ImpactFrames = PackedInt32Array(11)
+CircleType = 0
+BounceCount = 0
+StartOffsetMs = 500
+FlipH = false
+Scale = Vector2(3, 3)
+Offset = Vector2(0, -320)
+
+[resource]
+script = ExtResource("1_attackdata")
+Category = 1
+Steps = Array[Object]([SubResource("AttackStep_1"), SubResource("AttackStep_2"), SubResource("AttackStep_3"), SubResource("AttackStep_4"), SubResource("AttackStep_5")])
+BaseDamage = 10

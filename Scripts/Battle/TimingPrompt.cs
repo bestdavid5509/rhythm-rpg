@@ -231,6 +231,14 @@ public partial class TimingPrompt : Node2D
     /// </summary>
     private static TimingPrompt _flashLeader = null;
 
+    /// <summary>
+    /// When true, all manual input is ignored and auto-miss feedback (flash, shake, sound)
+    /// is suppressed. Circles continue their scripted movement and emit signals normally.
+    /// Set by BattleTest when the player dies mid-sequence so the attack pattern plays out
+    /// silently while the death animation runs.
+    /// </summary>
+    public static bool SuppressInput { get; set; }
+
     // -------------------------------------------------------------------------
     // Runtime state
     // -------------------------------------------------------------------------
@@ -339,7 +347,7 @@ public partial class TimingPrompt : Node2D
             _lockoutTimer -= dt;
 
         // Always delegate to EvaluateInput — it handles lockout, direction, and zone checks.
-        if (Input.IsActionJustPressed("battle_confirm"))
+        if (!SuppressInput && Input.IsActionJustPressed("battle_confirm"))
             EvaluateInput();
 
         // Inward: advances over Duration; outward: advances over BounceDuration.
@@ -498,6 +506,8 @@ public partial class TimingPrompt : Node2D
     {
         var snapshot = new List<TimingPrompt>(_activePrompts);
 
+        if (SuppressInput) return;
+
         // Reset from previous press before doing anything else.
         _anyAcceptedLastConfirm = false;
         _flashLeader            = null;
@@ -596,7 +606,8 @@ public partial class TimingPrompt : Node2D
         // Only flash/shake on auto-miss — hit was flashed at press time.
         // Flash is suppressed when _lockoutTimer > 0: the wrong-input red flash already fired,
         // drawing a second one is redundant. Circle resolves silently in that case.
-        if (result == InputResult.Miss)
+        // Also suppressed when SuppressInput is true (player died mid-sequence).
+        if (result == InputResult.Miss && !SuppressInput)
         {
             if (_lockoutTimer <= 0f)
             {
@@ -644,7 +655,8 @@ public partial class TimingPrompt : Node2D
 
         // Only flash/shake on auto-miss — hit was flashed at press time.
         // Flash is suppressed when _lockoutTimer > 0: the wrong-input red flash already fired.
-        if (result == InputResult.Miss)
+        // Also suppressed when SuppressInput is true (player died mid-sequence).
+        if (result == InputResult.Miss && !SuppressInput)
         {
             if (_lockoutTimer <= 0f)
             {

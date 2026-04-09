@@ -52,7 +52,7 @@ public partial class BattleSystem : Node
 
     // Test attack: hardcoded for visual verification in BattleTest.
     // Replace with dynamic assignment when the full battle system drives attack selection.
-    private const string TestAttackPath = "res://Resources/Attacks/red_sword_combo_attack.tres";
+    private const string TestAttackPath = "res://Resources/Attacks/fire_and_ice_sword_combo.tres";
 
     private PackedScene              _promptScene;
     private AttackData               _currentAttack;          // the attack currently being executed

@@ -285,6 +285,7 @@ public partial class BattleTest : Node2D
         _state               = BattleState.EnemyAttack;
         _parryClean          = true;
         _isPlayerMagicAttack = false;
+        TimingPrompt.SuppressInput = false;  // safety reset
         GD.Print("[BattleTest] Enemy attacks.");
 
         // Always restore the enemy attack before each enemy turn — a preceding player
@@ -381,6 +382,19 @@ public partial class BattleTest : Node2D
             SpawnDamageNumber(PlayerDamageOrigin, damage, DmgColorPlayer);
             UpdateHPBars();
             ShakeCamera(intensity: 8f, duration: 0.3f);  // shake — player takes a hit
+
+            // Immediate death — play the animation now; the sequence continues silently.
+            // SuppressInput blocks all further manual input and auto-miss feedback on circles.
+            // Game Over label is deferred to OnEnemySequenceCompleted so the player can watch
+            // the full attack pattern for future attempts.
+            if (_playerHP <= 0 && !_playerDead)
+            {
+                GD.Print("[BattleTest] Player HP reached zero mid-sequence — death triggered immediately.");
+                _playerDead = true;
+                _state      = BattleState.GameOver;
+                TimingPrompt.SuppressInput = true;
+                _playerAnimSprite.Play("death");
+            }
         }
     }
 
@@ -397,6 +411,9 @@ public partial class BattleTest : Node2D
             OnPlayerMagicPassEvaluated(result, passIndex);
             return;
         }
+
+        // After player death, skip damage and animation reactions — circles continue silently.
+        if (_playerDead) return;
 
         if (_battleSystem.CurrentAttackIsHopIn || !SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
@@ -452,7 +469,30 @@ public partial class BattleTest : Node2D
     private void OnEnemySequenceCompleted()
     {
         GD.Print("[BattleTest] Enemy attack sequence complete.");
-        _targetZone.Visible = false;
+        _targetZone.Visible        = false;
+        TimingPrompt.SuppressInput = false;
+
+        // Player died mid-sequence — death animation is already playing.
+        // Clean up the enemy and let the death flow finish (Game Over label).
+        if (_playerDead)
+        {
+            if (_battleSystem.CurrentAttackIsHopIn)
+            {
+                // Hop-in path: let ProceedAfterHopInAnim handle teardown.
+                UpdateHPBars();
+                _hopInOver              = true;
+                _hopInSequenceCompleted = true;
+                if (_hopInAnimFinished)
+                    ProceedAfterHopInAnim();
+                return;
+            }
+
+            SafeDisconnectEnemyAnim(OnCastEndFinished);
+            PlayEnemy("cast_end");
+            _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+            ShowEndLabel("Game Over");
+            return;
+        }
 
         if (_battleSystem.CurrentAttackIsHopIn)
         {
@@ -752,11 +792,16 @@ public partial class BattleTest : Node2D
                 // Game over — retreat enemy without scheduling next turn, then handle death.
                 PlayTeardown(null);
 
-                if (_playerHP <= 0)
+                if (_playerHP <= 0 && !_playerDead)
                 {
                     _playerDead = true;
                     _playerAnimSprite.Play("death");
                     _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+                }
+                else if (_playerHP <= 0 && _playerDead)
+                {
+                    // Death was triggered mid-sequence — animation already playing.
+                    ShowEndLabel("Game Over");
                 }
                 else  // _enemyHP <= 0 — parry counter killed the enemy
                 {

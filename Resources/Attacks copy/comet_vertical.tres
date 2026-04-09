@@ -1,23 +1,25 @@
-[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://cx4nfp7qd2wr8"]
+[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://cgpmvsu2770o0"]
 
 [ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
 [ext_resource type="Script" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
 
 [sub_resource type="Resource" id="AttackStep_1"]
 script = ExtResource("2_attackstep")
-SpritesheetPath = "res://Assets/Effects/Sword_Effects/Ice_Sword_Swipe_Sheet.png"
-FrameWidth = 176
-FrameHeight = 160
+SpritesheetPath = "res://Assets/Effects/Comet_Effects/Energy comet_vertical-Sheet.png"
+FrameWidth = 112
+FrameHeight = 224
 Fps = 12.0
-ImpactFrames = PackedInt32Array(10)
-CircleType = 1
+ImpactFrames = PackedInt32Array(11)
+CircleType = 2
+BounceCount = 2
 StartOffsetMs = 0
-FlipH = true
+FlipH = false
 Scale = Vector2(3, 3)
-Offset = Vector2(25, -218)
+Offset = Vector2(-15, -210)
 
 [resource]
 script = ExtResource("1_attackdata")
 Category = 1
+; Steps = Array[Object]([SubResource("AttackStep_1")])
 Steps = Array[Object]([SubResource("AttackStep_1")])
-BaseDamage = 30
+BaseDamage = 10
