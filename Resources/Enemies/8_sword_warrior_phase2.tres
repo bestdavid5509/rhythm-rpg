@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="EnemyData" format=3 uid="uid://bv7k3mw9xr2pn"]
+
+[ext_resource type="Script" path="res://Scripts/Battle/EnemyData.cs" id="1_enemydata"]
+[ext_resource type="Resource" path="res://Resources/Attacks/fire_and_ice_sword_combo.tres" id="2_attack1"]
+[ext_resource type="Resource" path="res://Resources/Attacks/repeating_comet_barrage.tres" id="3_attack2"]
+[ext_resource type="Resource" path="res://Resources/Attacks/red_sword_combo_attack.tres" id="4_attack3"]
+
+[resource]
+script = ExtResource("1_enemydata")
+EnemyName = "8 Sword Warrior"
+MaxHp = 200
+AttackPool = Array[Object]([ExtResource("2_attack1"), ExtResource("3_attack2"), ExtResource("4_attack3")])
+SelectionStrategy = 0

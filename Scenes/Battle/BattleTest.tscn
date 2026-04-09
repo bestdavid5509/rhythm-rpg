@@ -2,9 +2,11 @@
 
 [ext_resource type="Script" uid="uid://dh4rjlvlickpi" path="res://Scripts/Battle/BattleTest.cs" id="1_battletest"]
 [ext_resource type="Script" uid="uid://cw3hjxalert1b" path="res://Scripts/Battle/TargetZone.cs" id="2_targetzone"]
+[ext_resource type="Resource" uid="uid://bv7k3mxaxr2pn" path="res://Resources/Enemies/8_sword_warrior_phase2.tres" id="2_wropl"]
 
 [node name="BattleTest" type="Node2D" unique_id=1582212467]
 script = ExtResource("1_battletest")
+EnemyData = ExtResource("2_wropl")
 
 [node name="Background" type="ColorRect" parent="." unique_id=1572392609]
 offset_left = -7.0

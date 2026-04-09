@@ -38,11 +38,12 @@ public partial class BattleTest : Node2D
     // HP
     // =========================================================================
 
-    private const int PlayerMaxHP = 100;
-    private const int EnemyMaxHP  = 200;
+    private const int PlayerMaxHP      = 100;
+    private const int EnemyMaxHPDefault = 200;
 
-    private int _playerHP = PlayerMaxHP;
-    private int _enemyHP  = EnemyMaxHP;
+    private int _playerHP    = PlayerMaxHP;
+    private int _enemyHP     = EnemyMaxHPDefault;
+    private int _enemyMaxHP  = EnemyMaxHPDefault;  // overridden by EnemyData.MaxHp when set
 
     private ColorRect _playerHPFill;
     private ColorRect _enemyHPFill;
@@ -92,6 +93,13 @@ public partial class BattleTest : Node2D
     /// </summary>
     [Export] public bool LoopAttack;
 
+    /// <summary>
+    /// Enemy definition — attack pool, HP, and selection strategy.
+    /// When set, MaxHp overrides the default enemy HP and AttackPool drives per-turn attack selection.
+    /// Assign via the inspector (e.g. 8_sword_warrior_phase2.tres).
+    /// </summary>
+    [Export] public EnemyData EnemyData;
+
     // Tuned Y offsets — finalized visually, no longer need inspector exposure.
     // Positive values move down; negative values move up.
     private const float EnemySpriteOffsetY = 130f;
@@ -127,6 +135,7 @@ public partial class BattleTest : Node2D
 
     // Loaded once in _Ready; used to restore the enemy attack after a player magic turn.
     private AttackData _enemyAttackData;
+    private int        _lastAttackIndex = -1;  // tracks last AttackSelector pick for Sequential support
     private AttackData _playerMagicAttack;
     private AttackData _playerBasicAttack;   // player_basic_attack.tres — Physical, BaseDamage 10
     private AttackData _playerComboStrike;   // player_combo_strike.tres — Physical, BaseDamage 6
@@ -247,6 +256,15 @@ public partial class BattleTest : Node2D
 
         _targetZone = GetNode<TargetZone>("TargetZone");
 
+        // EnemyData overrides the default max HP when assigned in the inspector.
+        if (EnemyData != null && EnemyData.MaxHp > 0)
+        {
+            _enemyMaxHP = EnemyData.MaxHp;
+            _enemyHP    = EnemyData.MaxHp;
+            GD.Print($"[BattleTest] EnemyData \"{EnemyData.EnemyName}\" loaded — " +
+                     $"MaxHp={EnemyData.MaxHp}, AttackPool={EnemyData.AttackPool?.Length ?? 0} attack(s).");
+        }
+
         BuildMenu();
         UpdateHPBars();
 
@@ -306,15 +324,9 @@ public partial class BattleTest : Node2D
         TimingPrompt.SuppressInput = false;  // safety reset
         GD.Print("[BattleTest] Enemy attacks.");
 
-        // Select the enemy attack for this turn. LoopAttack forces TestEnemyAttack every
-        // turn (useful for testing a specific pattern). Otherwise fall back to the cached
-        // _enemyAttackData — currently the only option, but future variety logic goes here.
         // SetAttack is always called because a preceding player magic turn may have
         // overridden _currentAttack with _playerMagicAttack.
-        if (LoopAttack && TestEnemyAttack != null)
-            _battleSystem.SetAttack(TestEnemyAttack);
-        else
-            _battleSystem.SetAttack(_enemyAttackData);
+        _battleSystem.SetAttack(SelectEnemyAttack());
 
         if (_battleSystem.CurrentAttackIsHopIn)
         {
@@ -525,7 +537,7 @@ public partial class BattleTest : Node2D
             {
                 const int CounterDamage = 20;
                 _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
-                GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+                GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
                 SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
                 ShakeCamera(intensity: 10f, duration: 0.3f);
             }
@@ -548,7 +560,7 @@ public partial class BattleTest : Node2D
         {
             const int CounterDamage = 20;
             _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
-            GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+            GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
             SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
             ShakeCamera(intensity: 10f, duration: 0.3f);  // heavy shake — counter lands hard
         }
@@ -677,7 +689,7 @@ public partial class BattleTest : Node2D
             ShakeCamera(intensity: 6f, duration: 0.2f);  // shake — perfect timing feedback
 
         _enemyHP = Mathf.Max(0, _enemyHP - damage);
-        GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+        GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
         SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
 
@@ -718,7 +730,7 @@ public partial class BattleTest : Node2D
             ShakeCamera(intensity: 6f, duration: 0.2f);
 
         _enemyHP = Mathf.Max(0, _enemyHP - damage);
-        GD.Print($"[BattleTest] Magic hit deals {damage} damage. Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+        GD.Print($"[BattleTest] Magic hit deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
         SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         UpdateHPBars();
@@ -862,6 +874,25 @@ public partial class BattleTest : Node2D
         _shakeTimeRemaining = duration;
     }
 
+    /// <summary>
+    /// Returns the attack to use for the current enemy turn.
+    /// Priority: LoopAttack+TestEnemyAttack (testing) > EnemyData.AttackPool > _enemyAttackData (fallback).
+    /// </summary>
+    private AttackData SelectEnemyAttack()
+    {
+        if (LoopAttack && TestEnemyAttack != null)
+            return TestEnemyAttack;
+
+        if (EnemyData != null && EnemyData.AttackPool != null && EnemyData.AttackPool.Length > 0)
+        {
+            var attack = AttackSelector.SelectAttack(EnemyData, ref _lastAttackIndex);
+            if (attack != null)
+                return attack;
+        }
+
+        return _enemyAttackData;
+    }
+
     private bool CheckGameOver()
     {
         if (_playerHP <= 0)
@@ -883,7 +914,7 @@ public partial class BattleTest : Node2D
     {
         const float BarWidth = 300f;
         _playerHPFill.Size = new Vector2(BarWidth * ((float)_playerHP / PlayerMaxHP), _playerHPFill.Size.Y);
-        _enemyHPFill.Size  = new Vector2(BarWidth * ((float)_enemyHP  / EnemyMaxHP),  _enemyHPFill.Size.Y);
+        _enemyHPFill.Size  = new Vector2(BarWidth * ((float)_enemyHP  / _enemyMaxHP),  _enemyHPFill.Size.Y);
     }
 
     /// <summary>
@@ -1098,7 +1129,7 @@ public partial class BattleTest : Node2D
             ShakeCamera(intensity: 6f, duration: 0.2f);
         _enemyHP = Mathf.Max(0, _enemyHP - comboDamage);
         GD.Print($"[BattleTest] Combo pass {passIndex + 1} {comboDmgResult}: {comboDamage} damage. " +
-                 $"Enemy HP: {_enemyHP}/{EnemyMaxHP}");
+                 $"Enemy HP: {_enemyHP}/{_enemyMaxHP}");
         SpawnDamageNumber(EnemyDamageOrigin, comboDamage, comboDmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         UpdateHPBars();
