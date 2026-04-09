@@ -108,6 +108,13 @@ public partial class AttackStep : Resource
     [Export] public Vector2 PlayerOffset = Vector2.Zero;
 
     /// <summary>
+    /// Per-step damage override. When greater than zero, this value is used instead of
+    /// AttackData.BaseDamage for damage calculations on this step's passes.
+    /// When 0 (default), the parent AttackData.BaseDamage applies as normal.
+    /// </summary>
+    [Export] public int BaseDamageOverride = 0;
+
+    /// <summary>
     /// Extra hold time in milliseconds after this step's animation completes before the
     /// sequence or teardown proceeds.
     ///

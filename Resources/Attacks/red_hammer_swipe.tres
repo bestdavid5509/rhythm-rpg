@@ -1,17 +1,14 @@
 [gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://cx4nfp7qd2wr8"]
 
-[ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
-[ext_resource type="Script" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
+[ext_resource type="Script" uid="uid://73sbp1x2vnja" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
+[ext_resource type="Script" uid="uid://c4oq4pa1cw1dg" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
 
 [sub_resource type="Resource" id="AttackStep_1"]
 script = ExtResource("2_attackstep")
 SpritesheetPath = "res://Assets/Effects/Sword_Effects/Red_Fire_Hammer_Swipe_Sheet.png"
 FrameWidth = 96
 FrameHeight = 96
-Fps = 12.0
 ImpactFrames = PackedInt32Array(6)
-CircleType = 0
-StartOffsetMs = 0
 FlipH = true
 Scale = Vector2(4, 4)
 Offset = Vector2(50, -100)
@@ -21,11 +18,8 @@ script = ExtResource("2_attackstep")
 SpritesheetPath = "res://Assets/Effects/Sword_Effects/Red_Fire_Hammer_Swipe_Sheet.png"
 FrameWidth = 96
 FrameHeight = 96
-Fps = 12.0
 ImpactFrames = PackedInt32Array(6)
-CircleType = 0
 StartOffsetMs = -500
-FlipH = false
 Scale = Vector2(4, 4)
 Offset = Vector2(-100, -100)
 
@@ -34,9 +28,7 @@ script = ExtResource("2_attackstep")
 SpritesheetPath = "res://Assets/Effects/Sword_Effects/Red_Fire_Hammer_Swipe_Sheet.png"
 FrameWidth = 96
 FrameHeight = 96
-Fps = 12.0
 ImpactFrames = PackedInt32Array(6)
-CircleType = 0
 StartOffsetMs = -500
 FlipH = true
 Scale = Vector2(4, 4)
@@ -44,6 +36,4 @@ Offset = Vector2(50, -100)
 
 [resource]
 script = ExtResource("1_attackdata")
-Category = 1
-Steps = Array[Object]([SubResource("AttackStep_1"), SubResource("AttackStep_2"), SubResource("AttackStep_3")])
-BaseDamage = 10
+Steps = Array[ExtResource("2_attackstep")]([SubResource("AttackStep_1"), SubResource("AttackStep_2"), SubResource("AttackStep_3")])

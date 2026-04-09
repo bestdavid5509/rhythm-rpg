@@ -79,6 +79,19 @@ public partial class BattleTest : Node2D
     // Use for large/stationary enemies that hold their ground (e.g. 8 Sword Warrior).
     // Slam tweens are also skipped — the cross-screen lunge would look wrong for a non-hopping attacker.
     [Export] public bool SkipHopIn = true;
+
+    /// <summary>
+    /// Inspector-assigned enemy attack resource. Overrides BattleSystem's built-in
+    /// TestAttackPath when set. Leave null to use the default.
+    /// </summary>
+    [Export] public AttackData TestEnemyAttack;
+
+    /// <summary>
+    /// When true, the enemy always uses TestEnemyAttack regardless of any future
+    /// attack selection logic. The turn loop itself is unchanged.
+    /// </summary>
+    [Export] public bool LoopAttack;
+
     // Tuned Y offsets — finalized visually, no longer need inspector exposure.
     // Positive values move down; negative values move up.
     private const float EnemySpriteOffsetY = 130f;
@@ -211,6 +224,11 @@ public partial class BattleTest : Node2D
 
         _battleSystem = new BattleSystem();
         AddChild(_battleSystem);  // triggers BattleSystem._Ready, which loads _currentAttack
+
+        // Inspector-assigned attack overrides BattleSystem's built-in TestAttackPath.
+        if (TestEnemyAttack != null)
+            _battleSystem.SetAttack(TestEnemyAttack);
+
         _enemyAttackData  = _battleSystem.GetCurrentAttack();  // cache for restoration after player turns
         _playerMagicAttack = GD.Load<AttackData>("res://Resources/Attacks/player_magic_attack.tres");
         if (_playerMagicAttack == null)
@@ -288,9 +306,15 @@ public partial class BattleTest : Node2D
         TimingPrompt.SuppressInput = false;  // safety reset
         GD.Print("[BattleTest] Enemy attacks.");
 
-        // Always restore the enemy attack before each enemy turn — a preceding player
-        // magic turn may have called SetAttack(_playerMagicAttack) on BattleSystem.
-        _battleSystem.SetAttack(_enemyAttackData);
+        // Select the enemy attack for this turn. LoopAttack forces TestEnemyAttack every
+        // turn (useful for testing a specific pattern). Otherwise fall back to the cached
+        // _enemyAttackData — currently the only option, but future variety logic goes here.
+        // SetAttack is always called because a preceding player magic turn may have
+        // overridden _currentAttack with _playerMagicAttack.
+        if (LoopAttack && TestEnemyAttack != null)
+            _battleSystem.SetAttack(TestEnemyAttack);
+        else
+            _battleSystem.SetAttack(_enemyAttackData);
 
         if (_battleSystem.CurrentAttackIsHopIn)
         {
@@ -368,7 +392,7 @@ public partial class BattleTest : Node2D
         }
     }
 
-    private void OnEnemyPassEvaluated(int result, int passIndex)
+    private void OnEnemyPassEvaluated(int result, int passIndex, int stepIndex)
     {
         var r = (TimingPrompt.InputResult)result;
         GD.Print($"[BattleTest] Enemy pass {passIndex + 1} resolved: {r}.");
@@ -376,7 +400,7 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Miss)
         {
             _parryClean   = false;
-            const int damage = 10;
+            int damage    = _battleSystem.GetStepBaseDamage(stepIndex);
             _playerHP     = Mathf.Max(0, _playerHP - damage);
             GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {_playerHP}/{PlayerMaxHP}");
             SpawnDamageNumber(PlayerDamageOrigin, damage, DmgColorPlayer);
@@ -408,7 +432,7 @@ public partial class BattleTest : Node2D
     {
         if (_isPlayerMagicAttack)
         {
-            OnPlayerMagicPassEvaluated(result, passIndex);
+            OnPlayerMagicPassEvaluated(result, passIndex, stepIndex);
             return;
         }
 
@@ -417,7 +441,7 @@ public partial class BattleTest : Node2D
 
         if (_battleSystem.CurrentAttackIsHopIn || !SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
-        OnEnemyPassEvaluated(result, passIndex);
+        OnEnemyPassEvaluated(result, passIndex, stepIndex);
 
         // OWNER: OnBattleSystemStepPassEvaluated (enemy turn, per-pass reaction).
         // Pre-empt any in-flight retreat before taking ownership of the sprite.
@@ -676,10 +700,10 @@ public partial class BattleTest : Node2D
     /// Called once per pass when the player's magic attack circle resolves.
     /// Applies damage to the enemy identically to the physical attack damage table.
     /// </summary>
-    private void OnPlayerMagicPassEvaluated(int result, int passIndex)
+    private void OnPlayerMagicPassEvaluated(int result, int passIndex, int stepIndex)
     {
         var r          = (TimingPrompt.InputResult)result;
-        int baseDamage = _playerMagicAttack?.BaseDamage ?? 10;
+        int baseDamage = _battleSystem.GetStepBaseDamage(stepIndex);
         int damage     = ComputePlayerDamage(baseDamage, r);
         GD.Print($"[BattleTest] Player magic pass {passIndex + 1} resolved: {r}  ({damage} damage).");
 

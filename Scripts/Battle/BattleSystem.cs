@@ -147,6 +147,18 @@ public partial class BattleSystem : Node
     public int GetFirstStepPostAnimDelayMs() =>
         GetFirstStep()?.PostAnimationDelayMs ?? 0;
 
+    /// <summary>
+    /// Returns the effective base damage for a given step. Uses the step's
+    /// BaseDamageOverride when set (> 0), otherwise falls back to AttackData.BaseDamage.
+    /// </summary>
+    public int GetStepBaseDamage(int stepIndex)
+    {
+        if (_currentAttack == null) return 0;
+        if (stepIndex < 0 || stepIndex >= _currentAttack.Steps.Count) return _currentAttack.BaseDamage;
+        int over = _currentAttack.Steps[stepIndex].BaseDamageOverride;
+        return over > 0 ? over : _currentAttack.BaseDamage;
+    }
+
     // =========================================================================
     // Sequence runner — public entry point
     // =========================================================================

@@ -1,11 +1,10 @@
 [gd_scene format=3 uid="uid://c836l6y8vexm8"]
 
 [ext_resource type="Script" uid="uid://dh4rjlvlickpi" path="res://Scripts/Battle/BattleTest.cs" id="1_battletest"]
-[ext_resource type="Script" uid="uid://bx3kp8n2vqjth" path="res://Scripts/Battle/TargetZone.cs" id="2_targetzone"]
+[ext_resource type="Script" uid="uid://cw3hjxalert1b" path="res://Scripts/Battle/TargetZone.cs" id="2_targetzone"]
 
 [node name="BattleTest" type="Node2D" unique_id=1582212467]
 script = ExtResource("1_battletest")
-SkipHopIn = true
 
 [node name="Background" type="ColorRect" parent="." unique_id=1572392609]
 offset_left = -7.0
@@ -52,8 +51,8 @@ position = Vector2(1480, 670)
 flip_h = true
 
 [node name="TargetZone" type="Node2D" parent="." unique_id=246813579]
-script = ExtResource("2_targetzone")
 visible = false
+script = ExtResource("2_targetzone")
 
 [node name="PlayerHP" type="Node2D" parent="." unique_id=1904299451]
 position = Vector2(50, 1010)
