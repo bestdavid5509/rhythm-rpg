@@ -372,3 +372,4 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 - **Bouncing circle color customisation** — color gradient (purple→white) and pass count are currently fixed per-type in `ApplyTypeSettings`; could be exposed as per-step inspector fields for more expressive attack authoring
 - **Learnable move signalling** — visual highlight on enemy and colored move-name label during learnable-move sequences
 - **Taunt ability** — player action that baits the enemy into using their signature/learnable move
+- **Learnable move SFX** — when the white flash + "If I watch carefully..." signal triggers, play a distinct audio cue to reinforce the moment (chime, shimmer, or subtle musical sting). Wire into the existing FlashEnemyWhite() / ShowLearnableSignal() call site in BeginEnemyAttack.

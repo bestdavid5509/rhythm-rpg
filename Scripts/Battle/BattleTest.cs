@@ -113,6 +113,10 @@ public partial class BattleTest : Node2D
     /// </summary>
     [Export] public EnemyData EnemyData;
 
+    private BattleMessage  _battleMessage;
+    private ShaderMaterial _enemyFlashMaterial;
+    private Tween          _enemyFlashTween;
+
     // Tuned Y offsets — finalized visually, no longer need inspector exposure.
     // Positive values move down; negative values move up.
     private const float EnemySpriteOffsetY = 130f;
@@ -205,6 +209,7 @@ public partial class BattleTest : Node2D
 
         _playerMp = PlayerMaxMp;
         BuildStatusPanels();
+        _battleMessage = new BattleMessage(this);
 
         // Grab character sprites and record their original positions for teardown restoration.
         _playerSprite = GetNode<ColorRect>("PlayerSprite");
@@ -243,6 +248,13 @@ public partial class BattleTest : Node2D
                                                 FloorY - 160f * 3f * 0.6f + EnemySpriteOffsetY);
         _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;  // snapshot for teardown restoration
         _enemyAnimSprite.Play("idle");
+
+        // White flash shader — used for learnable move signalling.
+        var flashShader = GD.Load<Shader>("res://Assets/Shaders/WhiteFlash.gdshader");
+        _enemyFlashMaterial = new ShaderMaterial();
+        _enemyFlashMaterial.Shader = flashShader;
+        _enemyFlashMaterial.SetShaderParameter("flash_amount", 0.0f);
+        _enemyAnimSprite.Material = _enemyFlashMaterial;
 
         _battleSystem = new BattleSystem();
         AddChild(_battleSystem);  // triggers BattleSystem._Ready, which loads _currentAttack
@@ -339,7 +351,15 @@ public partial class BattleTest : Node2D
 
         // SetAttack is always called because a preceding player magic turn may have
         // overridden _currentAttack with _playerMagicAttack.
-        _battleSystem.SetAttack(SelectEnemyAttack());
+        var selectedAttack = SelectEnemyAttack();
+        _battleSystem.SetAttack(selectedAttack);
+
+        // Signal the player when the enemy uses its learnable move.
+        if (EnemyData?.LearnableAttack != null && selectedAttack == EnemyData.LearnableAttack)
+        {
+            ShowLearnableSignal();
+            FlashEnemyWhite();
+        }
 
         if (_battleSystem.CurrentAttackIsHopIn)
         {
@@ -904,6 +924,30 @@ public partial class BattleTest : Node2D
         }
 
         return _enemyAttackData;
+    }
+
+    public void ShowBattleMessage(string text) => _battleMessage.Show(text);
+
+    private void ShowLearnableSignal() => ShowBattleMessage("If I watch carefully...");
+
+    /// <summary>
+    /// Flashes the enemy sprite white 3 times over ~0.6s using the WhiteFlash shader.
+    /// </summary>
+    private void FlashEnemyWhite()
+    {
+        _enemyFlashTween?.Kill();
+        _enemyFlashMaterial.SetShaderParameter("flash_amount", 0.0f);
+
+        _enemyFlashTween = CreateTween();
+        for (int i = 0; i < 3; i++)
+        {
+            _enemyFlashTween.TweenMethod(
+                Callable.From((float v) => _enemyFlashMaterial.SetShaderParameter("flash_amount", v)),
+                0.0f, 1.0f, 0.1f);
+            _enemyFlashTween.TweenMethod(
+                Callable.From((float v) => _enemyFlashMaterial.SetShaderParameter("flash_amount", v)),
+                1.0f, 0.0f, 0.1f);
+        }
     }
 
     private bool CheckGameOver()

@@ -37,4 +37,11 @@ public partial class EnemyData : Resource
     /// Currently only Random is implemented; Sequential and Weighted fall back to Random.
     /// </summary>
     [Export] public AttackSelectionStrategy SelectionStrategy = AttackSelectionStrategy.Random;
+
+    /// <summary>
+    /// The attack the player can absorb from this enemy via perfect parry.
+    /// When this attack is selected, a narrative signal is shown to the player.
+    /// Null means no learnable attack.
+    /// </summary>
+    [Export] public AttackData LearnableAttack;
 }

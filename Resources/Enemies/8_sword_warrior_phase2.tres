@@ -11,3 +11,4 @@ EnemyName = "8 Sword Warrior"
 MaxHp = 200
 AttackPool = Array[Object]([ExtResource("2_attack1"), ExtResource("3_attack2"), ExtResource("4_attack3")])
 SelectionStrategy = 0
+LearnableAttack = ExtResource("3_attack2")
