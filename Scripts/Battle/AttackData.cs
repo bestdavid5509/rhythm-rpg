@@ -56,4 +56,11 @@ public partial class AttackData : Resource
     /// Damage applied per successful input (Hit or Perfect) across all steps.
     /// </summary>
     [Export] public int BaseDamage = 10;
+
+    /// <summary>
+    /// MP cost to use this attack. Physical attacks default to 0 (free).
+    /// Magic attacks set an explicit cost. Only checked for player-side attacks;
+    /// enemies do not spend MP.
+    /// </summary>
+    [Export] public int MpCost = 0;
 }

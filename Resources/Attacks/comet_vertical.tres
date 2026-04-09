@@ -15,3 +15,4 @@ Offset = Vector2(-15, -210)
 [resource]
 script = ExtResource("1_attackdata")
 Steps = Array[ExtResource("2_attackstep")]([SubResource("AttackStep_1")])
+MpCost = 10

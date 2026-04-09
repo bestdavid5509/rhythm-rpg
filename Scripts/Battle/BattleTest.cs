@@ -45,8 +45,21 @@ public partial class BattleTest : Node2D
     private int _enemyHP     = EnemyMaxHPDefault;
     private int _enemyMaxHP  = EnemyMaxHPDefault;  // overridden by EnemyData.MaxHp when set
 
+    // =========================================================================
+    // MP
+    // =========================================================================
+
+    [Export] public int PlayerMaxMp = 50;
+
+    private int _playerMp;  // initialized to PlayerMaxMp in _Ready
+
+    // UI bar references — built in BuildStatusPanels(), updated by UpdateHPBars()/UpdateMpBar().
     private ColorRect _playerHPFill;
     private ColorRect _enemyHPFill;
+    private ColorRect _playerMPFill;
+    private Label     _playerHPLabel;
+    private Label     _enemyHPLabel;
+    private Label     _playerMPLabel;
 
     // =========================================================================
     // Perfect parry
@@ -190,8 +203,8 @@ public partial class BattleTest : Node2D
     {
         _timingPromptScene = GD.Load<PackedScene>("res://Scenes/Battle/TimingPrompt.tscn");
 
-        _playerHPFill = GetNode<ColorRect>("PlayerHP/Fill");
-        _enemyHPFill  = GetNode<ColorRect>("EnemyHP/Fill");
+        _playerMp = PlayerMaxMp;
+        BuildStatusPanels();
 
         // Grab character sprites and record their original positions for teardown restoration.
         _playerSprite = GetNode<ColorRect>("PlayerSprite");
@@ -912,9 +925,214 @@ public partial class BattleTest : Node2D
 
     private void UpdateHPBars()
     {
-        const float BarWidth = 300f;
-        _playerHPFill.Size = new Vector2(BarWidth * ((float)_playerHP / PlayerMaxHP), _playerHPFill.Size.Y);
-        _enemyHPFill.Size  = new Vector2(BarWidth * ((float)_enemyHP  / _enemyMaxHP),  _enemyHPFill.Size.Y);
+        _playerHPFill.Size  = new Vector2(BarWidth * ((float)_playerHP / PlayerMaxHP), _playerHPFill.Size.Y);
+        _playerHPLabel.Text = $"{_playerHP}/{PlayerMaxHP}";
+        _enemyHPFill.Size   = new Vector2(BarWidth * ((float)_enemyHP / _enemyMaxHP), _enemyHPFill.Size.Y);
+        _enemyHPLabel.Text  = $"{_enemyHP}/{_enemyMaxHP}";
+        UpdateMpBar();
+    }
+
+    private void UpdateMpBar()
+    {
+        _playerMPFill.Size  = new Vector2(BarWidth * ((float)_playerMp / PlayerMaxMp), _playerMPFill.Size.Y);
+        _playerMPLabel.Text = $"{_playerMp}/{PlayerMaxMp}";
+    }
+
+    private void RestoreMp(int amount)
+    {
+        _playerMp = Mathf.Min(_playerMp + amount, PlayerMaxMp);
+        UpdateMpBar();
+    }
+
+    // =========================================================================
+    // Status panels — enemy (top) and player party (bottom)
+    // =========================================================================
+
+    private const float BarWidth  = 220f;
+    private const float BarHeight = 20f;
+
+    private void BuildStatusPanels()
+    {
+        var layer = new CanvasLayer();
+        layer.Name = "StatusPanels";
+        AddChild(layer);
+
+        // ── Enemy panel (top-center) ─────────────────────────────────
+        BuildEnemyPanel(layer);
+
+        // ── Player party panel (bottom-center) ──────────────────────
+        BuildPlayerPanel(layer);
+    }
+
+    private void BuildEnemyPanel(CanvasLayer layer)
+    {
+        // Panel container anchored to top-center.
+        var panel = new PanelContainer();
+        panel.AnchorLeft   = 0.5f;
+        panel.AnchorRight  = 0.5f;
+        panel.AnchorTop    = 0f;
+        panel.AnchorBottom = 0f;
+        panel.GrowHorizontal = Control.GrowDirection.Both;
+        panel.OffsetTop    = 10f;
+        panel.OffsetBottom = 10f;  // let content size it
+
+        // Semi-transparent dark background.
+        var style = new StyleBoxFlat();
+        style.BgColor      = new Color(0f, 0f, 0f, 0.55f);
+        style.CornerRadiusBottomLeft  = 6;
+        style.CornerRadiusBottomRight = 6;
+        style.CornerRadiusTopLeft     = 6;
+        style.CornerRadiusTopRight    = 6;
+        style.ContentMarginLeft   = 16f;
+        style.ContentMarginRight  = 16f;
+        style.ContentMarginTop    = 10f;
+        style.ContentMarginBottom = 10f;
+        panel.AddThemeStyleboxOverride("panel", style);
+        layer.AddChild(panel);
+
+        // One row per enemy — for now just one.
+        var vbox = new VBoxContainer();
+        vbox.AddThemeConstantOverride("separation", 6);
+        panel.AddChild(vbox);
+
+        string enemyName = EnemyData != null ? EnemyData.EnemyName : "Enemy";
+        AddEnemyRow(vbox, enemyName, out _enemyHPFill, out _enemyHPLabel);
+    }
+
+    private void AddEnemyRow(VBoxContainer parent, string name,
+                              out ColorRect hpFill, out Label hpLabel)
+    {
+        var row = new HBoxContainer();
+        row.AddThemeConstantOverride("separation", 12);
+        parent.AddChild(row);
+
+        var nameLabel = new Label();
+        nameLabel.Text = name;
+        nameLabel.CustomMinimumSize = new Vector2(140f, 0f);
+        nameLabel.AddThemeFontSizeOverride("font_size", 18);
+        row.AddChild(nameLabel);
+
+        // HP bar — background + fill + overlaid label.
+        var barContainer = new Control();
+        barContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
+        row.AddChild(barContainer);
+
+        var bg = new ColorRect();
+        bg.Size  = new Vector2(BarWidth, BarHeight);
+        bg.Color = new Color(0.15f, 0.05f, 0.05f, 1f);
+        barContainer.AddChild(bg);
+
+        hpFill       = new ColorRect();
+        hpFill.Size  = new Vector2(BarWidth, BarHeight);
+        hpFill.Color = new Color(0.80f, 0.12f, 0.12f, 1f);
+        barContainer.AddChild(hpFill);
+
+        hpLabel = new Label();
+        hpLabel.Size                = new Vector2(BarWidth, BarHeight);
+        hpLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        hpLabel.VerticalAlignment   = VerticalAlignment.Center;
+        hpLabel.AddThemeFontSizeOverride("font_size", 14);
+        barContainer.AddChild(hpLabel);
+    }
+
+    private void BuildPlayerPanel(CanvasLayer layer)
+    {
+        // Panel container anchored to bottom-center.
+        var panel = new PanelContainer();
+        panel.AnchorLeft   = 0.5f;
+        panel.AnchorRight  = 0.5f;
+        panel.AnchorTop    = 1f;
+        panel.AnchorBottom = 1f;
+        panel.GrowHorizontal = Control.GrowDirection.Both;
+        panel.GrowVertical   = Control.GrowDirection.Begin;
+        panel.OffsetBottom = -10f;
+
+        var style = new StyleBoxFlat();
+        style.BgColor      = new Color(0f, 0f, 0f, 0.55f);
+        style.CornerRadiusBottomLeft  = 6;
+        style.CornerRadiusBottomRight = 6;
+        style.CornerRadiusTopLeft     = 6;
+        style.CornerRadiusTopRight    = 6;
+        style.ContentMarginLeft   = 16f;
+        style.ContentMarginRight  = 16f;
+        style.ContentMarginTop    = 10f;
+        style.ContentMarginBottom = 10f;
+        panel.AddThemeStyleboxOverride("panel", style);
+        layer.AddChild(panel);
+
+        // One row per party member — for now just the knight.
+        var vbox = new VBoxContainer();
+        vbox.AddThemeConstantOverride("separation", 6);
+        panel.AddChild(vbox);
+
+        AddPlayerRow(vbox, "Knight",
+                     out _playerHPFill, out _playerHPLabel,
+                     out _playerMPFill, out _playerMPLabel);
+    }
+
+    private void AddPlayerRow(VBoxContainer parent, string name,
+                               out ColorRect hpFill, out Label hpLabel,
+                               out ColorRect mpFill, out Label mpLabel)
+    {
+        // Outer row: name on the left, bars stacked on the right.
+        var row = new HBoxContainer();
+        row.AddThemeConstantOverride("separation", 12);
+        parent.AddChild(row);
+
+        var nameLabel = new Label();
+        nameLabel.Text = name;
+        nameLabel.CustomMinimumSize = new Vector2(140f, 0f);
+        nameLabel.AddThemeFontSizeOverride("font_size", 18);
+        row.AddChild(nameLabel);
+
+        // Vertical stack of HP and MP bars.
+        var bars = new VBoxContainer();
+        bars.AddThemeConstantOverride("separation", 4);
+        row.AddChild(bars);
+
+        // HP bar
+        var hpContainer = new Control();
+        hpContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
+        bars.AddChild(hpContainer);
+
+        var hpBg = new ColorRect();
+        hpBg.Size  = new Vector2(BarWidth, BarHeight);
+        hpBg.Color = new Color(0.15f, 0.05f, 0.05f, 1f);
+        hpContainer.AddChild(hpBg);
+
+        hpFill       = new ColorRect();
+        hpFill.Size  = new Vector2(BarWidth, BarHeight);
+        hpFill.Color = new Color(0.80f, 0.12f, 0.12f, 1f);
+        hpContainer.AddChild(hpFill);
+
+        hpLabel = new Label();
+        hpLabel.Size                = new Vector2(BarWidth, BarHeight);
+        hpLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        hpLabel.VerticalAlignment   = VerticalAlignment.Center;
+        hpLabel.AddThemeFontSizeOverride("font_size", 14);
+        hpContainer.AddChild(hpLabel);
+
+        // MP bar
+        var mpContainer = new Control();
+        mpContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
+        bars.AddChild(mpContainer);
+
+        var mpBg = new ColorRect();
+        mpBg.Size  = new Vector2(BarWidth, BarHeight);
+        mpBg.Color = new Color(0.05f, 0.05f, 0.15f, 1f);
+        mpContainer.AddChild(mpBg);
+
+        mpFill       = new ColorRect();
+        mpFill.Size  = new Vector2(BarWidth, BarHeight);
+        mpFill.Color = new Color(0.15f, 0.30f, 0.85f, 1f);
+        mpContainer.AddChild(mpFill);
+
+        mpLabel = new Label();
+        mpLabel.Size                = new Vector2(BarWidth, BarHeight);
+        mpLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        mpLabel.VerticalAlignment   = VerticalAlignment.Center;
+        mpLabel.AddThemeFontSizeOverride("font_size", 14);
+        mpContainer.AddChild(mpLabel);
     }
 
     /// <summary>

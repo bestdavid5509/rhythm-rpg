@@ -23,7 +23,7 @@ CircleType = 1
 StartOffsetMs = -500
 FlipH = true
 Offset = Vector2(25, -218)
-BaseDamageOverride = 30
+BaseDamageOverride = 25
 
 [sub_resource type="Resource" id="AttackStep_3"]
 script = ExtResource("2_attackstep")
@@ -49,3 +49,4 @@ Offset = Vector2(50, -100)
 [resource]
 script = ExtResource("1_attackdata")
 Steps = Array[ExtResource("2_attackstep")]([SubResource("AttackStep_1"), SubResource("AttackStep_2"), SubResource("AttackStep_3"), SubResource("AttackStep_4")])
+MpCost = 25
