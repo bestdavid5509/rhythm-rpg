@@ -34,6 +34,8 @@ All Size values are **per-frame dimensions** (width × height in pixels).
 | Red_Sword_Plunge_Sheet.png | 18 | 192 × 256 | 2 rows, 9 cols | 6 |
 | Red_Triple_Sword_Plunge_Sheet.png | 19 | 320 × 256 | 4 rows, 5 cols | 6, 7, 8 |
 
+| Anime_Slash_Grey_Sheet.png | 15 | 128 × 128 | 1 row, 15 cols | 0 |
+
 ## Notes
 
 - `Energy comet_many` has no defined impact frame — it is a looping or ambient effect.

@@ -35,6 +35,9 @@ public partial class BattleTest : Node2D
         //
         // _Attack2NoMovement.png (720×80, 6 frames) provides one animation:
         //   "parry" — frames 2–5; plays on every successful enemy-attack parry
+        //
+        // _AttackNoMovement.png (480×80, 4 frames) provides one animation:
+        //   "attack1" — frames 0–3; used for the perfect parry counter swing
         const string Combo = Base + "_AttackComboNoMovement.png";
         int frameH = AddPlayerAnimation(frames, "idle",         Base + "_Idle.png",              loop: true,  fw: Fw, fh: Fh);
                      AddPlayerAnimation(frames, "run",          Base + "_Run.png",               loop: true,  fw: Fw, fh: Fh);
@@ -42,6 +45,7 @@ public partial class BattleTest : Node2D
                      AddPlayerAnimation(frames, "combo_slash1", Combo,                           loop: false, fw: Fw, fh: Fh, startFrame: 1, endFrame: 3);
                      AddPlayerAnimation(frames, "combo_slash2", Combo,                           loop: false, fw: Fw, fh: Fh, startFrame: 6, endFrame: 9);
                      AddPlayerAnimation(frames, "parry",        Base + "_Attack2NoMovement.png", loop: false, fw: Fw, fh: Fh, startFrame: 2, endFrame: 5);
+                     AddPlayerAnimation(frames, "attack1",      Base + "_AttackNoMovement.png",  loop: false, fw: Fw, fh: Fh);
                      AddPlayerAnimation(frames, "cast",            Base + "_CrouchAttack.png",    loop: false, fw: Fw, fh: Fh, startFrame: 0, endFrame: 3);
                      AddPlayerAnimation(frames, "cast_transition", Base + "_CrouchTransition.png", loop: false, fw: Fw, fh: Fh, startFrame: 0, endFrame: 0);
                      AddPlayerAnimation(frames, "hit",          Base + "_Hit.png",               loop: false, fw: Fw, fh: Fh);
@@ -447,6 +451,161 @@ public partial class BattleTest : Node2D
         // parry or hit; in that case let those complete without overriding them.
         if (_playerAnimSprite.Animation == "run")
             PlayPlayer("idle");  // OWNER: OnRetreatFinished — retreat complete
+    }
+
+    // =========================================================================
+    // Perfect parry counter animation
+    // =========================================================================
+
+    /// <summary>
+    /// Plays a staged counter attack animation after a perfect parry:
+    ///   1. attack1 frame 0 held 0.5s (wind-up anticipation)
+    ///   2. attack1 frame 1 held 0.3s (impact pose) — spawns anime slash effect + enemy shake
+    ///   3. attack1 frames 2-3 play through as normal follow-through
+    ///   4. After the slash animation finishes (~1.25s): applies 20 counter damage, updates HP
+    ///   5. Calls onComplete to resume the original post-sequence flow
+    /// </summary>
+    private void PlayParryCounter(Action onComplete)
+    {
+        const int CounterDamage = 20;
+
+        // Disconnect the normal cast_end → idle callback so it doesn't fire during
+        // or after the counter sequence. The counter's onComplete handles the flow.
+        SafeDisconnectEnemyAnim(OnCastEndFinished);
+
+        // Transition enemy out of cast pose via cast_end as the counter begins.
+        // Reconnect OnCastEndFinished so cast_end → idle plays naturally during wind-up.
+        PlayEnemy("cast_end");
+        _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+
+        // Player stays in parry animation until OnParryFinished fires naturally,
+        // which transitions to idle. No need to force idle here.
+
+        // Wind-up: after parry completes, hold attack1 frame 0 for anticipation.
+        GetTree().CreateTimer(0.5f).Timeout += () =>
+        {
+            if (_playerDead) { onComplete?.Invoke(); return; }
+
+            // Hold attack1 frame 0 (wind-up pose) for 0.3s.
+            _playerAnimSprite.Animation = "attack1";
+            StopPlayer();
+            SetPlayerFrame(0);  // OWNER: PlayParryCounter — wind-up anticipation hold
+
+            GetTree().CreateTimer(0.3f).Timeout += () =>
+            {
+                if (_playerDead) { onComplete?.Invoke(); return; }
+
+                // Impact: snap to frame 1, spawn slash effect + shake.
+                SetPlayerFrame(1);  // OWNER: PlayParryCounter — impact pose
+
+                // Spawn anime slash effect centered on the enemy.
+                // Damage is deferred until the slash animation completes.
+                SpawnCounterSlashEffect(() =>
+                {
+                    // Apply counter damage after the slash animation finishes.
+                    SafeDisconnectEnemyAnim(OnCastEndFinished);
+                    PlayEnemy("idle");
+                    _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
+                    GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+                    SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
+                    ShakeCamera(intensity: 10f, duration: 0.3f);
+                    UpdateHPBars();
+                    onComplete?.Invoke();
+                });
+
+                // Shake the enemy sprite for the full duration of the slash (~1.25s).
+                ShakeEnemySprite(passes: 12, duration: 1.25f, intensity: 6f);
+
+                // Follow-through: after a short beat, play frames 2-3 then return to idle.
+                GetTree().CreateTimer(0.2f).Timeout += () =>
+                {
+                    if (_playerDead) return;
+                    // Play attack1 from frame 2 onward (frames 2-3 are the follow-through).
+                    PlayPlayer("attack1");
+                    _playerAnimSprite.Frame = 2;  // skip to follow-through frames
+
+                    Action onFollowThroughFinished = null;
+                    onFollowThroughFinished = () =>
+                    {
+                        SafeDisconnectPlayerAnim(onFollowThroughFinished);
+                        PlayPlayer("idle");  // OWNER: PlayParryCounter — follow-through complete
+                    };
+                    SafeDisconnectPlayerAnim(onFollowThroughFinished);
+                    _playerAnimSprite.AnimationFinished += onFollowThroughFinished;
+                };
+            };
+        };
+    }
+
+    /// <summary>
+    /// Spawns the anime_slash_grey_Sheet.png effect centered on the enemy AnimatedSprite2D.
+    /// The effect plays its full 15 frames at 12fps (~1.25s) then frees itself.
+    /// <paramref name="onComplete"/> fires after the animation finishes and the sprite is freed.
+    /// </summary>
+    private void SpawnCounterSlashEffect(Action onComplete = null)
+    {
+        const string SheetPath = "res://Assets/Effects/Sword_Effects/Anime_Slash_Grey_Sheet.png";
+        const int    Fw        = 128;
+        const int    Fh        = 128;
+        const int    FrameCount = 15;
+        const float  Fps       = 12f;
+
+        var texture = GD.Load<Texture2D>(SheetPath);
+        if (texture == null)
+        {
+            GD.PrintErr($"[BattleTest] Failed to load counter slash effect: {SheetPath}");
+            return;
+        }
+
+        var frames = new SpriteFrames();
+        if (frames.HasAnimation("default")) frames.RemoveAnimation("default");
+        frames.AddAnimation("slash");
+        frames.SetAnimationSpeed("slash", Fps);
+        frames.SetAnimationLoop("slash", false);
+
+        for (int i = 0; i < FrameCount; i++)
+        {
+            var atlas    = new AtlasTexture();
+            atlas.Atlas  = texture;
+            atlas.Region = new Rect2(i * Fw, 0, Fw, Fh);
+            frames.AddFrame("slash", atlas);
+        }
+
+        var sprite = new AnimatedSprite2D();
+        sprite.SpriteFrames = frames;
+        sprite.Centered     = true;
+        sprite.Scale        = new Vector2(3f, 3f);
+        sprite.Position     = _enemyAnimSprite.Position;
+        AddChild(sprite);
+        sprite.Play("slash");
+
+        // Self-destruct when done, then fire the completion callback.
+        Action onFinished = null;
+        onFinished = () =>
+        {
+            sprite.AnimationFinished -= onFinished;
+            sprite.QueueFree();
+            onComplete?.Invoke();
+        };
+        sprite.AnimationFinished += onFinished;
+    }
+
+    /// <summary>
+    /// Rapidly oscillates the enemy sprite horizontally to convey impact during the counter slash.
+    /// </summary>
+    private void ShakeEnemySprite(int passes, float duration, float intensity)
+    {
+        if (_enemyDead) return;
+        Vector2 origin = _enemyAnimSprite.Position;
+        float passTime = duration / passes;
+
+        var tween = CreateTween();
+        for (int i = 0; i < passes; i++)
+        {
+            float dir = (i % 2 == 0) ? intensity : -intensity;
+            tween.TweenProperty(_enemyAnimSprite, "position:x", origin.X + dir, passTime * 0.5f);
+            tween.TweenProperty(_enemyAnimSprite, "position:x", origin.X,       passTime * 0.5f);
+        }
     }
 
     // =========================================================================

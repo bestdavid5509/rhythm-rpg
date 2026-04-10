@@ -565,79 +565,75 @@ public partial class BattleTest : Node2D
 
         if (_battleSystem.CurrentAttackIsHopIn)
         {
-            // Apply the parry counter before checking game over.
-            if (_parryClean)
+            // Hop-in path continuation — runs after counter animation (if any) completes.
+            void HopInContinuation()
             {
-                const int CounterDamage = 20;
-                _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
-                GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
-                SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
-                ShakeCamera(intensity: 10f, duration: 0.3f);
+                UpdateHPBars();
+                _hopInOver              = CheckGameOver();
+                _hopInSequenceCompleted = true;
+
+                // Don't call PlayTeardown here — OnEnemyAttackAnimFinished handles it once the
+                // animation finishes (and PostAnimationDelayMs has elapsed). If the animation
+                // already finished before us, fire the proceed path now.
+                if (_hopInAnimFinished)
+                    ProceedAfterHopInAnim();
             }
 
+            if (_parryClean)
+                PlayParryCounter(HopInContinuation);
+            else
+                HopInContinuation();
+            return;
+        }
+
+        // Non-hop-in path continuation — runs after counter animation (if any) completes.
+        // skipCastEnd: true when called from PlayParryCounter (which already played cast_end).
+        void NonHopInContinuation(bool skipCastEnd)
+        {
             UpdateHPBars();
-            _hopInOver              = CheckGameOver();
-            _hopInSequenceCompleted = true;
+            bool over = CheckGameOver();
 
-            // Don't call PlayTeardown here — OnEnemyAttackAnimFinished handles it once the
-            // animation finishes (and PostAnimationDelayMs has elapsed). If the animation
-            // already finished before us, fire the proceed path now.
-            if (_hopInAnimFinished)
-                ProceedAfterHopInAnim();
-            return;
+            if (!over)
+            {
+                if (!skipCastEnd)
+                {
+                    // Normal completion — enemy plays cast_end then returns to idle; menu reappears.
+                    SafeDisconnectEnemyAnim(OnCastEndFinished);
+                    PlayEnemy("cast_end");
+                    _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+                }
+                PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += ShowMenu);
+                return;
+            }
+
+            // Game over — determine which side is dead and play the appropriate death animation.
+            PlayTeardown(null);
+
+            if (_playerHP <= 0)
+            {
+                if (!skipCastEnd)
+                {
+                    SafeDisconnectEnemyAnim(OnCastEndFinished);
+                    PlayEnemy("cast_end");
+                    _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+                }
+                _playerDead = true;
+                _playerAnimSprite.Play("death");
+                _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+            }
+            else // _enemyHP <= 0 — perfect parry counter killed the enemy
+            {
+                _enemyDead = true;
+                _enemyAnimSprite.Play("death");
+                _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+                PlayPlayer("idle");
+            }
         }
 
-        // Per-pass damage and _parryClean are tracked in OnEnemyPassEvaluated.
-        // Only the parry counter fires here, after all passes have been evaluated.
         if (_parryClean)
-        {
-            const int CounterDamage = 20;
-            _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
-            GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
-            SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
-            ShakeCamera(intensity: 10f, duration: 0.3f);  // heavy shake — counter lands hard
-        }
-
-        UpdateHPBars();
-        bool over = CheckGameOver();
-
-        if (!over)
-        {
-            // Normal completion — enemy plays cast_end then returns to idle; menu reappears.
-            // cast_end (≈0.25s) completes before the 0.5s post-teardown delay, so idle is
-            // reached well before the player menu shows.
-            // SafeDisconnect first — prevents stacking across multiple enemy turns.
-            SafeDisconnectEnemyAnim(OnCastEndFinished);
-            PlayEnemy("cast_end");
-            _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
-            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += ShowMenu);
-            return;
-        }
-
-        // Game over — determine which side is dead and play the appropriate death animation.
-        // PlayTeardown resets the camera without scheduling a next turn.
-        PlayTeardown(null);
-
-        if (_playerHP <= 0)
-        {
-            // Enemy's attack landed the killing blow.
-            // Enemy completes the cast_end pose normally; player plays death.
-            // SafeDisconnect first — prevents stacking if this path is reached after turn 1.
-            SafeDisconnectEnemyAnim(OnCastEndFinished);
-            PlayEnemy("cast_end");
-            _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
-            _playerDead = true;
-            _playerAnimSprite.Play("death");            // OWNER: player death — interrupts current animation
-            _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
-        }
-        else // _enemyHP <= 0 — perfect parry counter killed the enemy
-        {
-            // Enemy plays death (interrupts the cast pose); player returns to idle.
-            _enemyDead = true;
-            _enemyAnimSprite.Play("death");             // OWNER: enemy death from parry counter
-            _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
-            PlayPlayer("idle");                         // OWNER: sequence over, player at rest
-        }
+            PlayParryCounter(() => NonHopInContinuation(skipCastEnd: true));
+        else
+            NonHopInContinuation(skipCastEnd: false);
     }
 
     // =========================================================================
