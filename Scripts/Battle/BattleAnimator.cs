@@ -274,7 +274,7 @@ public partial class BattleTest : Node2D
             if (_playerDead) return;
             _targetZone.Position = _playerMagicPromptPos;
             _targetZone.Visible  = true;
-            _battleSystem.SetAttack(_playerMagicAttack);
+            _battleSystem.SetAttack(_activeMagicAttack);
             _battleSystem.StartSequence(this, _playerMagicDefenderCenter, _playerMagicPromptPos, isPlayerAttack: true);
         };
     }

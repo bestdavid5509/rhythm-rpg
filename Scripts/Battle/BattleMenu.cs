@@ -15,9 +15,11 @@ public partial class BattleTest : Node2D
     private static readonly bool[]   MenuOptionEnabled = { true,     true,             true   };
 
     // Absorbed Moves submenu — absorbed attack entries followed by "Back".
-    // SubMenuOptionCategories mirrors the labels array; null means no category (Back, etc.).
-    private static readonly string[]          SubMenuOptionBaseLabels = { "Combo Strike", "Comet", "Back" };
-    private static readonly AttackCategory?[] SubMenuOptionCategories = { AttackCategory.Physical, AttackCategory.Magic, null };
+    // Built dynamically; RebuildSubMenu() appends absorbed moves at runtime.
+    // TODO: submenu population should eventually be driven by the player's persistent move list from the character system
+    private System.Collections.Generic.List<string>          _subMenuLabelsData;
+    private System.Collections.Generic.List<AttackCategory?> _subMenuCategoriesData;
+    private System.Collections.Generic.List<AttackData>      _subMenuAttacksData;  // null for Back
 
     // Items submenu — items followed by "Back".
     private static readonly string[] ItemMenuOptionLabels = { "Ether (20 MP)", "Back" };
@@ -73,18 +75,10 @@ public partial class BattleTest : Node2D
             _menuLabels[i] = label;
         }
 
-        // Absorbed Moves submenu — Combo Strike / Comet / Back.
-        _subMenuPanel  = MakePanel(_menuLayer);
-        _subMenuLabels = new Label[SubMenuOptionBaseLabels.Length];
-        var subVBox    = _subMenuPanel.GetChild<VBoxContainer>(0);
-        for (int i = 0; i < SubMenuOptionBaseLabels.Length; i++)
-        {
-            var label = new Label();
-            label.AddThemeFontSizeOverride("font_size", 24);
-            label.HorizontalAlignment = HorizontalAlignment.Left;
-            subVBox.AddChild(label);
-            _subMenuLabels[i] = label;
-        }
+        // Absorbed Moves submenu — built dynamically from _subMenuLabelsData.
+        _subMenuPanel = MakePanel(_menuLayer);
+        InitSubMenuData();
+        PopulateSubMenuPanel();
 
         // Items submenu — Ether / Back.
         _itemMenuPanel  = MakePanel(_menuLayer);
@@ -145,6 +139,52 @@ public partial class BattleTest : Node2D
         _menuLayer.Visible = false;
     }
 
+    /// <summary>
+    /// Populates the base submenu data lists (Combo Strike, Comet, Back).
+    /// Called once from BuildMenu.
+    /// </summary>
+    private void InitSubMenuData()
+    {
+        _subMenuLabelsData     = new System.Collections.Generic.List<string>          { "Combo Strike", "Comet", "Back" };
+        _subMenuCategoriesData = new System.Collections.Generic.List<AttackCategory?> { AttackCategory.Physical, AttackCategory.Magic, null };
+        _subMenuAttacksData    = new System.Collections.Generic.List<AttackData>      { null, null, null };  // resolved in GetSubMenuAttack
+    }
+
+    /// <summary>
+    /// Creates Label nodes in the submenu panel to match _subMenuLabelsData.
+    /// </summary>
+    private void PopulateSubMenuPanel()
+    {
+        var subVBox = _subMenuPanel.GetChild<VBoxContainer>(0);
+        // Clear existing labels.
+        foreach (var child in subVBox.GetChildren())
+            child.QueueFree();
+
+        _subMenuLabels = new Label[_subMenuLabelsData.Count];
+        for (int i = 0; i < _subMenuLabelsData.Count; i++)
+        {
+            var label = new Label();
+            label.AddThemeFontSizeOverride("font_size", 24);
+            label.HorizontalAlignment = HorizontalAlignment.Left;
+            subVBox.AddChild(label);
+            _subMenuLabels[i] = label;
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the Absorbed Moves submenu to include the just-absorbed move.
+    /// Called from TryTriggerAbsorption when _absorbedMoveAttack is loaded.
+    /// </summary>
+    private void RebuildSubMenu()
+    {
+        // Insert the absorbed move before "Back" (last entry).
+        int backIndex = _subMenuLabelsData.Count - 1;
+        _subMenuLabelsData.Insert(backIndex, "Comet Barrage");
+        _subMenuCategoriesData.Insert(backIndex, AttackCategory.Magic);
+        _subMenuAttacksData.Insert(backIndex, _absorbedMoveAttack);
+        PopulateSubMenuPanel();
+    }
+
     private void HandleMenuInput(InputEvent @event)
     {
         if (@event.IsActionPressed("ui_up"))
@@ -184,7 +224,7 @@ public partial class BattleTest : Node2D
 
     private void NavigateSubMenu(int direction)
     {
-        int count = SubMenuOptionBaseLabels.Length;
+        int count = _subMenuLabelsData.Count;
         int next  = _subMenuIndex;
         for (int i = 0; i < count; i++)
         {
@@ -231,20 +271,33 @@ public partial class BattleTest : Node2D
     private void ConfirmSubMenuSelection()
     {
         if (!IsSubMenuOptionEnabled(_subMenuIndex)) return;
-        GD.Print($"[BattleTest] Player selects submenu: {SubMenuOptionBaseLabels[_subMenuIndex]}.");
-        switch (_subMenuIndex)
+        string label = _subMenuLabelsData[_subMenuIndex];
+        GD.Print($"[BattleTest] Player selects submenu: {label}.");
+
+        // "Back" is always the last entry.
+        if (_subMenuIndex == _subMenuLabelsData.Count - 1)
         {
-            case 0:  // Combo Strike (Physical, MpCost=0)
-                if (_playerComboStrike != null && _playerComboStrike.MpCost > 0)
-                    _playerMp -= _playerComboStrike.MpCost;
-                HideMenu(); _isComboAttack = true; BeginPlayerAttack();
-                break;
-            case 1:  // Comet (Magic)
-                if (_playerMagicAttack != null)
-                    _playerMp -= _playerMagicAttack.MpCost;
-                HideMenu(); BeginPlayerMagicAttack();
-                break;
-            case 2: ShowMenu(); break;  // Back
+            ShowMenu();
+            return;
+        }
+
+        var attack   = GetSubMenuAttack(_subMenuIndex);
+        var category = _subMenuCategoriesData[_subMenuIndex];
+
+        if (category == AttackCategory.Physical)
+        {
+            // Physical moves (Combo Strike) — combo attack flow.
+            if (attack != null && attack.MpCost > 0)
+                _playerMp -= attack.MpCost;
+            HideMenu(); _isComboAttack = true; BeginPlayerAttack();
+        }
+        else if (category == AttackCategory.Magic)
+        {
+            // Magic moves (Comet, Comet Barrage, etc.) — magic attack flow.
+            if (attack != null)
+                _playerMp -= attack.MpCost;
+            _activeMagicAttack = attack;
+            HideMenu(); BeginPlayerMagicAttack();
         }
     }
 
@@ -264,15 +317,19 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Returns the AttackData associated with a submenu index, or null for non-attack entries (Back).
+    /// Indices 0 and 1 are the hardcoded base moves; further entries come from _subMenuAttacksData.
     /// </summary>
     private AttackData GetSubMenuAttack(int index)
     {
-        return index switch
-        {
-            0 => _playerComboStrike,   // Combo Strike
-            1 => _playerMagicAttack,   // Comet
-            _ => null,
-        };
+        // Back (last entry) has no attack.
+        if (index == _subMenuLabelsData.Count - 1) return null;
+
+        // Base hardcoded moves.
+        if (index == 0) return _playerComboStrike;
+        if (index == 1) return _playerMagicAttack;
+
+        // Dynamically added absorbed moves.
+        return _subMenuAttacksData[index];
     }
 
     /// <summary>
@@ -296,14 +353,14 @@ public partial class BattleTest : Node2D
             bool enabled  = IsSubMenuOptionEnabled(i);
 
             var attack = GetSubMenuAttack(i);
-            string label = SubMenuOptionBaseLabels[i];
+            string label = _subMenuLabelsData[i];
             if (attack != null && attack.MpCost > 0)
                 label += $" ({attack.MpCost} MP)";
 
             string prefix = (selected && enabled) ? "▶ " : "  ";
             _subMenuLabels[i].Text = prefix + label;
 
-            Color baseColor = SubMenuOptionCategories[i] switch
+            Color baseColor = _subMenuCategoriesData[i] switch
             {
                 AttackCategory.Physical => ColorCategoryPhysical,
                 AttackCategory.Magic    => ColorCategoryMagic,

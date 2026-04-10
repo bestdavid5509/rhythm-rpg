@@ -12,6 +12,7 @@ ImpactFrames = PackedInt32Array(11)
 CircleType = 2
 BounceCount = 4
 Offset = Vector2(-15, -310)
+PlayerOffset = Vector2(0, -310)
 
 [sub_resource type="Resource" id="AttackStep_2"]
 script = ExtResource("2_attackstep")
@@ -23,6 +24,7 @@ BounceCount = 0
 StartOffsetMs = -250
 FlipH = true
 Offset = Vector2(-30, -320)
+PlayerOffset = Vector2(-15, -320)
 
 [sub_resource type="Resource" id="AttackStep_3"]
 script = ExtResource("2_attackstep")
@@ -33,6 +35,7 @@ ImpactFrames = PackedInt32Array(11)
 BounceCount = 0
 StartOffsetMs = 500
 Offset = Vector2(0, -320)
+PlayerOffset = Vector2(15, -320)
 
 [sub_resource type="Resource" id="AttackStep_4"]
 script = ExtResource("2_attackstep")
@@ -44,6 +47,7 @@ BounceCount = 0
 StartOffsetMs = 500
 FlipH = true
 Offset = Vector2(-30, -320)
+PlayerOffset = Vector2(-15, -320)
 
 [sub_resource type="Resource" id="AttackStep_5"]
 script = ExtResource("2_attackstep")
@@ -54,6 +58,7 @@ ImpactFrames = PackedInt32Array(11)
 BounceCount = 0
 StartOffsetMs = 500
 Offset = Vector2(0, -320)
+PlayerOffset = Vector2(15, -320)
 
 [resource]
 script = ExtResource("1_attackdata")

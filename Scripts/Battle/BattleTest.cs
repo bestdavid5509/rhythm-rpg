@@ -69,6 +69,10 @@ public partial class BattleTest : Node2D
     // Checked when PromptCompleted fires to decide whether to trigger the auto counter.
     private bool _parryClean;
 
+    // True once the player has absorbed the enemy's learnable move via perfect parry.
+    // Prevents the absorption moment from triggering more than once per fight.
+    private bool _hasAbsorbedLearnableMove = false;
+
     // =========================================================================
     // Damage numbers
     // =========================================================================
@@ -156,6 +160,11 @@ public partial class BattleTest : Node2D
     private AttackData _playerMagicAttack;
     private AttackData _playerBasicAttack;   // player_basic_attack.tres — Physical, BaseDamage 10
     private AttackData _playerComboStrike;   // player_combo_strike.tres — Physical, BaseDamage 6
+    private AttackData _absorbedMoveAttack;  // loaded on absorption; null until then
+
+    // Set before BeginPlayerMagicAttack() to select which magic attack the cast flow uses.
+    // OnPlayerCastFinished reads this instead of _playerMagicAttack directly.
+    private AttackData _activeMagicAttack;
 
     // Set at the start of each combo turn; cleared in BeginPlayerAttack and BeginComboMissRetreat.
     // When true, OnComboPassNSlashFinished skips the wind-up hold and triggers the retreat instead.
@@ -354,8 +363,10 @@ public partial class BattleTest : Node2D
         var selectedAttack = SelectEnemyAttack();
         _battleSystem.SetAttack(selectedAttack);
 
-        // Signal the player when the enemy uses its learnable move.
-        if (EnemyData?.LearnableAttack != null && selectedAttack == EnemyData.LearnableAttack)
+        // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
+        if (!_hasAbsorbedLearnableMove
+            && EnemyData?.LearnableAttack != null
+            && selectedAttack == EnemyData.LearnableAttack)
         {
             ShowLearnableSignal();
             FlashEnemyWhite();
@@ -580,7 +591,10 @@ public partial class BattleTest : Node2D
             }
 
             if (_parryClean)
+            {
+                TryTriggerAbsorption();
                 PlayParryCounter(HopInContinuation);
+            }
             else
                 HopInContinuation();
             return;
@@ -631,7 +645,10 @@ public partial class BattleTest : Node2D
         }
 
         if (_parryClean)
+        {
+            TryTriggerAbsorption();
             PlayParryCounter(() => NonHopInContinuation(skipCastEnd: true));
+        }
         else
             NonHopInContinuation(skipCastEnd: false);
     }
@@ -927,6 +944,32 @@ public partial class BattleTest : Node2D
     public void ShowBattleMessage(string text) => _battleMessage.Show(text);
 
     private void ShowLearnableSignal() => ShowBattleMessage("If I watch carefully...");
+
+    /// <summary>
+    /// If the just-completed enemy attack was the learnable move and the player perfect-parried it,
+    /// triggers the absorption moment (message + flash). No-ops if already absorbed.
+    /// Called immediately before PlayParryCounter in OnEnemySequenceCompleted.
+    /// </summary>
+    private void TryTriggerAbsorption()
+    {
+        if (_hasAbsorbedLearnableMove) return;
+
+        var currentAttack = _battleSystem.GetCurrentAttack();
+        if (EnemyData?.LearnableAttack == null || currentAttack != EnemyData.LearnableAttack) return;
+
+        _hasAbsorbedLearnableMove = true;
+        // TODO: when player state/character system is built, add absorbed move to player's persistent move list here
+
+        _absorbedMoveAttack = GD.Load<AttackData>("res://Resources/Attacks/repeating_comet_barrage.tres");
+        if (_absorbedMoveAttack == null)
+            GD.PrintErr("[BattleTest] Failed to load repeating_comet_barrage.tres");
+        else
+            RebuildSubMenu();
+
+        ShowBattleMessage("I've got it.");
+        FlashEnemyWhite();
+        GD.Print("[BattleTest] Absorbed learnable move!");
+    }
 
     /// <summary>
     /// Flashes the enemy sprite white 3 times over ~0.6s using the WhiteFlash shader.
