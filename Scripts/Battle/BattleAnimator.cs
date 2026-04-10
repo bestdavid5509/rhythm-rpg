@@ -165,6 +165,21 @@ public partial class BattleTest : Node2D
         AddEnemyAnimation(frames, texture, "cast_end",   row: 3, count:  3, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: 18);
         AddEnemyAnimation(frames, texture, "death",      row: 6, count: 15, fw: Fw, fh: Fh, fps: 12f, loop: false);
 
+        // Hurt animations from a separate single-row sheet (2240×160, 160×160 per frame, 14 cols).
+        // hurt_flash: frames 0–3 (quick flash for normal damage reactions)
+        // hurt_full:  all 14 frames (flash + extended hold for parry counter impact)
+        const string HurtSheetPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior__red_damaged_with_flash-Sheet.png";
+        var hurtTexture = GD.Load<Texture2D>(HurtSheetPath);
+        if (hurtTexture != null)
+        {
+            AddEnemyAnimation(frames, hurtTexture, "hurt_flash", row: 0, count:  4, fw: Fw, fh: Fh, fps: 12f, loop: false);
+            AddEnemyAnimation(frames, hurtTexture, "hurt_full",  row: 0, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: false);
+        }
+        else
+        {
+            GD.PrintErr($"[BattleTest] Could not load enemy hurt sheet: {HurtSheetPath}");
+        }
+
         // Append one fully-transparent 160×160 frame at the end of the death animation,
         // held for ~0.5 s so the Victory label appears only after death particles have
         // fully dissipated rather than cutting in mid-effect.
@@ -498,11 +513,33 @@ public partial class BattleTest : Node2D
                 // Impact: snap to frame 1, spawn slash effect + shake.
                 SetPlayerFrame(1);  // OWNER: PlayParryCounter — impact pose
 
+                // Play hurt_full once (flash frames 0–3 + hold frames 4–13).
+                // When it finishes, loop back to frame 3 (skipping the flash) so the
+                // enemy stays visibly in the hurt pose until the slash effect completes.
+                // TODO: Standard enemies should just hold on frame 3 (StopEnemy() after
+                // hurt_flash completes) rather than looping the full animation. The
+                // 8 Sword Warrior's large sprite needs the subtle idle-hurt motion to
+                // avoid looking frozen, hence the loop approach here.
+                Action onHurtFullFinished = null;
+                onHurtFullFinished = () =>
+                {
+                    SafeDisconnectEnemyAnim(onHurtFullFinished);
+                    if (_enemyDead) return;
+                    // Restart from frame 3 (first non-flash hurt pose) to loop the hold.
+                    PlayEnemy("hurt_full");
+                    _enemyAnimSprite.Frame = 3;
+                    _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
+                };
+                SafeDisconnectEnemyAnim(onHurtFullFinished);
+                PlayEnemy("hurt_full");
+                _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
+
                 // Spawn anime slash effect centered on the enemy.
                 // Damage is deferred until the slash animation completes.
                 SpawnCounterSlashEffect(() =>
                 {
-                    // Apply counter damage after the slash animation finishes.
+                    // Break the hurt loop and apply counter damage.
+                    SafeDisconnectEnemyAnim(onHurtFullFinished);
                     SafeDisconnectEnemyAnim(OnCastEndFinished);
                     PlayEnemy("idle");
                     _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
@@ -510,6 +547,7 @@ public partial class BattleTest : Node2D
                     SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
                     ShakeCamera(intensity: 10f, duration: 0.3f);
                     UpdateHPBars();
+                    PlayPlayer("idle");  // OWNER: PlayParryCounter — slash done, release held pose
                     onComplete?.Invoke();
                 });
 
@@ -528,7 +566,9 @@ public partial class BattleTest : Node2D
                     onFollowThroughFinished = () =>
                     {
                         SafeDisconnectPlayerAnim(onFollowThroughFinished);
-                        PlayPlayer("idle");  // OWNER: PlayParryCounter — follow-through complete
+                        // Hold on frame 3 (last attack1 frame) until slash effect completes.
+                        StopPlayer();
+                        SetPlayerFrame(3);  // OWNER: PlayParryCounter — hold final pose until slash done
                     };
                     SafeDisconnectPlayerAnim(onFollowThroughFinished);
                     _playerAnimSprite.AnimationFinished += onFollowThroughFinished;
@@ -606,6 +646,29 @@ public partial class BattleTest : Node2D
             tween.TweenProperty(_enemyAnimSprite, "position:x", origin.X + dir, passTime * 0.5f);
             tween.TweenProperty(_enemyAnimSprite, "position:x", origin.X,       passTime * 0.5f);
         }
+    }
+
+    // =========================================================================
+    // Enemy hurt reaction
+    // =========================================================================
+
+    /// <summary>
+    /// Plays the short hurt_flash animation (frames 0–3: pose → white → red → pose)
+    /// then returns to idle via AnimationFinished. Used for all normal player damage
+    /// (basic attack, magic, combo passes). The parry counter uses hurt_full instead.
+    /// </summary>
+    private void PlayEnemyHurtFlash()
+    {
+        if (_enemyDead) return;
+        SafeDisconnectEnemyAnim(OnEnemyHurtFlashFinished);
+        PlayEnemy("hurt_flash");
+        _enemyAnimSprite.AnimationFinished += OnEnemyHurtFlashFinished;
+    }
+
+    private void OnEnemyHurtFlashFinished()
+    {
+        SafeDisconnectEnemyAnim(OnEnemyHurtFlashFinished);
+        PlayEnemy("idle");
     }
 
     // =========================================================================

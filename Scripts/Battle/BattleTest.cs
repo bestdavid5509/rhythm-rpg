@@ -721,6 +721,7 @@ public partial class BattleTest : Node2D
         GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
         SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
+        PlayEnemyHurtFlash();
 
         UpdateHPBars();
         _pendingGameOver = CheckGameOver();
@@ -762,6 +763,7 @@ public partial class BattleTest : Node2D
         GD.Print($"[BattleTest] Magic hit deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
         SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
+        PlayEnemyHurtFlash();
         UpdateHPBars();
     }
 
@@ -1390,6 +1392,7 @@ public partial class BattleTest : Node2D
                  $"Enemy HP: {_enemyHP}/{_enemyMaxHP}");
         SpawnDamageNumber(EnemyDamageOrigin, comboDamage, comboDmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
+        PlayEnemyHurtFlash();
         UpdateHPBars();
 
         if (comboDmgResult == TimingPrompt.InputResult.Miss)

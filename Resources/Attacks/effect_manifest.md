@@ -36,6 +36,16 @@ All Size values are **per-frame dimensions** (width × height in pixels).
 
 | Anime_Slash_Grey_Sheet.png | 15 | 128 × 128 | 1 row, 15 cols | 0 |
 
+## Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/
+
+| File | Frames | Size (per frame) | Layout | Notes |
+|------|--------|-----------------|--------|-------|
+| 8_sword_warrior__red_damaged_with_flash-Sheet.png | 14 | 160 × 160 | 1 row, 14 cols | 0: hurt pose, 1: white flash, 2: red flash, 3: hurt pose, 4–13: hurt hold |
+
+Animations:
+- `hurt_flash`: frames 0–3 (quick flash sequence)
+- `hurt_full`: all 14 frames (flash + extended hold for parry counter)
+
 ## Notes
 
 - `Energy comet_many` has no defined impact frame — it is a looping or ambient effect.
