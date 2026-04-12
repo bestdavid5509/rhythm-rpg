@@ -20,7 +20,7 @@
 |---|---|---|---|
 | Player damage hit sound | F.M.Audio | CC-BY 4.0 — credit required | "Hitting Cabbage Against Wooden Door Frame 1.wav" — https://freesound.org/people/F.M.Audio/sounds/547580 |
 | RPG Sound Pack (sword swing and others TBD) | artisticdude | CC0 — no attribution required | https://opengameart.org/content/rpg-sound-pack |
-| Enemy/magic impact (plunging swords and comets) | mikiko850 | CC-BY 4.0 — credit required | "Powerful Magic Fireball Impact" — https://freesound.org/people/mikiko850/sounds/848736 |
+| Magic impact sound | EminYILDIRIM | CC-BY 4.0 — credit required | "Magic Fire Spell Impact & Punch" — https://freesound.org/people/EminYILDIRIM/sounds/541478 |
 | Fire hammer swipe impact | SonoFxAudio | CC-BY 4.0 — credit required | "Sword_Fire01.wav" — https://freesound.org/people/SonoFxAudio/sounds/649361 |
 | Enemy hit impact (TBD which variant) | CogFireStudios | CC0 — no attribution required | "Hits and Swings" pack — https://freesound.org/people/CogFireStudios/packs/30820 (sounds 547036, 547041, 547042) |
 | Parry/block sound (candidate) | JohnBuhr | CC0 | "Sword_Clash (7).wav" — https://freesound.org/people/JohnBuhr/sounds/326868 |
@@ -42,7 +42,7 @@
 | Battle victory sting (candidate 2) | Dylan Kelk / SilverIllusionist | CC-BY 4.0 — credit required, credit as "Dylan Kelk/SilverIllusionist (Freesound)" | "Mission Complete (Divine Radiance) 2" — https://freesound.org/people/SilverIllusionist/sounds/835009 |
 | UI audio | Kenney | CC0 | UI Audio pack — https://kenney.nl/assets/ui-audio |
 | Multi-cut slash effect (counter attack) | Corruptinator | CC-BY 4.0 — credit required | "Whoosh Flurry 2.wav" — https://freesound.org/people/Corruptinator/sounds/457169 |
-| Counter attack sword swing | Squirrel_404 | CC-BY 4.0 — credit required (derivative work, see below) | "Large sword swing" — https://freesound.org/people/Squirrel_404/sounds/737748 |
+| Counter attack sword swing | Squirrel_404 | CC-BY 4.0 — credit required (derivative work) | "Large sword swing" — https://freesound.org/people/Squirrel_404/sounds/737748 |
 | Counter attack sword swing (source 1) | Artninja | CC-BY 4.0 — credit required | "Sword_whoosh_sound.mp3" — https://freesound.org/s/700220 |
 | Counter attack sword swing (source 2) | julianmateo_ | CC-BY 4.0 — credit required | Metallic layer — https://freesound.org/people/julianmateo_/sounds/522701 |
 
