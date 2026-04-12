@@ -13,6 +13,8 @@ CircleType = 2
 BounceCount = 4
 Offset = Vector2(-15, -310)
 PlayerOffset = Vector2(0, -310)
+SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/magic_impact.wav")
+SoundTriggerFrames = PackedInt32Array(10, 11)
 
 [sub_resource type="Resource" id="AttackStep_2"]
 script = ExtResource("2_attackstep")
@@ -25,6 +27,8 @@ StartOffsetMs = -250
 FlipH = true
 Offset = Vector2(-30, -320)
 PlayerOffset = Vector2(-15, -320)
+SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/magic_impact.wav")
+SoundTriggerFrames = PackedInt32Array(9, 11)
 
 [sub_resource type="Resource" id="AttackStep_3"]
 script = ExtResource("2_attackstep")
@@ -36,6 +40,8 @@ BounceCount = 0
 StartOffsetMs = 500
 Offset = Vector2(0, -320)
 PlayerOffset = Vector2(15, -320)
+SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/magic_impact.wav")
+SoundTriggerFrames = PackedInt32Array(9, 11)
 
 [sub_resource type="Resource" id="AttackStep_4"]
 script = ExtResource("2_attackstep")
@@ -48,6 +54,8 @@ StartOffsetMs = 500
 FlipH = true
 Offset = Vector2(-30, -320)
 PlayerOffset = Vector2(-15, -320)
+SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/magic_impact.wav")
+SoundTriggerFrames = PackedInt32Array(9, 11)
 
 [sub_resource type="Resource" id="AttackStep_5"]
 script = ExtResource("2_attackstep")
@@ -59,6 +67,8 @@ BounceCount = 0
 StartOffsetMs = 500
 Offset = Vector2(0, -320)
 PlayerOffset = Vector2(15, -320)
+SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/magic_impact.wav")
+SoundTriggerFrames = PackedInt32Array(9, 11)
 
 [resource]
 script = ExtResource("1_attackdata")

@@ -388,7 +388,7 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 | Counter slash multi hit | counter_slash_multi.wav | — | — | Plays when slash effect spawns |
 | Magic launch | magic_launch.wav | CrouchAttack | 0 | When comet leaves player |
 | Magic impact | magic_impact.wav | Blue_Magic_Comet_Sheet | 5 | At circle close on magic attacks |
-| Fire hammer | fire_hammer.wav | Red_Fire_Hammer_Swipe_Sheet | 0 | At animation start on hammer attacks |
+| Fire hammer | fire_hammer.wav | Red_Fire_Hammer_Swipe_Sheet | 6 | At impact frame on hammer attacks |
 | Parry clash | parry_clash.wav | _Attack2NoMovement | 2 | First frame of parry animation (sheet frames 2–5) |
 
 ## Known Next Steps

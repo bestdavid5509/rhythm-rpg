@@ -302,6 +302,9 @@ public partial class BattleSystem : Node
         if (!string.IsNullOrEmpty(step.SpritesheetPath))
             GetTree().CreateTimer(animStartDelay).Timeout += () => SpawnEffectSprite(step, animStartFrame);
 
+        // Schedule frame-synced sound effects for the first animation play.
+        ScheduleStepSounds(step, animStartFrame, animStartDelay);
+
         // Spawn one circle per impact frame, staggered so each closes exactly when its
         // frame plays in the animation:
         //   circleSpawnDelay[i] = (ImpactFrames[i] - ImpactFrames[0]) / fps
@@ -352,6 +355,9 @@ public partial class BattleSystem : Node
                         {
                             GetTree().CreateTimer(replayDelay).Timeout +=
                                 () => SpawnEffectSprite(step, animStartFrame);
+
+                            // Replay frame-synced sounds in sync with the replayed animation.
+                            ScheduleStepSounds(step, animStartFrame, replayDelay);
                         }
                     };
                 }
@@ -500,6 +506,52 @@ public partial class BattleSystem : Node
 
         GD.Print($"[BattleSystem]   Spawned effect ({cols}×{rows} grid, {totalFrames} frames) " +
                  $"startFrame={clampedStart}  Fps={step.Fps}  at {sprite.Position}.");
+    }
+
+    // =========================================================================
+    // Audio
+    // =========================================================================
+
+    /// <summary>
+    /// Schedules frame-synced sounds from a step's SoundEffects/SoundTriggerFrames arrays.
+    /// Each sound plays at baseDelay + (triggerFrame - animStartFrame) / fps seconds from now.
+    /// Called once in RunStep for the initial play, and again on each bouncing replay.
+    /// </summary>
+    private void ScheduleStepSounds(AttackStep step, int animStartFrame, float baseDelay)
+    {
+        if (step.SoundEffects == null || step.SoundEffects.Length == 0) return;
+
+        int soundCount = Mathf.Min(step.SoundEffects.Length, step.SoundTriggerFrames.Length);
+        for (int s = 0; s < soundCount; s++)
+        {
+            string soundPath    = step.SoundEffects[s];
+            int    triggerFrame = step.SoundTriggerFrames[s];
+            float  soundDelay  = baseDelay + Mathf.Max(0f, (triggerFrame - animStartFrame) / step.Fps);
+
+            if (soundDelay <= 0f)
+                PlaySound(soundPath);
+            else
+                GetTree().CreateTimer(soundDelay).Timeout += () => PlaySound(soundPath);
+        }
+    }
+
+    /// <summary>
+    /// Fire-and-forget one-shot sound playback. Accepts a full res:// path.
+    /// Creates a temporary AudioStreamPlayer that frees itself when done.
+    /// </summary>
+    private void PlaySound(string resPath)
+    {
+        var stream = GD.Load<AudioStream>(resPath);
+        if (stream == null)
+        {
+            GD.PrintErr($"[BattleSystem] Failed to load audio: {resPath}");
+            return;
+        }
+        var player = new AudioStreamPlayer();
+        player.Stream = stream;
+        AddChild(player);
+        player.Play();
+        player.Finished += player.QueueFree;
     }
 
     // =========================================================================

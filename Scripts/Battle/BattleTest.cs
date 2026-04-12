@@ -459,6 +459,7 @@ public partial class BattleTest : Node2D
             int damage    = _battleSystem.GetStepBaseDamage(stepIndex);
             _playerHP     = Mathf.Max(0, _playerHP - damage);
             GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {_playerHP}/{PlayerMaxHP}");
+            PlaySound("player_hit.wav");
             SpawnDamageNumber(PlayerDamageOrigin, damage, DmgColorPlayer);
             UpdateHPBars();
             ShakeCamera(intensity: 8f, duration: 0.3f);  // shake — player takes a hit
@@ -518,6 +519,7 @@ public partial class BattleTest : Node2D
             // the current playback so the subsequent Play("parry") always restarts fresh.
             SafeDisconnectPlayerAnim(OnParryFinished);
             StopPlayer();
+            PlaySound("parry_clash.wav");
             PlayPlayer("parry");  // OWNER: enemy pass, player defends — always restarts from frame 0
             _playerAnimSprite.AnimationFinished += OnParryFinished;
         }
@@ -638,6 +640,7 @@ public partial class BattleTest : Node2D
             else // _enemyHP <= 0 — perfect parry counter killed the enemy
             {
                 _enemyDead = true;
+                PlaySound("enemy_defeat.mp3");
                 _enemyAnimSprite.Play("death");
                 _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
                 PlayPlayer("idle");
@@ -694,6 +697,7 @@ public partial class BattleTest : Node2D
         // completes before the timing circle appears and the effect fires.
         SafeDisconnectPlayerAnim(OnPlayerCastFinished);
         PlayPlayer("cast");  // OWNER: BeginPlayerMagicAttack — cast wind-up before sequence
+        GetTree().CreateTimer(1f / 12f).Timeout += () => PlaySound("magic_launch.wav");  // frame 1 at 12fps
         _playerAnimSprite.AnimationFinished += OnPlayerCastFinished;
 
         // Capture locals for the callback closure.
@@ -736,6 +740,7 @@ public partial class BattleTest : Node2D
 
         _enemyHP = Mathf.Max(0, _enemyHP - damage);
         GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+        PlaySound("enemy_hit.wav");
         SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
         PlayEnemyHurtFlash();
@@ -747,6 +752,7 @@ public partial class BattleTest : Node2D
         // Single attack: play the slash now that the circle has resolved.
         // combo_slash1 covers sheet frames 1–3; frame 0 was already shown as the wind-up.
         // PlayTeardown is deferred to OnFinalSlashFinished so the strike plays before retreat.
+        PlaySound("player_attack_swing.wav");
         PlayPlayer("combo_slash1");  // OWNER: player turn, single-hit slash on resolve
         _playerAnimSprite.AnimationFinished += OnFinalSlashFinished;
     }
@@ -778,6 +784,7 @@ public partial class BattleTest : Node2D
 
         _enemyHP = Mathf.Max(0, _enemyHP - damage);
         GD.Print($"[BattleTest] Magic hit deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+        PlaySound("enemy_hit.wav");
         SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         PlayEnemyHurtFlash();
@@ -811,6 +818,7 @@ public partial class BattleTest : Node2D
         if (_enemyHP <= 0)
         {
             _enemyDead = true;
+            PlaySound("enemy_defeat.mp3");
             _enemyAnimSprite.Play("death");
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
         }
@@ -890,6 +898,7 @@ public partial class BattleTest : Node2D
                 else  // _enemyHP <= 0 — parry counter killed the enemy
                 {
                     _enemyDead = true;
+                    PlaySound("enemy_defeat.mp3");
                     _enemyAnimSprite.Play("death");
                     _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
                     PlayPlayer("idle");
@@ -943,7 +952,30 @@ public partial class BattleTest : Node2D
 
     public void ShowBattleMessage(string text) => _battleMessage.Show(text);
 
-    private void ShowLearnableSignal() => ShowBattleMessage("If I watch carefully...");
+    /// <summary>
+    /// Fire-and-forget one-shot sound playback from res://Assets/Audio/.
+    /// Creates a temporary AudioStreamPlayer that frees itself when done.
+    /// </summary>
+    private void PlaySound(string filename)
+    {
+        var stream = GD.Load<AudioStream>($"res://Assets/Audio/{filename}");
+        if (stream == null)
+        {
+            GD.PrintErr($"[BattleTest] Failed to load audio: {filename}");
+            return;
+        }
+        var player = new AudioStreamPlayer();
+        player.Stream = stream;
+        AddChild(player);
+        player.Play();
+        player.Finished += player.QueueFree;
+    }
+
+    private void ShowLearnableSignal()
+    {
+        ShowBattleMessage("If I watch carefully...");
+        PlaySound("learnable_signal.wav");
+    }
 
     /// <summary>
     /// If the just-completed enemy attack was the learnable move and the player perfect-parried it,
@@ -958,6 +990,7 @@ public partial class BattleTest : Node2D
         if (EnemyData?.LearnableAttack == null || currentAttack != EnemyData.LearnableAttack) return;
 
         _hasAbsorbedLearnableMove = true;
+        PlaySound("absorbed_ability_acquired.wav");
         // TODO: when player state/character system is built, add absorbed move to player's persistent move list here
 
         _absorbedMoveAttack = GD.Load<AttackData>("res://Resources/Attacks/repeating_comet_barrage.tres");
@@ -1394,10 +1427,12 @@ public partial class BattleTest : Node2D
         switch (_comboPassIndex)
         {
             case 0:
+                PlaySound("player_attack_swing.wav");
                 PlayPlayer("combo_slash1");  // OWNER: combo pass 0, first strike (frames 1–3)
                 _playerAnimSprite.AnimationFinished += OnComboPass0SlashFinished;
                 break;
             case 1:
+                PlaySound("player_attack_swing.wav");
                 PlayPlayer("combo_slash2");  // OWNER: combo pass 1, second strike (frames 6–9)
                 _playerAnimSprite.AnimationFinished += OnComboPass1SlashFinished;
                 break;
@@ -1406,6 +1441,7 @@ public partial class BattleTest : Node2D
                 // _pendingGameOver is set in OnPlayerPromptCompleted (PromptCompleted fires in
                 // the same frame as the last PassEvaluated) for the all-hits case, or here when
                 // the miss branch runs.
+                PlaySound("player_attack_swing.wav");
                 PlayPlayer("combo_slash1");  // OWNER: combo pass 2, final strike (frames 1–3)
                 _playerAnimSprite.AnimationFinished += OnFinalSlashFinished;
                 break;
@@ -1433,6 +1469,7 @@ public partial class BattleTest : Node2D
         _enemyHP = Mathf.Max(0, _enemyHP - comboDamage);
         GD.Print($"[BattleTest] Combo pass {passIndex + 1} {comboDmgResult}: {comboDamage} damage. " +
                  $"Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+        PlaySound("enemy_hit.wav");
         SpawnDamageNumber(EnemyDamageOrigin, comboDamage, comboDmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         PlayEnemyHurtFlash();

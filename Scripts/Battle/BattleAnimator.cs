@@ -387,6 +387,7 @@ public partial class BattleTest : Node2D
         {
             // Damage from the miss somehow killed the enemy (edge case).
             _enemyDead = true;
+            PlaySound("enemy_defeat.mp3");
             _enemyAnimSprite.Play("death");  // OWNER: enemy death from combo miss damage
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
             PlayTeardown(null);
@@ -424,6 +425,7 @@ public partial class BattleTest : Node2D
             // (Player cannot die during their own attack; _pendingGameOver here always means enemy defeated.)
             // Interrupt the enemy's current animation and play death; reset camera without next turn.
             _enemyDead = true;
+            PlaySound("enemy_defeat.mp3");
             _enemyAnimSprite.Play("death");         // OWNER: enemy death from player attack
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
             PlayTeardown(null);
@@ -483,6 +485,7 @@ public partial class BattleTest : Node2D
     private void PlayParryCounter(Action onComplete)
     {
         const int CounterDamage = 20;
+        PlaySound("perfect_parry_shimmer.wav");
 
         // Disconnect the normal cast_end → idle callback so it doesn't fire during
         // or after the counter sequence. The counter's onComplete handles the flow.
@@ -511,6 +514,8 @@ public partial class BattleTest : Node2D
                 if (_playerDead) { onComplete?.Invoke(); return; }
 
                 // Impact: snap to frame 1, spawn slash effect + shake.
+                PlaySound("counter_swing.wav");
+                PlaySound("player_attack_swing.wav");
                 SetPlayerFrame(1);  // OWNER: PlayParryCounter — impact pose
 
                 // Play hurt_full once (flash frames 0–3 + hold frames 4–13).
@@ -536,6 +541,7 @@ public partial class BattleTest : Node2D
 
                 // Spawn anime slash effect centered on the enemy.
                 // Damage is deferred until the slash animation completes.
+                PlaySound("counter_slash_multi.wav");
                 SpawnCounterSlashEffect(() =>
                 {
                     // Break the hurt loop and apply counter damage.
@@ -544,6 +550,7 @@ public partial class BattleTest : Node2D
                     PlayEnemy("idle");
                     _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
                     GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+                    PlaySound("enemy_hit.wav");
                     SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
                     ShakeCamera(intensity: 10f, duration: 0.3f);
                     UpdateHPBars();
@@ -728,6 +735,11 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void ShowEndLabel(string text)
     {
+        if (text.Contains("Victory"))
+            PlaySound("victory.wav");
+        else if (text.Contains("Game Over"))
+            PlaySound("game_over.mp3");
+
         var layer = new CanvasLayer();
         AddChild(layer);
 

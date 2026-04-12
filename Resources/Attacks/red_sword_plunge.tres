@@ -1,24 +1,19 @@
 [gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://dlsci5d5vjkj"]
 
-[ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
-[ext_resource type="Script" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
+[ext_resource type="Script" uid="uid://73sbp1x2vnja" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
+[ext_resource type="Script" uid="uid://c4oq4pa1cw1dg" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
 
 [sub_resource type="Resource" id="AttackStep_1"]
 script = ExtResource("2_attackstep")
 SpritesheetPath = "res://Assets/Effects/Sword_Effects/Red_Sword_Plunge_Sheet.png"
 FrameWidth = 192
 FrameHeight = 256
-Fps = 12.0
 ImpactFrames = PackedInt32Array(6)
-CircleType = 0
-StartOffsetMs = 0
-FlipH = false
-Scale = Vector2(3, 3)
-Offset = Vector2(-15, -369) 
+Offset = Vector2(-15, -369)
+SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/fire_hammer.wav")
+SoundTriggerFrames = PackedInt32Array(5, 6)
 
 [resource]
 script = ExtResource("1_attackdata")
-Category = 1
-Steps = Array[Object]([SubResource("AttackStep_1")])
-BaseDamage = 10
+Steps = Array[ExtResource("2_attackstep")]([SubResource("AttackStep_1")])
 MpCost = 10

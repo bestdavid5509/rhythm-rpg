@@ -1,13 +1,13 @@
 [gd_scene format=3 uid="uid://c836l6y8vexm8"]
 
 [ext_resource type="Script" uid="uid://dh4rjlvlickpi" path="res://Scripts/Battle/BattleTest.cs" id="1_battletest"]
+[ext_resource type="Resource" uid="uid://cx4nfp7qd2wr8" path="res://Resources/Attacks/repeating_red_magic_comet.tres" id="2_hdgai"]
 [ext_resource type="Script" uid="uid://cw3hjxalert1b" path="res://Scripts/Battle/TargetZone.cs" id="2_targetzone"]
-[ext_resource type="Resource" uid="uid://b3xkqpvj7n2ea" path="res://Resources/Attacks copy/blue_sword_plunge.tres" id="2_wropl"]
 [ext_resource type="Resource" uid="uid://bv7k3mxaxr2pn" path="res://Resources/Enemies/8_sword_warrior_phase2.tres" id="3_hdgai"]
 
 [node name="BattleTest" type="Node2D" unique_id=1582212467]
 script = ExtResource("1_battletest")
-TestEnemyAttack = ExtResource("2_wropl")
+TestEnemyAttack = ExtResource("2_hdgai")
 LoopAttack = true
 EnemyData = ExtResource("3_hdgai")
 

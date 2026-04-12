@@ -13,7 +13,7 @@ FlipH = true
 Scale = Vector2(4, 4)
 Offset = Vector2(50, -100)
 SoundEffects = PackedStringArray("res://Assets/Audio/fire_hammer.wav")
-SoundTriggerFrames = PackedInt32Array(0)
+SoundTriggerFrames = PackedInt32Array(6)
 
 [sub_resource type="Resource" id="AttackStep_2"]
 script = ExtResource("2_attackstep")
@@ -25,7 +25,7 @@ StartOffsetMs = -500
 Scale = Vector2(4, 4)
 Offset = Vector2(-100, -100)
 SoundEffects = PackedStringArray("res://Assets/Audio/fire_hammer.wav")
-SoundTriggerFrames = PackedInt32Array(0)
+SoundTriggerFrames = PackedInt32Array(6)
 
 [sub_resource type="Resource" id="AttackStep_3"]
 script = ExtResource("2_attackstep")
@@ -38,7 +38,7 @@ FlipH = true
 Scale = Vector2(4, 4)
 Offset = Vector2(50, -100)
 SoundEffects = PackedStringArray("res://Assets/Audio/fire_hammer.wav")
-SoundTriggerFrames = PackedInt32Array(0)
+SoundTriggerFrames = PackedInt32Array(6)
 
 [resource]
 script = ExtResource("1_attackdata")
