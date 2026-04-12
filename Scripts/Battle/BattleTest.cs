@@ -1091,7 +1091,7 @@ public partial class BattleTest : Node2D
         panel.AnchorTop    = 0f;
         panel.AnchorBottom = 0f;
         panel.GrowHorizontal = Control.GrowDirection.Both;
-        panel.OffsetTop    = 10f;
+        panel.OffsetTop    = 20f;
         panel.OffsetBottom = 10f;  // let content size it
 
         // Semi-transparent dark background.
