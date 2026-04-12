@@ -21,7 +21,7 @@
 | Player damage hit sound | F.M.Audio | CC-BY 4.0 — credit required | "Hitting Cabbage Against Wooden Door Frame 1.wav" — https://freesound.org/people/F.M.Audio/sounds/547580 |
 | RPG Sound Pack (sword swing and others TBD) | artisticdude | CC0 — no attribution required | https://opengameart.org/content/rpg-sound-pack |
 | Magic impact sound | EminYILDIRIM | CC-BY 4.0 — credit required | "Magic Fire Spell Impact & Punch" — https://freesound.org/people/EminYILDIRIM/sounds/541478 |
-| Fire hammer swipe impact | SonoFxAudio | CC-BY 4.0 — credit required | "Sword_Fire01.wav" — https://freesound.org/people/SonoFxAudio/sounds/649361 |
+| Fire hammer | SonoFxAudio | CC-BY 4.0 — credit required | "Sword_Fire01.wav" — https://freesound.org/people/SonoFxAudio/sounds/649361 |
 | Enemy hit impact (TBD which variant) | CogFireStudios | CC0 — no attribution required | "Hits and Swings" pack — https://freesound.org/people/CogFireStudios/packs/30820 (sounds 547036, 547041, 547042) |
 | Parry/block sound (candidate) | JohnBuhr | CC0 | "Sword_Clash (7).wav" — https://freesound.org/people/JohnBuhr/sounds/326868 |
 | Perfect parry shimmer (candidate 1) | reliops123 | CC0 | "Tink divine orb" — https://freesound.org/people/reliops123/sounds/791861 |

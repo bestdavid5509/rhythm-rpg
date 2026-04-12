@@ -365,6 +365,32 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
 - **Reusable `AttackStep` resources** — `AttackStep` sub-resources are currently embedded directly inside each `AttackData` `.tres` file. They should eventually be refactored into standalone `.tres` files that can be referenced by multiple `AttackData` resources, rather than duplicated. This avoids needing to update shared values (frame dimensions, Fps, spritesheet path, etc.) in multiple places when an animation changes.
 
+## Audio Trigger Reference
+
+### Event-Based Triggers (no frame sync needed)
+| Sound | File | Trigger |
+|---|---|---|
+| Parry clash | parry_clash.wav | Each successful enemy attack block (Hit or Perfect result) |
+| Perfect parry shimmer | perfect_parry_shimmer.wav | Full enemy sequence parried with no misses |
+| Player hit | player_hit.wav | Player takes damage from a missed block |
+| Enemy hit | enemy_hit.wav | Enemy takes damage from any player attack hit |
+| Absorbed ability acquired | absorbed_ability_acquired.wav | Learnable move successfully absorbed |
+| Learnable signal | learnable_signal.wav | Enemy selects their learnable move |
+| Enemy defeat | enemy_defeat.mp3 | Enemy HP reaches zero |
+| Victory | victory.wav | Victory screen appears |
+| Game over | game_over.mp3 | Game over screen appears |
+
+### Frame-Synced Triggers
+| Sound | File | Animation | Frame | Notes |
+|---|---|---|---|---|
+| Player attack swing | player_attack_swing.wav | _AttackNoMovement | 0 | Basic attack swing |
+| Counter swing | counter_swing.wav | _AttackNoMovement | 1 | Impact frame during parry counter |
+| Counter slash multi hit | counter_slash_multi.wav | — | — | Plays when slash effect spawns |
+| Magic launch | magic_launch.wav | CrouchAttack | 0 | When comet leaves player |
+| Magic impact | magic_impact.wav | Blue_Magic_Comet_Sheet | 5 | At circle close on magic attacks |
+| Fire hammer | fire_hammer.wav | Red_Fire_Hammer_Swipe_Sheet | 0 | At animation start on hammer attacks |
+| Parry clash | parry_clash.wav | _Attack2NoMovement | 2 | First frame of parry animation (sheet frames 2–5) |
+
 ## Known Next Steps
 
 - **Audio** — hit/miss/parry/perfect SFX; music layers for phase transitions

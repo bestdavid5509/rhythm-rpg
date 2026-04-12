@@ -7,7 +7,7 @@
 | Counter swing | counter_swing.wav | 737748__squirrel_404__large-sword-swing.wav |
 | Enemy defeat | enemy_defeat.mp3 | 704635__zulfish__monster-dying.mp3 |
 | Enemy hit | enemy_hit.wav | 547041__cogfirestudios__hit-swing-sword-small-3.wav |
-| Fire hammer impact | fire_hammer_impact.wav | 649361__sonofxaudio__sword_fire01.wav |
+| Fire hammer | fire_hammer.wav | 649361__sonofxaudio__sword_fire01.wav |
 | Game over | game_over.mp3 | 727625__xloenp__war-defeated-symphony-japanstyle-emotional-sound-effect.mp3 |
 | Learnable signal | learnable_signal.wav | 478809__ianstargem__scifi-hit-thing-2.wav |
 | Magic impact | magic_impact.wav | 541478__eminyildirim__magic-fire-spell-impact-punch.wav |
