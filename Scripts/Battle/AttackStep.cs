@@ -128,4 +128,18 @@ public partial class AttackStep : Resource
     /// Default 0 — no hold; sprite frees / teardown begins immediately on animation end.
     /// </summary>
     [Export] public int PostAnimationDelayMs = 0;
+
+    /// <summary>
+    /// Audio files to play at specific animation frames during this step.
+    /// SoundEffects[i] pairs with SoundTriggerFrames[i] — each pair defines a
+    /// res:// path to a sound file and the zero-based animation frame it plays on.
+    /// Empty arrays mean no sounds for this step.
+    /// </summary>
+    [Export] public string[] SoundEffects = System.Array.Empty<string>();
+
+    /// <summary>
+    /// Zero-based animation frame indices at which each corresponding SoundEffects entry plays.
+    /// Must have the same length as SoundEffects.
+    /// </summary>
+    [Export] public int[] SoundTriggerFrames = System.Array.Empty<int>();
 }

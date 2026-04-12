@@ -18,6 +18,8 @@ Scale = Vector2(3, 3)
 Offset = Vector2(0, 0)
 PlayerOffset = Vector2(0, -205)
 PostAnimationDelayMs = 0
+SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch.wav", "res://Assets/Audio/magic_impact.wav")
+SoundTriggerFrames = PackedInt32Array(0, 5)
 
 [resource]
 script = ExtResource("1_attackdata")
