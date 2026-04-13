@@ -261,23 +261,9 @@ Negative values are clamped to 0 if the overlap would push the start before the 
 
 ### Attack Timing System — Impact-Frame Sync
 
-`BattleSystem.RunStep(int stepIndex)` launches one `AnimatedSprite2D` per step and one `TimingPrompt` per `ImpactFrames` entry. All timings are derived from the first impact frame as an anchor:
+Impact-frame anchor formula: `animationStartDelay = circleCloseDuration - (ImpactFrames[0] / fps)`. Clamped to `≥ 0`. When negative, the animation skips ahead to `animStartFrame = round(|rawDelay| × fps)` — must set `sprite.Frame` **after** `sprite.Play()` because Godot 4 resets Frame to 0 on Play().
 
-```
-animationStartDelay  = circleCloseDuration - (ImpactFrames[0] / fps)
-circleSpawnDelay[i]  = (ImpactFrames[i] - ImpactFrames[0]) / fps
-```
-
-- `circleCloseDuration` comes from `TimingPrompt.DefaultDurationForType(step.CircleType)`.
-- `animationStartDelay` is clamped to `≥ 0`. When `rawDelay < 0` the first impact frame takes longer to reach than `circleCloseDuration` — starting at frame 0 would cause the animation to lag behind the circle. Fix: start immediately (`delay = 0`) but skip ahead to `animStartFrame = round(|rawDelay| × fps)` by setting `sprite.Frame` **after** `sprite.Play()` (Godot 4 resets `Frame` to 0 on `Play()`, so the assignment must come after).
-- Circle 0 always spawns at delay 0. Subsequent circles are staggered forward by one frame-time each (≈83 ms at 12 fps for consecutive frames).
-- **Step scheduling is timer-driven, not completion-driven.** Each `RunStep` immediately schedules the next step's start timer:
-  ```
-  lastCircleResolveTime = (ImpactFrames[last] - ImpactFrames[0]) / fps + circleCloseDuration
-  nextStepDelay = max(0, lastCircleResolveTime + nextStep.StartOffsetMs / 1000)
-  ```
-- `_totalPromptsRemaining` counts all circles across all steps. `SequenceCompleted` fires when it reaches 0 — after the last circle of the last concurrent step resolves.
-- Effect sprites free themselves when their animation finishes via a self-disconnecting `Action onFinished` delegate (avoids the Godot 4 double-disconnect error from `+= QueueFree`).
+Step scheduling is timer-driven, not completion-driven. Negative `StartOffsetMs` causes steps to overlap (concurrent animations and circles). `_totalPromptsRemaining` counts all circles across all steps; `SequenceCompleted` fires when it reaches 0.
 
 ### Player Menu Structure
 
@@ -317,29 +303,6 @@ All knight animations use 120×80 px frames from horizontal-strip PNGs at `res:/
 1. Before retreat: `SpriteFrames.SetAnimationLoop("run", false)` so `AnimationFinished` fires at frame 0.
 2. `SpeedScale = 2f`, `PlayBackwards("run")` — snappy hop-back.
 3. `OnRetreatFinished` resets `SpeedScale = 1f`, restores `SetAnimationLoop("run", true)`, returns to `idle` only if `Animation == "run"` (guards against a concurrent parry/hit taking ownership).
-
-**Combo pass sequence:**
-- Pass 0: `combo_slash1` → `OnComboPass0SlashFinished` holds `combo` frame 5 (second wind-up)
-- Pass 1: `combo_slash2` → `OnComboPass1SlashFinished` holds `combo` frame 0 (first wind-up again)
-- Pass 2 (final): `combo_slash1` → `OnFinalSlashFinished` holds last frame 0.3 s, then starts retreat
-
-### Enemy Animation Arc — 8 Sword Warrior Red
-
-Sheet: `8_sword_warrior_red-Sheet.png` — 160×160 px per frame, 21 cols × 7 rows.
-
-| Animation | Row | Frames | Loop | Usage |
-|---|---|---|---|---|
-| `idle` | 0 | 14 | yes | Default between turns |
-| `run` | 1 | 8 | yes | (reserved) |
-| `attack` | 2 | 15 | no | (reserved) |
-| `cast_intro` | 3 | cols 0–3 | no | Wind-up once before prompt appears |
-| `cast_loop` | 4 | 14 | yes | Holds during entire prompt sequence |
-| `cast_end` | 3 | cols 18–20 | no | Release once after sequence resolves |
-| `death` | 6 | 15 + 1 blank | no | 15 sheet frames + 1 transparent 160×160 frame held 0.5 s |
-
-**Turn arc:** `cast_intro` → (`OnCastIntroFinished`) → `cast_loop` → (sequence resolves) → `cast_end` → (`OnCastEndFinished`) → `idle`
-
-**Blank death frame:** a fully transparent `ImageTexture` (160×160, RGBA8) is appended to the `death` animation with `duration: 6.0f` (at 12 fps → 0.5 s). This ensures the Victory label appears only after death particles have fully dissipated.
 
 ### Dead-Flag Guards
 
@@ -400,10 +363,6 @@ Any active player-attack `TimingPrompt` must be forcibly freed at the top of `Be
 
 `EnemyData.SpriteOffsetY` — per-enemy additional downward nudge on the enemy sprite, tuned visually. Warrior Phase 1 = 90f, 8 Sword Warrior = 130f.
 
-## Future Architecture Goals
-
-- **Reusable `AttackStep` resources** — `AttackStep` sub-resources are currently embedded directly inside each `AttackData` `.tres` file. They should eventually be refactored into standalone `.tres` files that can be referenced by multiple `AttackData` resources, rather than duplicated. This avoids needing to update shared values (frame dimensions, Fps, spritesheet path, etc.) in multiple places when an animation changes.
-
 ## Audio Trigger Reference
 
 ### Event-Based Triggers (no frame sync needed)
@@ -432,12 +391,12 @@ Any active player-attack `TimingPrompt` must be forcibly freed at the top of `Be
 
 ## Known Next Steps
 
-- **Warrior Phase 1 testing** — verify melee hop-in attack arc end-to-end, hurt animation wiring, and cast-arc flow (no cast_end)
+- **Phase transition** — trigger Phase 2 when Phase 1 HP hits zero (explosion, sprite swap to 8 Sword Warrior); architecture supports it but the transition sequence is not yet implemented
 - **Phase 2 boss setup** — new `EnemyData` + `EnemyAnimationConfig` for the 8 Sword Warrior; architecture already supports it
 - **Audio gaps** — perfect parry shimmer replacement (more satisfying), ice sword impact sound, hop-in footstep SFX, two battle themes (Phase 1 + Phase 2), dedicated cast windup sound separate from magic_launch.wav
 - **Battle menu UI polish** — layout, positioning, visual feedback
 - **ATTACK_AUTHORING.md** — documentation for creating new AttackData/AttackStep resources
+- **Reusable `AttackStep` resources** — refactor embedded sub-resources into standalone `.tres` files that can be referenced by multiple `AttackData` resources, avoiding duplication of shared values (frame dimensions, Fps, spritesheet path, etc.)
 - **Bouncing circle color customisation** — color gradient (purple→white) and pass count are currently fixed per-type in `ApplyTypeSettings`; could be exposed as per-step inspector fields for more expressive attack authoring
-- **Learnable move signalling** — visual highlight on enemy and colored move-name label during learnable-move sequences
-- **Taunt ability** — player action that baits the enemy into using their signature/learnable move
+- **Taunt ability (post-prototype)** — player action that baits the enemy into using their signature/learnable move
 - **Self-targeting spell alignment** — Cure spell effect and target zone are not perfectly centered on the player's visual body due to the knight sprite having the character body left-of-center within its frame. Revisit when implementing the full character system — the correct fix is either adjusting the sprite frame composition or implementing a per-spell visual center offset.
