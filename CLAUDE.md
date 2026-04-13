@@ -399,3 +399,4 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 - **Learnable move signalling** — visual highlight on enemy and colored move-name label during learnable-move sequences
 - **Taunt ability** — player action that baits the enemy into using their signature/learnable move
 - **Learnable move SFX** — when the white flash + "If I watch carefully..." signal triggers, play a distinct audio cue to reinforce the moment (chime, shimmer, or subtle musical sting). Wire into the existing FlashEnemyWhite() / ShowLearnableSignal() call site in BeginEnemyAttack.
+- **Self-targeting spell alignment** — Cure spell effect and target zone are not perfectly centered on the player's visual body due to the knight sprite having the character body left-of-center within its frame. Revisit when implementing the full character system — the correct fix is either adjusting the sprite frame composition or implementing a per-spell visual center offset.

@@ -53,4 +53,5 @@ flip_h = true
 
 [node name="TargetZone" type="Node2D" parent="." unique_id=246813579]
 visible = false
+z_index = 10
 script = ExtResource("2_targetzone")

@@ -4,6 +4,7 @@
 |---|---|---|
 | Absorbed ability acquired | absorbed_ability_acquired.wav | game_pickup_2.wav (trimmed in Audacity) |
 | Counter slash multi hit | counter_slash_multi.wav | 457169__corruptinator__whoosh-flurry-2.wav |
+| Cure spell effect | cure_spell.wav | TBD — freesound.org unavailable |
 | Counter swing | counter_swing.wav | 737748__squirrel_404__large-sword-swing.wav |
 | Enemy defeat | enemy_defeat.mp3 | 704635__zulfish__monster-dying.mp3 |
 | Enemy hit | enemy_hit.wav | 547041__cogfirestudios__hit-swing-sword-small-3.wav |

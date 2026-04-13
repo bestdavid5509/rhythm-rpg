@@ -19,7 +19,7 @@ All Size values are **per-frame dimensions** (width × height in pixels).
 |------|--------|-----------------|--------|--------------|
 | Blue_Circle_Buff_Sheet.png | 16 | 144 × 144 | 2 rows, 8 cols | 9 |
 | Blue_Descending_Circle_Buff_Sheet.png | 14 | 128 × 208 | 1 row, 14 cols | 2 |
-| Yellow_Circle_Buff_Sheet.png | 16 | 144 × 144 | 2 rows, 8 cols | 9 |
+| Yellow_Circle_Buff_Sheet.png | 16 | 144 × 144 | 2 rows, 8 cols | 10 |
 | Yellow_Descending_Circle_Buff_Sheet.png | 14 | 128 × 208 | 1 row, 14 cols | 2 |
 
 ## Effects/Sword_Effects/

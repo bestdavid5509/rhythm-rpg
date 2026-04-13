@@ -145,9 +145,9 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void InitSubMenuData()
     {
-        _subMenuLabelsData     = new System.Collections.Generic.List<string>          { "Combo Strike", "Comet", "Back" };
-        _subMenuCategoriesData = new System.Collections.Generic.List<AttackCategory?> { AttackCategory.Physical, AttackCategory.Magic, null };
-        _subMenuAttacksData    = new System.Collections.Generic.List<AttackData>      { null, null, null };  // resolved in GetSubMenuAttack
+        _subMenuLabelsData     = new System.Collections.Generic.List<string>          { "Combo Strike", "Comet", "Cure", "Back" };
+        _subMenuCategoriesData = new System.Collections.Generic.List<AttackCategory?> { AttackCategory.Physical, AttackCategory.Magic, AttackCategory.Magic, null };
+        _subMenuAttacksData    = new System.Collections.Generic.List<AttackData>      { null, null, null, null };  // resolved in GetSubMenuAttack
     }
 
     /// <summary>
@@ -293,10 +293,11 @@ public partial class BattleTest : Node2D
         }
         else if (category == AttackCategory.Magic)
         {
-            // Magic moves (Comet, Comet Barrage, etc.) — magic attack flow.
+            // Magic moves (Comet, Comet Barrage, Cure, etc.) — magic attack flow.
             if (attack != null)
                 _playerMp -= attack.MpCost;
-            _activeMagicAttack = attack;
+            _activeMagicAttack  = attack;
+            _isPlayerHealAttack = (attack == _playerCureAttack);
             HideMenu(); BeginPlayerMagicAttack();
         }
     }
@@ -327,6 +328,7 @@ public partial class BattleTest : Node2D
         // Base hardcoded moves.
         if (index == 0) return _playerComboStrike;
         if (index == 1) return _playerMagicAttack;
+        if (index == 2) return _playerCureAttack;
 
         // Dynamically added absorbed moves.
         return _subMenuAttacksData[index];

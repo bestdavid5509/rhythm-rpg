@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="AttackData" format=3]
+
+[ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
+[ext_resource type="Script" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
+
+[sub_resource type="Resource" id="AttackStep_1"]
+script = ExtResource("2_attackstep")
+SpritesheetPath = "res://Assets/Effects/Support_Effects/Yellow_Circle_Buff_Sheet.png"
+FrameWidth = 144
+FrameHeight = 144
+ImpactFrames = PackedInt32Array(10)
+Scale = Vector2(3, 3)
+PlayerOffset = Vector2(-15, -70)
+
+[resource]
+script = ExtResource("1_attackdata")
+Category = 1
+Steps = Array[Object]([SubResource("AttackStep_1")])
+BaseDamage = 30
+MpCost = 20

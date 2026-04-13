@@ -152,6 +152,7 @@ public partial class BattleTest : Node2D
     private bool      _enemyDead;         // true once enemy death animation begins; guards all subsequent sprite calls
     private bool      _isComboAttack;       // true when the current player turn uses Combo Strike (Bouncing prompt)
     private bool      _isPlayerMagicAttack; // true when the current player turn uses a magic attack via BattleSystem
+    private bool      _isPlayerHealAttack;  // true when the current player turn uses Cure (heal self instead of damage enemy)
     private int       _comboPassIndex;      // which Bouncing pass just resolved; set in OnAttackPassEvaluated
 
     // Loaded once in _Ready; used to restore the enemy attack after a player magic turn.
@@ -161,6 +162,7 @@ public partial class BattleTest : Node2D
     private AttackData _playerBasicAttack;   // player_basic_attack.tres — Physical, BaseDamage 10
     private AttackData _playerComboStrike;   // player_combo_strike.tres — Physical, BaseDamage 6
     private AttackData _absorbedMoveAttack;  // loaded on absorption; null until then
+    private AttackData _playerCureAttack;    // player_cure.tres — Magic, BaseDamage 30 (used as heal amount)
 
     // Set before BeginPlayerMagicAttack() to select which magic attack the cast flow uses.
     // OnPlayerCastFinished reads this instead of _playerMagicAttack directly.
@@ -285,6 +287,10 @@ public partial class BattleTest : Node2D
         if (_playerComboStrike == null)
             GD.PrintErr("[BattleTest] Failed to load player_combo_strike.tres");
 
+        _playerCureAttack = GD.Load<AttackData>("res://Resources/Attacks/player_cure.tres");
+        if (_playerCureAttack == null)
+            GD.PrintErr("[BattleTest] Failed to load player_cure.tres");
+
         _battleSystem.StepPassEvaluated += OnBattleSystemStepPassEvaluated;
         _battleSystem.SequenceCompleted += OnSequenceCompleted;
 
@@ -355,6 +361,7 @@ public partial class BattleTest : Node2D
         _state               = BattleState.EnemyAttack;
         _parryClean          = true;
         _isPlayerMagicAttack = false;
+        _isPlayerHealAttack  = false;
         TimingPrompt.SuppressInput = false;  // safety reset
         GD.Print("[BattleTest] Enemy attacks.");
 
@@ -681,16 +688,20 @@ public partial class BattleTest : Node2D
         _state               = BattleState.PlayerAttack;
         _isPlayerMagicAttack = true;
         _isComboAttack       = false;
-        GD.Print("[BattleTest] Player uses magic attack.");
+        GD.Print(_isPlayerHealAttack
+            ? "[BattleTest] Player uses Cure."
+            : "[BattleTest] Player uses magic attack.");
 
         // Set combat context so ComputeCameraMidpoint() returns a sensible midpoint.
         // No hop-in — attackerClosePos = player origin so the camera midpoint is the
         // natural center between the two combatants.
         _attacker         = _playerSprite;
-        _defender         = _enemySprite;
+        _defender         = _isPlayerHealAttack ? _playerSprite : _enemySprite;
         _attackerClosePos = GetOrigin(_playerSprite);
 
-        Vector2 defenderCenter = GetOrigin(_enemySprite) + _enemySprite.Size / 2f;
+        Vector2 defenderCenter = _isPlayerHealAttack
+            ? GetOrigin(_playerSprite) + _playerSprite.Size / 2f
+            : GetOrigin(_enemySprite)  + _enemySprite.Size / 2f;
         Vector2 promptPos      = ComputeCameraMidpoint();
 
         // Play cast animation; defer StartSequence until it finishes so the wind-up
@@ -769,8 +780,19 @@ public partial class BattleTest : Node2D
     {
         var r          = (TimingPrompt.InputResult)result;
         int baseDamage = _battleSystem.GetStepBaseDamage(stepIndex);
-        int damage     = ComputePlayerDamage(baseDamage, r);
-        GD.Print($"[BattleTest] Player magic pass {passIndex + 1} resolved: {r}  ({damage} damage).");
+        int amount     = ComputePlayerDamage(baseDamage, r);
+
+        if (_isPlayerHealAttack)
+        {
+            GD.Print($"[BattleTest] Cure pass {passIndex + 1} resolved: {r}  ({amount} HP).");
+            _playerHP = Mathf.Min(PlayerMaxHP, _playerHP + amount);
+            GD.Print($"[BattleTest] Cure heals {amount} HP. Player HP: {_playerHP}/{PlayerMaxHP}");
+            SpawnDamageNumber(PlayerDamageOrigin, amount, DmgColorPerfect);  // green for healing
+            UpdateHPBars();
+            return;
+        }
+
+        GD.Print($"[BattleTest] Player magic pass {passIndex + 1} resolved: {r}  ({amount} damage).");
 
         Color dmgColor = r switch
         {
@@ -782,10 +804,10 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);
 
-        _enemyHP = Mathf.Max(0, _enemyHP - damage);
-        GD.Print($"[BattleTest] Magic hit deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+        _enemyHP = Mathf.Max(0, _enemyHP - amount);
+        GD.Print($"[BattleTest] Magic hit deals {amount} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
         PlaySound("enemy_hit.wav");
-        SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
+        SpawnDamageNumber(EnemyDamageOrigin, amount, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         PlayEnemyHurtFlash();
         UpdateHPBars();
@@ -804,6 +826,14 @@ public partial class BattleTest : Node2D
         SafeDisconnectPlayerAnim(OnPlayerCastTransitionFinished);
         PlayPlayer("cast_transition");  // OWNER: OnPlayerMagicSequenceCompleted — exit cast pose
         _playerAnimSprite.AnimationFinished += OnPlayerCastTransitionFinished;
+
+        // Cure heals the player — no game-over check needed, proceed directly to enemy turn.
+        if (_isPlayerHealAttack)
+        {
+            _isPlayerHealAttack = false;
+            GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
+            return;
+        }
 
         bool over = CheckGameOver();
         if (!over)
@@ -1396,6 +1426,7 @@ public partial class BattleTest : Node2D
             prompt.Position      = ComputeCameraMidpoint();
             _targetZone.Position = prompt.Position;
             _targetZone.Visible  = true;
+            prompt.ZIndex = 20;
             AddChild(prompt);
         });
     }

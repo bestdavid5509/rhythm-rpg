@@ -329,6 +329,7 @@ public partial class BattleSystem : Node
                 prompt.PromptCompleted += result =>
                     OnAnyCircleCompleted(capturedPrompt, result, stepIndex);
 
+                prompt.ZIndex = 20;
                 _spawnParent.AddChild(prompt);
 
                 // For Bouncing steps, replay the effect animation from the start on each
