@@ -29,6 +29,9 @@ public enum AttackCategory
 [GlobalClass]
 public partial class AttackData : Resource
 {
+    /// <summary>Display name shown in menus (e.g. "Comet Barrage", "Ice Sword Swipe").</summary>
+    [Export] public string DisplayName = "";
+
     /// <summary>
     /// Broad category of the attack — Physical or Magic.
     /// Used for elemental matchups, visual theming, and future damage calculation.

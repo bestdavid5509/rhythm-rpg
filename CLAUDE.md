@@ -37,14 +37,26 @@ The Absorber accumulates a library of absorbed moves over time.
 | `BattleSystem.cs` | Attack sequence runner — drives `AttackData` steps, spawns `TimingPrompt` circles and timed effect `AnimatedSprite2D` nodes, emits `StepPassEvaluated` / `SequenceCompleted` |
 | `TimingPrompt.cs` | Single closing circle — Standard, Slow, and Bouncing variants; draws only the moving ring and hit/miss flash; does **not** draw the target ring (see `TargetZone`); emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
 | `TargetZone.cs` | Persistent shared target ring node in `BattleTest.tscn`; draws the stationary white ring and green hit-window band; shown/hidden by `BattleTest` at sequence start/end; has no knowledge of individual circles |
-| `AttackData.cs` | `[GlobalClass]` Resource — ordered list of `AttackStep` objects and a `BaseDamage` value; saved as `.tres` files |
-| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `BounceCount`, `StartOffsetMs`, `FlipH`, `Scale`, `Offset` |
+| `AttackData.cs` | `[GlobalClass]` Resource — ordered list of `AttackStep` objects, `DisplayName`, `BaseDamage`, `MpCost`, `Category`, `IsHopIn`; saved as `.tres` files |
+| `AttackStep.cs` | `[GlobalClass]` Resource — per-step data: `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `Fps`, `ImpactFrames[]`, `CircleType`, `BounceCount`, `StartOffsetMs`, `FlipH`, `Scale`, `Offset`, `PlayerOffset`, `SoundEffects[]`, `SoundTriggerFrames[]` |
+| `EnemyData.cs` | `[GlobalClass]` Resource — enemy definition: `EnemyName`, `MaxHp`, `SpritesheetPath`, `FrameWidth`/`FrameHeight`, `SpriteOffsetY`, `AnimationConfig`, `AttackPool[]`, `LearnableAttack`, `SelectionStrategy` |
+| `EnemyAnimationConfig.cs` | `[GlobalClass]` Resource — data-driven animation layout: row indices, frame counts, `HasCastEnd` flag, optional `HurtSheetPath` for separate hurt spritesheets |
 
 All three `BattleTest` files are `public partial class BattleTest : Node2D` and compile as one class.
 
 ### Scenes/Battle/
 - `BattleTest.tscn` — main battle prototype scene
 - `TimingPrompt.tscn` — circle prompt scene instantiated per step
+
+### Resources/Enemies/
+`.tres` files for `EnemyData` and `EnemyAnimationConfig` resources.
+
+| File | Description |
+|---|---|
+| `warrior_phase1.tres` | Warrior Phase 1 — 150 HP, 130×130, 4 attacks, learnable: ice_sword_swipe |
+| `warrior_phase1_anim_config.tres` | Animation layout for Warrior (no cast_end, hurt on main sheet) |
+| `8_sword_warrior_phase2.tres` | 8 Sword Warrior Phase 2 — 200 HP, 160×160, 3 attacks, learnable: repeating_comet_barrage |
+| `8_sword_warrior_anim_config.tres` | Animation layout for 8 Sword Warrior (has cast_end, separate hurt sheet) |
 
 ### Resources/Attacks/
 `.tres` files are Godot Resource instances of `AttackData`, editable in the inspector.
@@ -74,10 +86,12 @@ Assets/
 	  _Crouch.png / _CrouchAttack.png / _CrouchTransition.png / _Roll.png
   Enemies/
 	8_Sword_Warrior/
-	  8_Sword_Warrior_Red/         — active enemy in BattleTest (21 cols × 7 rows, 160×160 px)
+	  8_Sword_Warrior_Red/         — Phase 2 boss (21 cols × 7 rows, 160×160 px)
 	  8_Sword_Warrior_Blue/
 	  8_Sword_Warrior_Black/
-	Warrior/                       — multiple colour variants (unused in current prototype)
+	Warrior/
+	  Warrior_Red_Sword_Silver_White_Armor/ — active Phase 1 enemy (130×130 px)
+	  (other colour variants available)
 	NightBorne/                    — unused in current prototype
   Effects/
 	Sword_Effects/                 — plunge, swipe, hammer attacks
@@ -350,16 +364,41 @@ SafeDisconnectEnemyAnim(OnCastIntroFinished);
 _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 ```
 
+### Enemy Animation System — Data-Driven
+
+`BuildEnemySpriteFrames()` is fully data-driven — no hardcoded enemy sprite layout remains. All animation row indices, frame counts, and spritesheet paths are read from `EnemyData.AnimationConfig` (an `EnemyAnimationConfig` resource).
+
+**Key fields on EnemyAnimationConfig:**
+- `IdleRow/Frames`, `RunRow/Frames`, `CastIntroRow/Frames`, `CastLoopRow/StartCol/Frames`
+- `HasCastEnd` — when false, all `cast_end` plays are replaced with `idle` transitions
+- `MeleeAttackRow/Frames/ImpactFrame` — used for hop-in melee attacks
+- `HurtRow/Frames` — main-sheet hurt animation; `HurtSheetPath` + `HurtFullFrames` for enemies with a separate hurt spritesheet (e.g. 8 Sword Warrior)
+- `DeathRow/Frames` — blank transparent frame appended at `FrameWidth×FrameHeight` held 0.5s
+
+**Absorption system:** `TryTriggerAbsorption()` assigns `_absorbedMoveAttack` directly from `EnemyData.LearnableAttack` (no hardcoded path). The absorbed move's `DisplayName` field drives the submenu label.
+
+### Input Lock and Sequence Safety
+
+`_inputLocked` — set `true` when player attack prompts resolve (OnPlayerPromptCompleted, OnPlayerMagicSequenceCompleted), cleared when the next input-accepting state begins (ShowMenu, BeginEnemyAttack). All input is blocked during slash animations, retreat, and teardown.
+
+`BattleSystem._sequenceActive` — set `true` on `StartSequence()`, set `false` on first `SequenceCompleted` emission. Guards `RunStep` and `OnAnyCircleCompleted` from firing after a sequence completes, preventing negative `_totalPromptsRemaining` and double `SequenceCompleted` signals.
+
+`BeginEnemyAttack()` reentrancy guard — early-returns if `_state` is already `EnemyAttack`.
+
+### Player Attack Prompt Cleanup
+
+Any active player-attack `TimingPrompt` must be forcibly freed at the top of `BeginEnemyAttack()` via `FreeActivePrompt()` — do not rely on delayed flash-duration timers to clean up prompts before the enemy turn starts. The prompt may still be alive and emitting `PassEvaluated` signals when the enemy sequence begins, causing combo animation callbacks to fire on enemy circle results. `_isComboAttack` is also reset to `false` at the top of `BeginEnemyAttack()` as a secondary guard.
+
 ### SkipHopIn Flag and FloorY Constant
 
-`[Export] public bool SkipHopIn = true` — when set, the enemy stays at origin for the entire turn. Setup and teardown tweens are skipped (no hop-in, no camera zoom). `_attackerClosePos` is set to the enemy origin so `PlayTeardown` is a zero-distance no-op. Used for large/stationary enemies like the 8 Sword Warrior.
+`[Export] public bool SkipHopIn = true` — when set, the enemy stays at origin for the entire turn. Setup and teardown tweens are skipped (no hop-in, no camera zoom). `_attackerClosePos` is set to the enemy origin so `PlayTeardown` is a zero-distance no-op. Used for large/stationary enemies like the 8 Sword Warrior. Set to `false` for the Warrior Phase 1 which hops in for melee attacks.
 
 `const float FloorY = 750f` — world-space Y of the ground line. All character sprites are floor-anchored:
 - Player: `Position.Y = FloorY - frameHeight * scale * 0.5f` (center-anchored sprite)
-- Enemy: `Position.Y = FloorY - 160f * 3f * 0.6f + EnemySpriteOffsetY` (tuned nudge for visual ground contact)
+- Enemy: `Position.Y = FloorY - EnemyData.FrameHeight * 3f * 0.6f + EnemyData.SpriteOffsetY` (per-enemy tuned nudge for visual ground contact)
 - Effects: `Position = (defenderCenter.X, FloorY) + step.Offset` — no hidden math; `step.Offset.Y < 0` moves up, `> 0` moves down. `sprite.Centered = true` is set explicitly in `SpawnEffectSprite` — the floor-baseline formula depends on this being true. `step.Scale` controls the sprite scale; default `Vector2(3, 3)` is the standard 3× world-space upscale used for all effect sheets.
 
-`const float EnemySpriteOffsetY = 130f` — additional downward nudge on the enemy sprite, finalized visually.
+`EnemyData.SpriteOffsetY` — per-enemy additional downward nudge on the enemy sprite, tuned visually. Warrior Phase 1 = 90f, 8 Sword Warrior = 130f.
 
 ## Future Architecture Goals
 
@@ -393,10 +432,12 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
 ## Known Next Steps
 
-- **Audio** — hit/miss/parry/perfect SFX; music layers for phase transitions
-- **Real boss attack sequence** — author a multi-step `AttackData` resource representing the opening boss Phase 1 attack pattern and wire it into the enemy turn loop
+- **Warrior Phase 1 testing** — verify melee hop-in attack arc end-to-end, hurt animation wiring, and cast-arc flow (no cast_end)
+- **Phase 2 boss setup** — new `EnemyData` + `EnemyAnimationConfig` for the 8 Sword Warrior; architecture already supports it
+- **Audio gaps** — perfect parry shimmer replacement (more satisfying), ice sword impact sound, hop-in footstep SFX, two battle themes (Phase 1 + Phase 2), dedicated cast windup sound separate from magic_launch.wav
+- **Battle menu UI polish** — layout, positioning, visual feedback
+- **ATTACK_AUTHORING.md** — documentation for creating new AttackData/AttackStep resources
 - **Bouncing circle color customisation** — color gradient (purple→white) and pass count are currently fixed per-type in `ApplyTypeSettings`; could be exposed as per-step inspector fields for more expressive attack authoring
 - **Learnable move signalling** — visual highlight on enemy and colored move-name label during learnable-move sequences
 - **Taunt ability** — player action that baits the enemy into using their signature/learnable move
-- **Learnable move SFX** — when the white flash + "If I watch carefully..." signal triggers, play a distinct audio cue to reinforce the moment (chime, shimmer, or subtle musical sting). Wire into the existing FlashEnemyWhite() / ShowLearnableSignal() call site in BeginEnemyAttack.
 - **Self-targeting spell alignment** — Cure spell effect and target zone are not perfectly centered on the player's visual body due to the knight sprite having the character body left-of-center within its frame. Revisit when implementing the full character system — the correct fix is either adjusting the sprite frame composition or implementing a per-spell visual center offset.

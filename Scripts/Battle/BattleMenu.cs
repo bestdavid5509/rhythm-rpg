@@ -99,6 +99,7 @@ public partial class BattleTest : Node2D
     private void ShowMenu()
     {
         _state                  = BattleState.PlayerMenu;
+        _inputLocked            = false;  // Unlock input — player can interact with menu.
         _inSubMenu              = false;
         _inItemMenu             = false;
         _menuIndex              = 0;
@@ -179,8 +180,11 @@ public partial class BattleTest : Node2D
     {
         // Insert the absorbed move before "Back" (last entry).
         int backIndex = _subMenuLabelsData.Count - 1;
-        _subMenuLabelsData.Insert(backIndex, "Comet Barrage");
-        _subMenuCategoriesData.Insert(backIndex, AttackCategory.Magic);
+        string label = !string.IsNullOrEmpty(_absorbedMoveAttack.DisplayName)
+            ? _absorbedMoveAttack.DisplayName
+            : "Absorbed Move";
+        _subMenuLabelsData.Insert(backIndex, label);
+        _subMenuCategoriesData.Insert(backIndex, _absorbedMoveAttack.Category);
         _subMenuAttacksData.Insert(backIndex, _absorbedMoveAttack);
         PopulateSubMenuPanel();
     }

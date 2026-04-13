@@ -72,5 +72,6 @@ SoundTriggerFrames = PackedInt32Array(9, 11)
 
 [resource]
 script = ExtResource("1_attackdata")
+DisplayName = "Comet Barrage"
 Steps = Array[ExtResource("2_attackstep")]([SubResource("AttackStep_1"), SubResource("AttackStep_2"), SubResource("AttackStep_3"), SubResource("AttackStep_4"), SubResource("AttackStep_5")])
 MpCost = 30

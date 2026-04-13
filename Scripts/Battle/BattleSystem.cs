@@ -62,6 +62,7 @@ public partial class BattleSystem : Node
     private int                      _totalPromptsRemaining;  // total circles across all steps; 0 → SequenceCompleted
     private bool                     _isPlayerAttack;         // true when player is the attacker — uses step.PlayerOffset
     private bool                     _sequenceCancelled;      // set on Physical miss — prevents new steps from spawning
+    private bool                     _sequenceActive;         // true while a sequence is running; prevents multi-emit of SequenceCompleted
 
     // =========================================================================
     // Legacy battle state — used by stub methods below
@@ -192,6 +193,7 @@ public partial class BattleSystem : Node
         _promptPosition    = promptPosition;
         _isPlayerAttack    = isPlayerAttack;
         _sequenceCancelled = false;
+        _sequenceActive    = true;
 
         // Count every circle across all steps so SequenceCompleted fires only after
         // the last circle of the last concurrent step resolves.
@@ -220,6 +222,11 @@ public partial class BattleSystem : Node
     /// </summary>
     private void RunStep(int stepIndex)
     {
+        if (!_sequenceActive)
+        {
+            GD.Print($"[BattleSystem] RunStep({stepIndex}) skipped — sequence no longer active.");
+            return;
+        }
         if (_sequenceCancelled)
         {
             GD.Print($"[BattleSystem] RunStep({stepIndex}) skipped — sequence cancelled by Physical miss.");
@@ -385,6 +392,15 @@ public partial class BattleSystem : Node
     /// </summary>
     private void OnAnyCircleCompleted(TimingPrompt prompt, int result, int stepIndex)
     {
+        // Guard: ignore callbacks from a previous sequence that has already completed.
+        if (!_sequenceActive)
+        {
+            GD.Print($"[BattleSystem] OnAnyCircleCompleted ignored — sequence no longer active.");
+            if (IsInstanceValid(prompt))
+                prompt.QueueFree();
+            return;
+        }
+
         GD.Print($"[BattleSystem] Step {stepIndex + 1} circle resolved " +
                  $"({(TimingPrompt.InputResult)result}). " +
                  $"{_totalPromptsRemaining - 1} circle(s) remaining in sequence.");
@@ -407,6 +423,9 @@ public partial class BattleSystem : Node
         _totalPromptsRemaining--;
         if (_totalPromptsRemaining > 0) return;
 
+        // Emit exactly once per sequence — _sequenceActive prevents re-emission from
+        // late-resolving circles or stacked callbacks.
+        _sequenceActive = false;
         GD.Print("[BattleSystem] All circles resolved — emitting SequenceCompleted.");
         EmitSignal(SignalName.SequenceCompleted);
     }

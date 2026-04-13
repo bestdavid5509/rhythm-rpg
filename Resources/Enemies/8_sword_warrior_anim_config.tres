@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="EnemyAnimationConfig" format=3]
+
+[ext_resource type="Script" path="res://Scripts/Battle/EnemyAnimationConfig.cs" id="1_config"]
+
+[resource]
+script = ExtResource("1_config")
+IdleRow = 0
+IdleFrames = 14
+RunRow = 1
+RunFrames = 8
+CastIntroRow = 3
+CastIntroFrames = 4
+CastLoopRow = 4
+CastLoopStartCol = 0
+CastLoopFrames = 14
+HasCastEnd = true
+CastEndRow = 3
+CastEndStartCol = 18
+CastEndFrames = 3
+MeleeAttackRow = 2
+MeleeAttackFrames = 15
+MeleeImpactFrame = 8
+HurtRow = 0
+HurtFrames = 4
+HurtSheetPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior__red_damaged_with_flash-Sheet.png"
+HurtFullFrames = 14
+DeathRow = 6
+DeathFrames = 15

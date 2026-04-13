@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="EnemyData" format=3 uid="uid://d145pa70x3l4n"]
+
+[ext_resource type="Script" uid="uid://cnumsancfm1et" path="res://Scripts/Battle/EnemyData.cs" id="1_enemydata"]
+[ext_resource type="Resource" uid="uid://dm7xqp3bn5kc4" path="res://Resources/Attacks/enemy_melee_attack.tres" id="2_melee"]
+[ext_resource type="Resource" uid="uid://c4yrmt8qp5dhs" path="res://Resources/Attacks/red_triple_sword_plunge.tres" id="3_triple"]
+[ext_resource type="Resource" uid="uid://cx4nfp7qd2wr8" path="res://Resources/Attacks/red_hammer_swipe.tres" id="4_hammer"]
+[ext_resource type="Resource" uid="uid://dkr7v2m8wnp5j" path="res://Resources/Attacks/ice_sword_swipe.tres" id="5_ice"]
+[ext_resource type="Resource" path="res://Resources/Enemies/warrior_phase1_anim_config.tres" id="6_animconfig"]
+
+[resource]
+script = ExtResource("1_enemydata")
+EnemyName = "Warrior"
+MaxHp = 150
+SpritesheetPath = "res://Assets/Enemies/Warrior/Warrior_Red_Sword_Silver_White_Armor/Warrior_sprite_red_sword_silver_white_armor_sheet.png"
+FrameWidth = 130
+FrameHeight = 130
+SpriteOffsetY = 90.0
+AnimationConfig = ExtResource("6_animconfig")
+AttackPool = [ExtResource("2_melee"), ExtResource("3_triple"), ExtResource("4_hammer"), ExtResource("5_ice")]
+LearnableAttack = ExtResource("5_ice")

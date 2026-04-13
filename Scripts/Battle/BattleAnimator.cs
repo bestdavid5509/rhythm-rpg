@@ -121,19 +121,13 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Builds and assigns SpriteFrames for the enemy AnimatedSprite2D by slicing
-    /// the warrior sprite sheet into named animations. Mirrors the runtime AtlasTexture
-    /// construction used by BattleSystem.SpawnEffectSprite for one-shot effects.
-    ///
-    /// Sheet: 8_sword_warrior_red-Sheet.png — 160×160 per frame, 21 cols × 7 rows.
-    /// Row mapping: idle=0, run=1, attack=2, cast_full=3, cast_loop=4, death=6.
+    /// the enemy's sprite sheet into named animations. All layout values are read
+    /// from EnemyData.AnimationConfig — no hardcoded row/frame constants.
     /// </summary>
     private void BuildEnemySpriteFrames()
     {
         GD.Print("[BattleTest] BuildEnemySpriteFrames called.");
 
-        // Once-only guard — if the sprite already has its frames from a prior call, skip rebuild.
-        // This prevents a second SpriteFrames construction if anything calls this method again
-        // after _Ready (e.g. a hot-reload, mistaken double-call, or future refactor).
         if (_enemyAnimSprite.SpriteFrames != null &&
             _enemyAnimSprite.SpriteFrames.HasAnimation("idle"))
         {
@@ -141,60 +135,62 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        const string SheetPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior_red-Sheet.png";
-        var texture = GD.Load<Texture2D>(SheetPath);
-        if (texture == null)
+        if (EnemyData?.AnimationConfig == null || string.IsNullOrEmpty(EnemyData.SpritesheetPath))
         {
-            GD.PrintErr($"[BattleTest] Could not load enemy sprite sheet: {SheetPath}");
+            GD.PrintErr("[BattleTest] BuildEnemySpriteFrames — EnemyData or AnimationConfig is null.");
             return;
         }
 
-        const int Fw = 160, Fh = 160;
-        var frames = new SpriteFrames();
-        if (frames.HasAnimation("default")) frames.RemoveAnimation("default");  // guard: constructor may not always add it
+        var cfg = EnemyData.AnimationConfig;
+        int Fw  = EnemyData.FrameWidth;
+        int Fh  = EnemyData.FrameHeight;
 
-        AddEnemyAnimation(frames, texture, "idle",       row: 0, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: true);
-        AddEnemyAnimation(frames, texture, "run",        row: 1, count:  8, fw: Fw, fh: Fh, fps: 12f, loop: true);
-        AddEnemyAnimation(frames, texture, "attack",     row: 2, count: 15, fw: Fw, fh: Fh, fps: 12f, loop: false);
-        // cast_full row (row 3) is split into three phases:
-        //   cast_intro — frames 0–3  (wind-up, plays once before the prompt appears)
-        //   cast_loop  — row 4       (hold pose, loops for the duration of the prompt sequence)
-        //   cast_end   — frames 18–20 (release, plays once after the sequence resolves)
-        AddEnemyAnimation(frames, texture, "cast_intro", row: 3, count:  4, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol:  0);
-        AddEnemyAnimation(frames, texture, "cast_loop",  row: 4, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: true);
-        AddEnemyAnimation(frames, texture, "cast_end",   row: 3, count:  3, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: 18);
-        AddEnemyAnimation(frames, texture, "death",      row: 6, count: 15, fw: Fw, fh: Fh, fps: 12f, loop: false);
-
-        // Hurt animations from a separate single-row sheet (2240×160, 160×160 per frame, 14 cols).
-        // hurt_flash: frames 0–3 (quick flash for normal damage reactions)
-        // hurt_full:  all 14 frames (flash + extended hold for parry counter impact)
-        const string HurtSheetPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior__red_damaged_with_flash-Sheet.png";
-        var hurtTexture = GD.Load<Texture2D>(HurtSheetPath);
-        if (hurtTexture != null)
+        var texture = GD.Load<Texture2D>(EnemyData.SpritesheetPath);
+        if (texture == null)
         {
-            AddEnemyAnimation(frames, hurtTexture, "hurt_flash", row: 0, count:  4, fw: Fw, fh: Fh, fps: 12f, loop: false);
-            AddEnemyAnimation(frames, hurtTexture, "hurt_full",  row: 0, count: 14, fw: Fw, fh: Fh, fps: 12f, loop: false);
+            GD.PrintErr($"[BattleTest] Could not load enemy sprite sheet: {EnemyData.SpritesheetPath}");
+            return;
+        }
+
+        var frames = new SpriteFrames();
+        if (frames.HasAnimation("default")) frames.RemoveAnimation("default");
+
+        AddEnemyAnimation(frames, texture, "idle",         row: cfg.IdleRow,        count: cfg.IdleFrames,        fw: Fw, fh: Fh, fps: 12f, loop: true);
+        AddEnemyAnimation(frames, texture, "run",          row: cfg.RunRow,         count: cfg.RunFrames,         fw: Fw, fh: Fh, fps: 12f, loop: true);
+        AddEnemyAnimation(frames, texture, "melee_attack", row: cfg.MeleeAttackRow, count: cfg.MeleeAttackFrames, fw: Fw, fh: Fh, fps: 12f, loop: false);
+        AddEnemyAnimation(frames, texture, "cast_intro",   row: cfg.CastIntroRow,   count: cfg.CastIntroFrames,   fw: Fw, fh: Fh, fps: 12f, loop: false);
+        AddEnemyAnimation(frames, texture, "cast_loop",    row: cfg.CastLoopRow,    count: cfg.CastLoopFrames,    fw: Fw, fh: Fh, fps: 12f, loop: true, startCol: cfg.CastLoopStartCol);
+
+        if (cfg.HasCastEnd)
+            AddEnemyAnimation(frames, texture, "cast_end", row: cfg.CastEndRow, count: cfg.CastEndFrames, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: cfg.CastEndStartCol);
+
+        AddEnemyAnimation(frames, texture, "death", row: cfg.DeathRow, count: cfg.DeathFrames, fw: Fw, fh: Fh, fps: 12f, loop: false);
+
+        // Hurt animations — from separate sheet (hurt_flash + hurt_full) or main sheet (hurt).
+        if (!string.IsNullOrEmpty(cfg.HurtSheetPath))
+        {
+            var hurtTexture = GD.Load<Texture2D>(cfg.HurtSheetPath);
+            if (hurtTexture != null)
+            {
+                AddEnemyAnimation(frames, hurtTexture, "hurt_flash", row: 0, count: cfg.HurtFrames,     fw: Fw, fh: Fh, fps: 12f, loop: false);
+                AddEnemyAnimation(frames, hurtTexture, "hurt_full",  row: 0, count: cfg.HurtFullFrames,  fw: Fw, fh: Fh, fps: 12f, loop: false);
+            }
+            else
+                GD.PrintErr($"[BattleTest] Could not load enemy hurt sheet: {cfg.HurtSheetPath}");
         }
         else
         {
-            GD.PrintErr($"[BattleTest] Could not load enemy hurt sheet: {HurtSheetPath}");
+            AddEnemyAnimation(frames, texture, "hurt", row: cfg.HurtRow, count: cfg.HurtFrames, fw: Fw, fh: Fh, fps: 12f, loop: false);
         }
 
-        // Append one fully-transparent 160×160 frame at the end of the death animation,
-        // held for ~0.5 s so the Victory label appears only after death particles have
-        // fully dissipated rather than cutting in mid-effect.
-        //
-        // Godot 4's AddFrame(anim, texture, duration) multiplies the base frame time
-        // (1 / fps = 1/12 s) by the duration value, so 6.0 × (1/12 s) = 0.5 s exactly.
-        //
-        // Image.CreateEmpty fills with (0,0,0,0) by default — fully transparent black.
-        // ImageTexture.CreateFromImage uploads it to GPU memory as a normal Texture2D.
+        // Append one fully-transparent frame at the end of the death animation,
+        // held for ~0.5 s so the Victory label appears only after death particles dissipate.
         var blankImage   = Image.CreateEmpty(Fw, Fh, false, Image.Format.Rgba8);
         var blankTexture = ImageTexture.CreateFromImage(blankImage);
         frames.AddFrame("death", blankTexture, duration: 6.0f);  // 6.0 × (1/12 s) ≈ 0.5 s
 
         _enemyAnimSprite.SpriteFrames = frames;
-        GD.Print("[BattleTest] Enemy sprite frames built — 8 animations loaded.");
+        GD.Print($"[BattleTest] Enemy sprite frames built from {EnemyData.SpritesheetPath}.");
     }
 
     /// <param name="startCol">First column to read from (default 0). Use for sub-ranges of a row, e.g. cast_end starts at col 18.</param>
@@ -388,6 +384,7 @@ public partial class BattleTest : Node2D
             // Damage from the miss somehow killed the enemy (edge case).
             _enemyDead = true;
             PlaySound("enemy_defeat.mp3");
+            SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
             _enemyAnimSprite.Play("death");  // OWNER: enemy death from combo miss damage
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
             PlayTeardown(null);
@@ -397,6 +394,7 @@ public partial class BattleTest : Node2D
         {
             _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
             _playerAnimSprite.SpeedScale = 2f;
+            SafeDisconnectPlayerAnim(OnRetreatFinished);
             PlayPlayerBackwards("run");  // OWNER: BeginComboMissRetreat — retreat hop-back
             _playerAnimSprite.AnimationFinished += OnRetreatFinished;
             PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack);
@@ -426,6 +424,7 @@ public partial class BattleTest : Node2D
             // Interrupt the enemy's current animation and play death; reset camera without next turn.
             _enemyDead = true;
             PlaySound("enemy_defeat.mp3");
+            SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
             _enemyAnimSprite.Play("death");         // OWNER: enemy death from player attack
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
             PlayTeardown(null);
@@ -443,6 +442,7 @@ public partial class BattleTest : Node2D
             // Looping is intentional for the forward hop-in; we restore it in OnRetreatFinished.
             _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
             _playerAnimSprite.SpeedScale = 2f;
+            SafeDisconnectPlayerAnim(OnRetreatFinished);
             PlayPlayerBackwards("run");  // OWNER: player turn, retreat hop-back
             _playerAnimSprite.AnimationFinished += OnRetreatFinished;
 
@@ -487,14 +487,18 @@ public partial class BattleTest : Node2D
         const int CounterDamage = 20;
         PlaySound("perfect_parry_shimmer.wav");
 
-        // Disconnect the normal cast_end → idle callback so it doesn't fire during
-        // or after the counter sequence. The counter's onComplete handles the flow.
+        // Transition enemy out of cast pose. If the enemy has cast_end, play it;
+        // otherwise go directly to idle.
         SafeDisconnectEnemyAnim(OnCastEndFinished);
-
-        // Transition enemy out of cast pose via cast_end as the counter begins.
-        // Reconnect OnCastEndFinished so cast_end → idle plays naturally during wind-up.
-        PlayEnemy("cast_end");
-        _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+        if (HasCastEnd())
+        {
+            PlayEnemy("cast_end");
+            _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+        }
+        else
+        {
+            PlayEnemy("idle");
+        }
 
         // Player stays in parry animation until OnParryFinished fires naturally,
         // which transitions to idle. No need to force idle here.
@@ -518,26 +522,36 @@ public partial class BattleTest : Node2D
                 PlaySound("player_attack_swing.wav");
                 SetPlayerFrame(1);  // OWNER: PlayParryCounter — impact pose
 
-                // Play hurt_full once (flash frames 0–3 + hold frames 4–13).
-                // When it finishes, loop back to frame 3 (skipping the flash) so the
-                // enemy stays visibly in the hurt pose until the slash effect completes.
-                // TODO: Standard enemies should just hold on frame 3 (StopEnemy() after
-                // hurt_flash completes) rather than looping the full animation. The
-                // 8 Sword Warrior's large sprite needs the subtle idle-hurt motion to
-                // avoid looking frozen, hence the loop approach here.
+                // Play enemy hurt reaction during parry counter impact.
+                // Enemies with a separate hurt sheet use hurt_full (14 frames) looped
+                // from frame 3 for a sustained hurt pose. Others use "hurt" (short, no loop).
                 Action onHurtFullFinished = null;
-                onHurtFullFinished = () =>
+                if (HasSeparateHurtSheet())
                 {
+                    onHurtFullFinished = () =>
+                    {
+                        SafeDisconnectEnemyAnim(onHurtFullFinished);
+                        if (_enemyDead) return;
+                        PlayEnemy("hurt_full");
+                        _enemyAnimSprite.Frame = 3;
+                        _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
+                    };
                     SafeDisconnectEnemyAnim(onHurtFullFinished);
-                    if (_enemyDead) return;
-                    // Restart from frame 3 (first non-flash hurt pose) to loop the hold.
                     PlayEnemy("hurt_full");
-                    _enemyAnimSprite.Frame = 3;
                     _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
-                };
-                SafeDisconnectEnemyAnim(onHurtFullFinished);
-                PlayEnemy("hurt_full");
-                _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
+                }
+                else
+                {
+                    // Simple hurt animation — play once then hold last frame.
+                    onHurtFullFinished = () =>
+                    {
+                        SafeDisconnectEnemyAnim(onHurtFullFinished);
+                        // Hold on last frame — don't return to idle until slash completes.
+                    };
+                    SafeDisconnectEnemyAnim(onHurtFullFinished);
+                    PlayEnemy("hurt");
+                    _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
+                }
 
                 // Spawn anime slash effect centered on the enemy.
                 // Damage is deferred until the slash animation completes.
@@ -660,17 +674,25 @@ public partial class BattleTest : Node2D
     // =========================================================================
 
     /// <summary>
-    /// Plays the short hurt_flash animation (frames 0–3: pose → white → red → pose)
-    /// then returns to idle via AnimationFinished. Used for all normal player damage
-    /// (basic attack, magic, combo passes). The parry counter uses hurt_full instead.
+    /// Plays the enemy's short hurt reaction animation then returns to idle.
+    /// Enemies with a separate hurt sheet use "hurt_flash"; others use "hurt".
     /// </summary>
     private void PlayEnemyHurtFlash()
     {
         if (_enemyDead) return;
         SafeDisconnectEnemyAnim(OnEnemyHurtFlashFinished);
-        PlayEnemy("hurt_flash");
+        string hurtAnim = HasSeparateHurtSheet() ? "hurt_flash" : "hurt";
+        PlayEnemy(hurtAnim);
         _enemyAnimSprite.AnimationFinished += OnEnemyHurtFlashFinished;
     }
+
+    /// <summary>True when the enemy uses a separate spritesheet for hurt animations (hurt_flash + hurt_full).</summary>
+    private bool HasSeparateHurtSheet() =>
+        EnemyData?.AnimationConfig != null && !string.IsNullOrEmpty(EnemyData.AnimationConfig.HurtSheetPath);
+
+    /// <summary>True when the enemy has a cast_end animation registered.</summary>
+    private bool HasCastEnd() =>
+        EnemyData?.AnimationConfig?.HasCastEnd ?? false;
 
     private void OnEnemyHurtFlashFinished()
     {

@@ -1,21 +1,13 @@
 [gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://dm7xqp3bn5kc4"]
 
-[ext_resource type="Script" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
-[ext_resource type="Script" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
+[ext_resource type="Script" uid="uid://73sbp1x2vnja" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
+[ext_resource type="Script" uid="uid://c4oq4pa1cw1dg" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
 
 [sub_resource type="Resource" id="AttackStep_1"]
 script = ExtResource("2_attackstep")
-SpritesheetPath = ""
-FrameWidth = 64
-FrameHeight = 64
-Fps = 12.0
 ImpactFrames = PackedInt32Array(8)
-CircleType = 0
 BounceCount = 0
-StartOffsetMs = 0
-FlipH = false
-Scale = Vector2(3, 3)
-Offset = Vector2(-200, 50)
+Offset = Vector2(-200, 0)
 PostAnimationDelayMs = 200
 SoundEffects = PackedStringArray("res://Assets/Audio/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(8)
@@ -24,5 +16,5 @@ SoundTriggerFrames = PackedInt32Array(8)
 script = ExtResource("1_attackdata")
 Category = 0
 IsHopIn = true
-Steps = Array[Object]([SubResource("AttackStep_1")])
+Steps = Array[ExtResource("2_attackstep")]([SubResource("AttackStep_1")])
 BaseDamage = 15

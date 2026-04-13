@@ -26,6 +26,24 @@ public partial class EnemyData : Resource
     /// <summary>Maximum hit points for this enemy.</summary>
     [Export] public int MaxHp = 100;
 
+    /// <summary>res:// path to the enemy's spritesheet PNG.</summary>
+    [Export] public string SpritesheetPath = "";
+
+    /// <summary>Width of a single frame in the spritesheet, in pixels.</summary>
+    [Export] public int FrameWidth = 160;
+
+    /// <summary>Height of a single frame in the spritesheet, in pixels.</summary>
+    [Export] public int FrameHeight = 160;
+
+    /// <summary>
+    /// Y offset applied on top of the floor-anchor formula to fine-tune the enemy's
+    /// visual ground contact. Positive values move the sprite down.
+    /// </summary>
+    [Export] public float SpriteOffsetY = 130f;
+
+    /// <summary>Animation layout configuration for this enemy's spritesheet.</summary>
+    [Export] public EnemyAnimationConfig AnimationConfig;
+
     /// <summary>
     /// All attacks this enemy can use. AttackSelector picks from this pool each turn
     /// based on SelectionStrategy.

@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="EnemyAnimationConfig" format=3]
+
+[ext_resource type="Script" path="res://Scripts/Battle/EnemyAnimationConfig.cs" id="1_config"]
+
+[resource]
+script = ExtResource("1_config")
+IdleRow = 0
+IdleFrames = 9
+RunRow = 2
+RunFrames = 8
+CastIntroRow = 3
+CastIntroFrames = 5
+CastLoopRow = 3
+CastLoopStartCol = 5
+CastLoopFrames = 1
+HasCastEnd = false
+CastEndRow = 0
+CastEndStartCol = 0
+CastEndFrames = 0
+MeleeAttackRow = 4
+MeleeAttackFrames = 16
+MeleeImpactFrame = 8
+HurtRow = 5
+HurtFrames = 4
+HurtSheetPath = ""
+HurtFullFrames = 0
+DeathRow = 6
+DeathFrames = 15
