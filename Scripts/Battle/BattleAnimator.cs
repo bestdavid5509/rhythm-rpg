@@ -234,7 +234,10 @@ public partial class BattleTest : Node2D
         GD.Print("[BattleTest] OnEnemyAttackAnimFinished fired.");
         SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
         if (_enemyDead) return;  // death already in progress — don't interfere
-        PlayEnemy("idle");  // OWNER: OnEnemyAttackAnimFinished — return to idle during PostAnimationDelayMs hold
+        // Skip idle if a perfect parry counter is pending — the counter's hurt animation
+        // will take ownership of the enemy sprite. Playing idle here would stomp it.
+        if (!_parryClean)
+            PlayEnemy("idle");
         _hopInAnimFinished = true;
         if (_hopInSequenceCompleted)
             ProceedAfterHopInAnim();
@@ -487,8 +490,9 @@ public partial class BattleTest : Node2D
         const int CounterDamage = 20;
         PlaySound("perfect_parry_shimmer.wav");
 
-        // Transition enemy out of cast pose. If the enemy has cast_end, play it;
-        // otherwise go directly to idle.
+        // Disconnect cast_end callback so it doesn't fire during the counter.
+        // OnEnemyAttackAnimFinished is NOT disconnected — it must still set _hopInAnimFinished
+        // for the hop-in rendezvous. Its idle call is guarded below.
         SafeDisconnectEnemyAnim(OnCastEndFinished);
         if (HasCastEnd())
         {
@@ -542,11 +546,15 @@ public partial class BattleTest : Node2D
                 }
                 else
                 {
-                    // Simple hurt animation — play once then hold last frame.
+                    // Simple hurt animation — play once then freeze on last frame until
+                    // the counter slash effect completes and the callback plays idle.
                     onHurtFullFinished = () =>
                     {
                         SafeDisconnectEnemyAnim(onHurtFullFinished);
-                        // Hold on last frame — don't return to idle until slash completes.
+                        if (_enemyDead) return;
+                        // Explicitly stop and hold on the last hurt frame so the enemy
+                        // stays in the hurt pose for the duration of the slash effect.
+                        _enemyAnimSprite.Stop();
                     };
                     SafeDisconnectEnemyAnim(onHurtFullFinished);
                     PlayEnemy("hurt");
@@ -565,11 +573,19 @@ public partial class BattleTest : Node2D
                     _enemyHP = Mathf.Max(0, _enemyHP - CounterDamage);
                     GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
                     PlaySound("enemy_hit.wav");
-                    SpawnDamageNumber(EnemyDamageOrigin, CounterDamage, DmgColorPerfect);
+                    // Spawn damage number at the enemy's current world position, offset
+                    // upward above the head. Parented to BattleTest root (not the sprite)
+                    // so scale inheritance doesn't affect label size or float speed.
+                    float fh = EnemyData?.FrameHeight ?? 160;
+                    float sy = _enemyAnimSprite.Scale.Y;
+                    Vector2 counterDmgPos = new Vector2(_enemyAnimSprite.GlobalPosition.X,
+                                                        _enemyAnimSprite.GlobalPosition.Y - fh * sy * 0.3f + 50f);
+                    SpawnDamageNumber(counterDmgPos, CounterDamage, DmgColorPerfect);
                     ShakeCamera(intensity: 10f, duration: 0.3f);
                     UpdateHPBars();
                     PlayPlayer("idle");  // OWNER: PlayParryCounter — slash done, release held pose
-                    onComplete?.Invoke();
+                    // Brief pause so the damage number reads before the retreat/teardown begins.
+                    GetTree().CreateTimer(0.5f).Timeout += () => onComplete?.Invoke();
                 });
 
                 // Shake the enemy sprite for the full duration of the slash (~1.25s).

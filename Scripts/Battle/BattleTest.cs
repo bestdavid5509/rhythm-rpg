@@ -1341,6 +1341,18 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void SpawnDamageNumber(Vector2 position, int amount, Color color)
     {
+        SpawnDamageNumber(position, amount, color, parent: null);
+    }
+
+    /// <summary>
+    /// Spawns a floating damage/heal number that drifts upward and fades out.
+    /// When <paramref name="parent"/> is non-null, the label is added as a child of that node
+    /// and <paramref name="position"/> is treated as a local offset — the number travels with
+    /// the parent during tweens (e.g. enemy retreat after parry counter).
+    /// When null, the label is added to BattleTest in world space.
+    /// </summary>
+    private void SpawnDamageNumber(Vector2 position, int amount, Color color, Node parent)
+    {
         var label = new Label();
         label.Text                = amount.ToString();
         label.Modulate            = color;
@@ -1351,7 +1363,16 @@ public partial class BattleTest : Node2D
         Vector2 startPos = position - new Vector2(40f, 0f);
         Vector2 endPos   = startPos  - new Vector2(0f, 80f);
         label.Position   = startPos;
-        AddChild(label);
+
+        if (parent != null)
+        {
+            // Counteract the parent's scale so the label renders at normal size.
+            if (parent is Node2D parent2D && parent2D.Scale != Vector2.One)
+                label.Scale = new Vector2(1f / parent2D.Scale.X, 1f / parent2D.Scale.Y);
+            parent.AddChild(label);
+        }
+        else
+            AddChild(label);
 
         var tween = CreateTween();
         tween.SetParallel(true);
@@ -1420,9 +1441,15 @@ public partial class BattleTest : Node2D
             tween.TweenProperty(_playerAnimSprite, "position", animTarget, SetupDuration)
                  .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         }
-        // When the enemy is the attacker, move the enemy AnimatedSprite2D by the same X delta
-        // plus the full attackerOffset (X already in _attackerClosePos; Y applied here only
-        // so the sprite moves vertically without affecting the camera or target zone).
+        // When the enemy is the attacker, play run at double speed during hop-in (mirrors player pattern).
+        if (attacker == _enemySprite && !_enemyDead)
+        {
+            _enemyAnimSprite.SpeedScale = 2f;
+            PlayEnemy("run");
+        }
+        // Move the enemy AnimatedSprite2D by the same X delta plus the full attackerOffset
+        // (X already in _attackerClosePos; Y applied here only so the sprite moves vertically
+        // without affecting the camera or target zone).
         if (attacker == _enemySprite)
         {
             float   hopDeltaX  = _attackerClosePos.X - _enemyOrigin.X;
@@ -1436,8 +1463,16 @@ public partial class BattleTest : Node2D
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         tween.TweenProperty(_camera, "zoom", CameraZoomIn, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        if (onComplete != null)
-            tween.Finished += () => onComplete();
+        tween.Finished += () =>
+        {
+            // Reset enemy SpeedScale after hop-in and hold idle until melee_attack starts.
+            if (attacker == _enemySprite && !_enemyDead)
+            {
+                _enemyAnimSprite.SpeedScale = 1f;
+                PlayEnemy("idle");
+            }
+            onComplete?.Invoke();
+        };
     }
 
     /// <summary>
@@ -1594,14 +1629,32 @@ public partial class BattleTest : Node2D
         {
             tween.TweenProperty(_enemyAnimSprite, "position", _enemyAnimSpriteOrigin, TeardownDuration)
                  .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
+            // Play run backwards at double speed during hop-back — only if the enemy
+            // actually moved from origin (hop-in melee). Cast attacks stay at origin
+            // so _attackerClosePos == origin; skip the run animation in that case.
+            bool enemyMoved = _attackerClosePos != GetOrigin(_enemySprite);
+            if (!_enemyDead && enemyMoved)
+            {
+                _enemyAnimSprite.SpeedScale = 2f;
+                _enemyAnimSprite.PlayBackwards("run");
+            }
         }
         // Camera zooms back out to default.
         tween.TweenProperty(_camera, "position", CameraDefaultPos, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
         tween.TweenProperty(_camera, "zoom", CameraDefaultZoom, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
-        if (onComplete != null)
-            tween.Finished += () => onComplete();
+        bool enemyDidMove = _attacker == _enemySprite && _attackerClosePos != GetOrigin(_enemySprite);
+        tween.Finished += () =>
+        {
+            // Reset enemy SpeedScale and return to idle after hop-back (only if enemy moved).
+            if (enemyDidMove && !_enemyDead)
+            {
+                _enemyAnimSprite.SpeedScale = 1f;
+                PlayEnemy("idle");
+            }
+            onComplete?.Invoke();
+        };
     }
 
     // =========================================================================
