@@ -26,6 +26,8 @@ StartOffsetMs = -500
 FlipH = true
 Offset = Vector2(25, -218)
 BaseDamageOverride = 25
+SoundEffects = PackedStringArray("res://Assets/Audio/ice_conjure.wav", "res://Assets/Audio/ice_impact.wav")
+SoundTriggerFrames = PackedInt32Array(0, 10)
 
 [sub_resource type="Resource" id="AttackStep_3"]
 script = ExtResource("2_attackstep")

@@ -558,6 +558,8 @@ public partial class BattleTest : Node2D
             SafeDisconnectPlayerAnim(OnParryFinished);
             StopPlayer();
             PlaySound("parry_clash.wav");
+            if (r == TimingPrompt.InputResult.Perfect)
+                PlaySound("perfect_parry_instance.wav");
             PlayPlayer("parry");  // OWNER: enemy pass, player defends — always restarts from frame 0
             _playerAnimSprite.AnimationFinished += OnParryFinished;
         }
@@ -756,7 +758,7 @@ public partial class BattleTest : Node2D
         // completes before the timing circle appears and the effect fires.
         SafeDisconnectPlayerAnim(OnPlayerCastFinished);
         PlayPlayer("cast");  // OWNER: BeginPlayerMagicAttack — cast wind-up before sequence
-        GetTree().CreateTimer(1f / 12f).Timeout += () => PlaySound("magic_launch.wav");  // frame 1 at 12fps
+        GetTree().CreateTimer(1f / 12f).Timeout += () => PlaySound("magic_launch_4.wav");  // frame 1 at 12fps
         _playerAnimSprite.AnimationFinished += OnPlayerCastFinished;
 
         // Capture locals for the callback closure.
@@ -1040,8 +1042,9 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Fire-and-forget one-shot sound playback from res://Assets/Audio/.
     /// Creates a temporary AudioStreamPlayer that frees itself when done.
+    /// <paramref name="volumeDb"/> adjusts volume in decibels (0 = full, -6 ≈ 50%, -4 ≈ 60%).
     /// </summary>
-    private void PlaySound(string filename)
+    private void PlaySound(string filename, float volumeDb = 0f)
     {
         var stream = GD.Load<AudioStream>($"res://Assets/Audio/{filename}");
         if (stream == null)
@@ -1050,7 +1053,8 @@ public partial class BattleTest : Node2D
             return;
         }
         var player = new AudioStreamPlayer();
-        player.Stream = stream;
+        player.Stream   = stream;
+        player.VolumeDb = volumeDb;
         AddChild(player);
         player.Play();
         player.Finished += player.QueueFree;
@@ -1407,6 +1411,12 @@ public partial class BattleTest : Node2D
         _defender         = defender;
         _attackerClosePos = ComputeClosePosition() + new Vector2(attackerOffset.X, 0f);
 
+        // Hop-in footstep sound for both player and enemy.
+        if (attacker == _playerSprite && !_playerDead)
+            PlaySound("short_quick_steps.wav");
+        if (attacker == _enemySprite && !_enemyDead)
+            PlaySound("short_quick_steps.wav");
+
         // Play run at double speed while the player hops in — snappy charge feel.
         // Guard: only call Play("run") if the animation has frames. A 0-frame animation
         // (caused by a missing .import file for _Run.png) hides the sprite entirely.
@@ -1621,6 +1631,8 @@ public partial class BattleTest : Node2D
         // Return the visible player sprite to its scene origin alongside the ColorRect.
         if (_attacker == _playerSprite)
         {
+            if (!_playerDead)
+                PlaySound("short_quick_steps.wav", volumeDb: -4f);
             tween.TweenProperty(_playerAnimSprite, "position", _playerAnimSpriteOrigin, TeardownDuration)
                  .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
         }
@@ -1635,6 +1647,7 @@ public partial class BattleTest : Node2D
             bool enemyMoved = _attackerClosePos != GetOrigin(_enemySprite);
             if (!_enemyDead && enemyMoved)
             {
+                PlaySound("short_quick_steps.wav", volumeDb: -4f);
                 _enemyAnimSprite.SpeedScale = 2f;
                 _enemyAnimSprite.PlayBackwards("run");
             }

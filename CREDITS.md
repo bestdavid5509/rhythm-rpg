@@ -45,6 +45,15 @@
 | Counter attack sword swing | Squirrel_404 | CC-BY 4.0 — credit required (derivative work) | "Large sword swing" — https://freesound.org/people/Squirrel_404/sounds/737748 |
 | Counter attack sword swing (source 1) | Artninja | CC-BY 4.0 — credit required | "Sword_whoosh_sound.mp3" — https://freesound.org/s/700220 |
 | Counter attack sword swing (source 2) | julianmateo_ | CC-BY 4.0 — credit required | Metallic layer — https://freesound.org/people/julianmateo_/sounds/522701 |
+| Hop-in footstep | Cris_MarYan | CC0 | "Quick_Steps_SFX" — https://freesound.org/people/Cris_MarYan/sounds/816211 |
+| Perfect parry instance (shing) | Artninja | CC-BY 4.0 — credit required | "true_assassin_knife_shing_sounds_02032026" — https://freesound.org/people/Artninja/sounds/844278 |
+| Perfect parry shimmer (alt) | newagesoup | CC0 | "bicycle-bell_09.wav" — https://freesound.org/people/newagesoup/sounds/383602 |
+| Magic impact (alt 2) | EminYILDIRIM | CC-BY 4.0 — credit required | "Dark Tonal Magic Whoosh" — https://freesound.org/people/EminYILDIRIM/sounds/580456 |
+| Magic impact (alt 3/4/5) | EminYILDIRIM | CC-BY 4.0 — credit required | "Holy Protection Skill Buff" — https://freesound.org/people/EminYILDIRIM/sounds/621206 |
+| Cure spell | EminYILDIRIM | CC-BY 4.0 — credit required | "Heal Magic Buff" — https://freesound.org/people/EminYILDIRIM/sounds/590975 |
+| Ice spell impact | EminYILDIRIM | CC-BY 4.0 — credit required | "Magic Ice Impact Skill Spell" — https://freesound.org/people/EminYILDIRIM/sounds/550267 |
+| Magic conjure (cast windup) | mikiko850 | CC-BY 4.0 — credit required | "Channeling Magic Texture" — https://freesound.org/people/mikiko850/sounds/849806 |
+| Ice conjure | Omiranda14 | CC-BY 4.0 — credit required | "SFX_Spell_Freeze_03" — https://freesound.org/people/Omiranda14/sounds/790465 |
 
 ## Tools Used
 

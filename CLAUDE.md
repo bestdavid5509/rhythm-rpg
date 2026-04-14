@@ -393,7 +393,6 @@ Any active player-attack `TimingPrompt` must be forcibly freed at the top of `Be
 
 - **Phase transition** — trigger Phase 2 when Phase 1 HP hits zero (explosion, sprite swap to 8 Sword Warrior); architecture supports it but the transition sequence is not yet implemented
 - **Phase 2 boss setup** — new `EnemyData` + `EnemyAnimationConfig` for the 8 Sword Warrior; architecture already supports it
-- **Audio gaps** — perfect parry shimmer replacement (more satisfying), ice sword impact sound, hop-in footstep SFX, two battle themes (Phase 1 + Phase 2), dedicated cast windup sound separate from magic_launch.wav
 - **Battle menu UI polish** — layout, positioning, visual feedback
 - **ATTACK_AUTHORING.md** — documentation for creating new AttackData/AttackStep resources
 - **Reusable `AttackStep` resources** — refactor embedded sub-resources into standalone `.tres` files that can be referenced by multiple `AttackData` resources, avoiding duplication of shared values (frame dimensions, Fps, spritesheet path, etc.)

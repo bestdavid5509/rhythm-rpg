@@ -488,7 +488,7 @@ public partial class BattleTest : Node2D
     private void PlayParryCounter(Action onComplete)
     {
         const int CounterDamage = 20;
-        PlaySound("perfect_parry_shimmer.wav");
+        PlaySound("perfect_parry_shimmer_2.wav");
 
         // Disconnect cast_end callback so it doesn't fire during the counter.
         // OnEnemyAttackAnimFinished is NOT disconnected — it must still set _hopInAnimFinished
