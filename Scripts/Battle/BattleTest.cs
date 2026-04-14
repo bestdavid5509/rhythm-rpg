@@ -1413,9 +1413,9 @@ public partial class BattleTest : Node2D
 
         // Hop-in footstep sound for both player and enemy.
         if (attacker == _playerSprite && !_playerDead)
-            PlaySound("short_quick_steps.wav");
+            PlaySound("short_quick_steps.wav", volumeDb: 6f);
         if (attacker == _enemySprite && !_enemyDead)
-            PlaySound("short_quick_steps.wav");
+            PlaySound("short_quick_steps.wav", volumeDb: 6f);
 
         // Play run at double speed while the player hops in — snappy charge feel.
         // Guard: only call Play("run") if the animation has frames. A 0-frame animation
@@ -1632,7 +1632,7 @@ public partial class BattleTest : Node2D
         if (_attacker == _playerSprite)
         {
             if (!_playerDead)
-                PlaySound("short_quick_steps.wav", volumeDb: -4f);
+                PlaySound("short_quick_steps.wav", volumeDb: 0f);
             tween.TweenProperty(_playerAnimSprite, "position", _playerAnimSpriteOrigin, TeardownDuration)
                  .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
         }
@@ -1647,7 +1647,7 @@ public partial class BattleTest : Node2D
             bool enemyMoved = _attackerClosePos != GetOrigin(_enemySprite);
             if (!_enemyDead && enemyMoved)
             {
-                PlaySound("short_quick_steps.wav", volumeDb: -4f);
+                PlaySound("short_quick_steps.wav", volumeDb: 0f);
                 _enemyAnimSprite.SpeedScale = 2f;
                 _enemyAnimSprite.PlayBackwards("run");
             }
