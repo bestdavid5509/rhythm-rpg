@@ -234,9 +234,11 @@ public partial class BattleTest : Node2D
         GD.Print("[BattleTest] OnEnemyAttackAnimFinished fired.");
         SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
         if (_enemyDead) return;  // death already in progress — don't interfere
-        // Skip idle if a perfect parry counter is pending — the counter's hurt animation
-        // will take ownership of the enemy sprite. Playing idle here would stomp it.
-        if (!_parryClean)
+        // Skip idle only when a parry counter is imminent — _parryClean is true AND
+        // the sequence has already completed (so PlayParryCounter is about to fire).
+        // If the sequence is still running, no counter exists yet and idle is safe.
+        bool parryCounterImminent = _parryClean && _hopInSequenceCompleted;
+        if (!parryCounterImminent)
             PlayEnemy("idle");
         _hopInAnimFinished = true;
         if (_hopInSequenceCompleted)
@@ -499,8 +501,11 @@ public partial class BattleTest : Node2D
             PlayEnemy("cast_end");
             _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
         }
-        else
+        else if (!_battleSystem.CurrentAttackIsHopIn)
         {
+            // Non-hop-in cast attacks: transition from cast_loop to idle.
+            // Hop-in melee attacks: let melee_attack play to completion —
+            // OnEnemyAttackAnimFinished handles the transition.
             PlayEnemy("idle");
         }
 
