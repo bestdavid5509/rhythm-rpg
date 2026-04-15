@@ -13,8 +13,7 @@ LoopAttack = true
 EnemyData = ExtResource("3_hdgai")
 
 [node name="Background" type="ColorRect" parent="." unique_id=1572392609]
-offset_left = 28.0
-offset_right = 1948.0
+offset_right = 1920.0
 offset_bottom = 1080.0
 color = Color(0.07, 0.07, 0.13, 1)
 

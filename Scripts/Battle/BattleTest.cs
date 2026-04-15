@@ -189,7 +189,11 @@ public partial class BattleTest : Node2D
     private Camera2D  _camera;
     private static readonly Vector2 CameraDefaultPos  = new Vector2(960f, 540f);
     private static readonly Vector2 CameraDefaultZoom = Vector2.One;
-    private static readonly Vector2 CameraZoomIn      = new Vector2(1.8f, 1.8f);
+    // 2.0x zoom-in: visible viewport = 1920/2.0 = 960px wide, half = 480.
+    // Worst-case midpoint offset from canvas center (~520 when step.Offset.X = -200)
+    // still leaves a 40px margin from the left canvas edge, so the grey background
+    // is never revealed during hop-in attacks regardless of attacker offset.
+    private static readonly Vector2 CameraZoomIn      = new Vector2(2.0f, 2.0f);
 
     // Camera shake — delta-based so the offset feels organic rather than linear.
     // Shake is applied to _camera.Offset (not _camera.Position) so it operates on a
@@ -1523,6 +1527,12 @@ public partial class BattleTest : Node2D
         prompt.PromptCompleted += onComplete;
         _activePrompt = prompt;
 
+        // Player hop-in overlaps the enemy similarly to how the enemy overlaps the player
+        // via warrior_melee_combo.tres's Offset = Vector2(-200, 0). Positive X pushes the
+        // left-side attacker (player) further right toward the enemy's body.
+        Vector2 playerHopInOffset = (attacker == _playerSprite)
+            ? new Vector2(200f, 0f)
+            : Vector2.Zero;
         PlayHopIn(attacker, defender, () =>
         {
             // Hop-in finished — freeze on frame 0 (wind-up pose) without playing.
@@ -1543,7 +1553,7 @@ public partial class BattleTest : Node2D
             _targetZone.Visible  = true;
             prompt.ZIndex = 20;
             AddChild(prompt);
-        });
+        }, playerHopInOffset);
     }
 
     /// <summary>
