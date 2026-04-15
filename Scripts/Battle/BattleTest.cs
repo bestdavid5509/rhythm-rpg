@@ -1166,14 +1166,13 @@ public partial class BattleTest : Node2D
         if (EnemyData?.LearnableAttack == null || currentAttack != EnemyData.LearnableAttack) return;
 
         _hasAbsorbedLearnableMove = true;
-        PlaySound("absorbed_ability_acquired.wav");
+        PlaySound("absorbed_ability_acquired.wav", volumeDb: 6f);
         // TODO: when player state/character system is built, add absorbed move to player's persistent move list here
 
         _absorbedMoveAttack = EnemyData.LearnableAttack;
         RebuildSubMenu();
 
         ShowBattleMessage("I've got it.");
-        FlashEnemyWhite();
         GD.Print("[BattleTest] Absorbed learnable move!");
     }
 

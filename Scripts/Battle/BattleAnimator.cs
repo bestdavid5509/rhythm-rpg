@@ -161,7 +161,8 @@ public partial class BattleTest : Node2D
         if (cfg.LightAttackFrames > 0)
             AddEnemyAnimation(frames, texture, "light_attack", row: cfg.LightAttackRow, count: cfg.LightAttackFrames, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: cfg.LightAttackStartCol);
         AddEnemyAnimation(frames, texture, "cast_intro",   row: cfg.CastIntroRow,   count: cfg.CastIntroFrames,   fw: Fw, fh: Fh, fps: 12f, loop: false);
-        AddEnemyAnimation(frames, texture, "cast_loop",    row: cfg.CastLoopRow,    count: cfg.CastLoopFrames,    fw: Fw, fh: Fh, fps: 12f, loop: true, startCol: cfg.CastLoopStartCol);
+        if (cfg.CastLoopFrames > 0)
+            AddEnemyAnimation(frames, texture, "cast_loop", row: cfg.CastLoopRow, count: cfg.CastLoopFrames, fw: Fw, fh: Fh, fps: 12f, loop: true, startCol: cfg.CastLoopStartCol);
 
         if (cfg.HasCastEnd)
             AddEnemyAnimation(frames, texture, "cast_end", row: cfg.CastEndRow, count: cfg.CastEndFrames, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: cfg.CastEndStartCol);
@@ -223,7 +224,11 @@ public partial class BattleTest : Node2D
     {
         GD.Print("[BattleTest] OnCastIntroFinished fired.");
         SafeDisconnectEnemyAnim(OnCastIntroFinished);
-        PlayEnemy("cast_loop");
+        if (_enemyDead) return;
+        // If the enemy has no cast_loop animation (CastLoopFrames = 0), hold idle for
+        // the remainder of the prompt sequence instead.
+        int castLoopFrames = EnemyData?.AnimationConfig?.CastLoopFrames ?? 0;
+        PlayEnemy(castLoopFrames > 0 ? "cast_loop" : "idle");
     }
 
     /// <summary>
