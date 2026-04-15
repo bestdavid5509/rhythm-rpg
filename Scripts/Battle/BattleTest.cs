@@ -185,6 +185,12 @@ public partial class BattleTest : Node2D
     private bool      _hopInAnimFinished;      // set by OnEnemyAttackAnimFinished
     private bool      _hopInOver;              // cached CheckGameOver() result from OnEnemySequenceCompleted
 
+    // Bouncing hop-in replay — subscribed during Bouncing hop-in steps to replay the
+    // enemy animation on each inward pass. Unsubscribed when the sequence completes.
+    private AttackStep _bouncingHopInStep;
+    private float      _bouncingHopInAnimDelay;
+    private bool       _bouncingHopInSubscribed;
+
     // Camera — created in _Ready; controls zoom and pan during combat close-ups.
     private Camera2D  _camera;
     private static readonly Vector2 CameraDefaultPos  = new Vector2(960f, 540f);
@@ -537,6 +543,63 @@ public partial class BattleTest : Node2D
             GetTree().CreateTimer(animDelay).Timeout += PlayStepAnimation;
         else
             PlayStepAnimation();
+
+        // Bouncing hop-in: subscribe to StepPassEvaluated to replay the animation on
+        // each subsequent inward pass (synced to the same animDelay so the impact frame
+        // lands on each pass's close). Unsubscribed in OnEnemySequenceCompleted.
+        if (step.CircleType == TimingPrompt.PromptType.Bouncing)
+        {
+            _bouncingHopInStep      = step;
+            _bouncingHopInAnimDelay = animDelay;
+            if (!_bouncingHopInSubscribed)
+            {
+                _battleSystem.StepPassEvaluated += OnBouncingHopInPassEvaluated;
+                _bouncingHopInSubscribed = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Bouncing hop-in replay — subscribed in OnBattleSystemStepStarted when the step's
+    /// CircleType is Bouncing. Replays the enemy animation on each subsequent pass so
+    /// each impact frame lands when its circle closes. Schedules a timer BounceDuration
+    /// + animDelay seconds after PassEvaluated, matching BattleSystem's effect-replay pattern.
+    /// </summary>
+    private void OnBouncingHopInPassEvaluated(int result, int passIndex, int stepIndex)
+    {
+        if (_bouncingHopInStep == null) return;
+        if (_enemyDead) return;
+
+        // Only replay if more inward passes follow.
+        if (passIndex >= _bouncingHopInStep.BounceCount) return;
+
+        var   step          = _bouncingHopInStep;
+        float animDelay     = _bouncingHopInAnimDelay;
+        float bounceDur     = 0.5f;  // matches TimingPrompt.BounceDuration default
+        float replayDelay   = bounceDur + animDelay;
+
+        GetTree().CreateTimer(replayDelay).Timeout += () =>
+        {
+            if (_enemyDead) return;
+            SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
+            PlayEnemy(step.EnemyAnimation);
+            _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
+            _hopInAnimFinished = false;
+        };
+    }
+
+    /// <summary>
+    /// Unsubscribes the Bouncing hop-in replay handler. Called from OnEnemySequenceCompleted
+    /// so the subscription doesn't carry over to the next turn.
+    /// </summary>
+    private void UnsubscribeBouncingHopIn()
+    {
+        if (_bouncingHopInSubscribed)
+        {
+            _battleSystem.StepPassEvaluated -= OnBouncingHopInPassEvaluated;
+            _bouncingHopInSubscribed = false;
+        }
+        _bouncingHopInStep = null;
     }
 
     /// <summary>
@@ -624,6 +687,7 @@ public partial class BattleTest : Node2D
             {
                 // Hop-in path: let ProceedAfterHopInAnim handle teardown.
                 UpdateHPBars();
+                UnsubscribeBouncingHopIn();
                 _hopInOver              = true;
                 _hopInSequenceCompleted = true;
                 if (_hopInAnimFinished)
@@ -649,6 +713,7 @@ public partial class BattleTest : Node2D
             void HopInContinuation()
             {
                 UpdateHPBars();
+                UnsubscribeBouncingHopIn();
                 _hopInOver              = CheckGameOver();
                 _hopInSequenceCompleted = true;
 
@@ -1433,6 +1498,19 @@ public partial class BattleTest : Node2D
         _defender         = defender;
         _attackerClosePos = ComputeClosePosition() + new Vector2(attackerOffset.X, 0f);
 
+        // Raise the attacker's sprite ZIndex so it renders in front of the defender
+        // during the hop-in overlap. Restored to 0 in PlayTeardown.
+        if (attacker == _playerSprite)
+        {
+            _playerAnimSprite.ZIndex = 1;
+            _enemyAnimSprite.ZIndex  = 0;
+        }
+        else if (attacker == _enemySprite)
+        {
+            _enemyAnimSprite.ZIndex  = 1;
+            _playerAnimSprite.ZIndex = 0;
+        }
+
         // Hop-in footstep sound for both player and enemy.
         if (attacker == _playerSprite && !_playerDead)
             PlaySound("short_quick_steps.wav", volumeDb: 6f);
@@ -1694,6 +1772,9 @@ public partial class BattleTest : Node2D
                 _enemyAnimSprite.SpeedScale = 1f;
                 PlayEnemy("idle");
             }
+            // Restore default ZIndex on both sprites now that the attack is over.
+            _playerAnimSprite.ZIndex = 0;
+            _enemyAnimSprite.ZIndex  = 0;
             onComplete?.Invoke();
         };
     }

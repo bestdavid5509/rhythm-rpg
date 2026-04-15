@@ -27,7 +27,6 @@ SoundTriggerFrames = PackedInt32Array(8)
 script = ExtResource("2_attackstep")
 ImpactFrames = PackedInt32Array(8)
 BounceCount = 0
-StartOffsetMs = 0
 Offset = Vector2(-200, 0)
 PostAnimationDelayMs = 200
 EnemyAnimation = "melee_attack"

@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="AttackData" format=3 uid="uid://cxgpdfe8hqaei"]
+
+[ext_resource type="Script" uid="uid://73sbp1x2vnja" path="res://Scripts/Battle/AttackData.cs" id="1_attackdata"]
+[ext_resource type="Script" uid="uid://c4oq4pa1cw1dg" path="res://Scripts/Battle/AttackStep.cs" id="2_attackstep"]
+
+[sub_resource type="Resource" id="AttackStep_1"]
+script = ExtResource("2_attackstep")
+ImpactFrames = PackedInt32Array(8)
+CircleType = 2
+BounceCount = 5
+Offset = Vector2(-200, 0)
+PostAnimationDelayMs = 200
+EnemyAnimation = "melee_attack"
+SoundEffects = PackedStringArray("res://Assets/Audio/fire_hammer.wav")
+SoundTriggerFrames = PackedInt32Array(8)
+
+[resource]
+script = ExtResource("1_attackdata")
+Category = 0
+IsHopIn = true
+Steps = Array[ExtResource("2_attackstep")]([SubResource("AttackStep_1")])
