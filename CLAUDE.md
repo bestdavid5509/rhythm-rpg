@@ -318,6 +318,10 @@ All knight animations use 120×80 px frames from horizontal-strip PNGs at `res:/
 2. `SpeedScale = 2f`, `PlayBackwards("run")` — snappy hop-back.
 3. `OnRetreatFinished` resets `SpeedScale = 1f`, restores `SetAnimationLoop("run", true)`, returns to `idle` only if `Animation == "run"` (guards against a concurrent parry/hit taking ownership).
 
+**Item use (`_ItemUse.png`, 9 frames, no loop):** `item_use` plays when the player uses the Ether item. Triggered from `BattleMenu` → `UseEtherItem()` in BattleTest. At frame 6 of the animation, `SpawnEtherEffect()` spawns the Blue Descending Circle Buff sprite overlaid on the player, plays `cure_spell.wav`, and calls `RestoreMp(20)`. The Ether effect data comes from `player_ether_item_use.tres` — an `AttackData` used as pure visual data (no circles, not routed through `BattleSystem.StartSequence`). When the animation finishes, `OnEtherAnimationFinished` returns the player to idle, then `BeginEnemyAttack` fires after 0.5 s.
+
+**AddPlayerAnimationMixed** (BattleAnimator.cs): utility helper that registers an animation sampled from a list of `(texture path, frame index)` pairs — supports non-contiguous frames and frames pulled from multiple source strips. Retained for future custom multi-source animations; not currently used (all active player animations use the contiguous-range `AddPlayerAnimation` helper).
+
 ### Dead-Flag Guards
 
 Once `_playerDead` or `_enemyDead` is set, no further animation calls can override the death pose. All sprite interaction routes through five helpers in `BattleAnimator.cs`:

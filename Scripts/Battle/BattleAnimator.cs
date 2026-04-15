@@ -51,6 +51,9 @@ public partial class BattleTest : Node2D
                      AddPlayerAnimation(frames, "hit",          Base + "_Hit.png",               loop: false, fw: Fw, fh: Fh);
                      AddPlayerAnimation(frames, "death",        Base + "_DeathNoMovement.png",   loop: false, fw: Fw, fh: Fh);
 
+        // Dedicated item-use strip (9 frames).
+        AddPlayerAnimation(frames, "item_use", Base + "_ItemUse.png", loop: false, fw: Fw, fh: Fh);
+
         _playerAnimSprite.SpriteFrames = frames;
 
         // Diagnostic: confirm every animation and its actual frame count.
@@ -113,6 +116,34 @@ public partial class BattleTest : Node2D
         }
 
         return fh;
+    }
+
+    /// <summary>
+    /// Adds an animation sampled from a list of (texture path, frame index) pairs.
+    /// Supports non-contiguous frames AND frames pulled from multiple source strips.
+    /// Kept as a utility for future custom multi-source animations (e.g. blending poses
+    /// across strips). Not currently used — all active animations use AddPlayerAnimation.
+    /// </summary>
+    private static void AddPlayerAnimationMixed(
+        SpriteFrames frames, string name, bool loop, int fw, int fh, float fps,
+        params (string path, int frameIndex)[] framePicks)
+    {
+        frames.AddAnimation(name);
+        frames.SetAnimationSpeed(name, fps);
+        frames.SetAnimationLoop(name, loop);
+        foreach (var (path, frameIdx) in framePicks)
+        {
+            var texture = GD.Load<Texture2D>(path);
+            if (texture == null)
+            {
+                GD.PrintErr($"[BattleTest] LOAD FAILED for '{name}': {path}");
+                continue;
+            }
+            var atlas    = new AtlasTexture();
+            atlas.Atlas  = texture;
+            atlas.Region = new Rect2(frameIdx * fw, 0, fw, fh);
+            frames.AddFrame(name, atlas);
+        }
     }
 
     // =========================================================================

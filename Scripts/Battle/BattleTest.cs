@@ -164,6 +164,7 @@ public partial class BattleTest : Node2D
     private AttackData _playerComboStrike;   // player_combo_strike.tres — Physical, BaseDamage 6
     private AttackData _absorbedMoveAttack;  // loaded on absorption; null until then
     private AttackData _playerCureAttack;    // player_cure.tres — Magic, BaseDamage 30 (used as heal amount)
+    private AttackData _playerEtherEffect;   // player_ether_combo.tres — active variant for Ether item visual
 
     // Set before BeginPlayerMagicAttack() to select which magic attack the cast flow uses.
     // OnPlayerCastFinished reads this instead of _playerMagicAttack directly.
@@ -303,6 +304,10 @@ public partial class BattleTest : Node2D
         _playerCureAttack = GD.Load<AttackData>("res://Resources/Attacks/player_cure.tres");
         if (_playerCureAttack == null)
             GD.PrintErr("[BattleTest] Failed to load player_cure.tres");
+
+        _playerEtherEffect = GD.Load<AttackData>("res://Resources/Attacks/player_ether_item_use.tres");
+        if (_playerEtherEffect == null)
+            GD.PrintErr("[BattleTest] Failed to load player_ether_item_use.tres");
 
         _battleSystem.StepStarted       += OnBattleSystemStepStarted;
         _battleSystem.StepPassEvaluated += OnBattleSystemStepPassEvaluated;
@@ -1000,6 +1005,101 @@ public partial class BattleTest : Node2D
             _playerAnimSprite.Play("death");
             _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
         }
+    }
+
+    // =========================================================================
+    // Ether item use — player animation + visual effect, no circles
+    // =========================================================================
+
+    /// <summary>
+    /// Plays the item-use combo animation on the player, spawns the Ether effect
+    /// sprite at the impact frame, plays the sound cue, restores MP, then returns
+    /// to idle and begins the enemy turn.
+    /// </summary>
+    private void UseEtherItem()
+    {
+        if (_playerDead) { BeginEnemyAttack(); return; }
+        _state       = BattleState.PlayerAttack;
+        _inputLocked = true;  // block input during item use
+
+        // Play the item-use animation on the player.
+        SafeDisconnectPlayerAnim(OnEtherAnimationFinished);
+        PlayPlayer("item_use");
+        _playerAnimSprite.AnimationFinished += OnEtherAnimationFinished;
+
+        // Schedule effect + sound + MP restore at the impact frame of the combo animation.
+        int   impactFrame = _playerEtherEffect?.Steps?[0]?.ImpactFrames?[0] ?? 7;
+        float fps         = _playerEtherEffect?.Steps?[0]?.Fps ?? 12f;
+        float impactDelay = impactFrame / fps;
+        GetTree().CreateTimer(impactDelay).Timeout += () =>
+        {
+            if (_playerDead) return;
+            PlaySound("cure_spell.wav");
+            RestoreMp(20);  // clamps to PlayerMaxMp and calls UpdateMpBar internally
+            SpawnEtherEffect(_playerEtherEffect);
+        };
+    }
+
+    private void OnEtherAnimationFinished()
+    {
+        SafeDisconnectPlayerAnim(OnEtherAnimationFinished);
+        if (_playerDead) return;
+        PlayPlayer("idle");
+        GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
+    }
+
+    /// <summary>
+    /// Spawns a one-shot visual effect sprite centered on the player using the first step
+    /// of the given AttackData as the data source. Does not use BattleSystem — no circles.
+    /// </summary>
+    private void SpawnEtherEffect(AttackData data)
+    {
+        if (data == null || data.Steps.Count == 0) return;
+        var step = data.Steps[0];
+        if (string.IsNullOrEmpty(step.SpritesheetPath)) return;
+        var texture = GD.Load<Texture2D>(step.SpritesheetPath);
+        if (texture == null)
+        {
+            GD.PrintErr($"[BattleTest] SpawnEtherEffect: failed to load {step.SpritesheetPath}");
+            return;
+        }
+
+        int cols = texture.GetWidth()  / step.FrameWidth;
+        int rows = texture.GetHeight() / step.FrameHeight;
+
+        var frames = new SpriteFrames();
+        if (frames.HasAnimation("default")) frames.RemoveAnimation("default");
+        frames.AddAnimation("default");
+        frames.SetAnimationSpeed("default", step.Fps);
+        frames.SetAnimationLoop("default", false);
+        for (int row = 0; row < rows; row++)
+        for (int col = 0; col < cols; col++)
+        {
+            var atlas    = new AtlasTexture();
+            atlas.Atlas  = texture;
+            atlas.Region = new Rect2(col * step.FrameWidth, row * step.FrameHeight,
+                                     step.FrameWidth, step.FrameHeight);
+            frames.AddFrame("default", atlas);
+        }
+
+        Vector2 playerCenter = GetOrigin(_playerSprite) + _playerSprite.Size / 2f;
+        var sprite          = new AnimatedSprite2D();
+        sprite.SpriteFrames = frames;
+        sprite.Centered     = true;
+        sprite.Scale        = step.Scale;
+        sprite.Position     = new Vector2(playerCenter.X, FloorY) + step.PlayerOffset;
+
+        Action onFinished = null;
+        onFinished = () =>
+        {
+            var callable = Callable.From(onFinished);
+            if (sprite.IsConnected(AnimatedSprite2D.SignalName.AnimationFinished, callable))
+                sprite.Disconnect(AnimatedSprite2D.SignalName.AnimationFinished, callable);
+            sprite.QueueFree();
+        };
+        sprite.AnimationFinished += onFinished;
+        AddChild(sprite);
+        sprite.Play("default");
     }
 
     private void FreeActivePrompt()

@@ -250,11 +250,9 @@ public partial class BattleTest : Node2D
         GD.Print($"[BattleTest] Player selects item: {ItemMenuOptionLabels[_itemMenuIndex]}.");
         switch (_itemMenuIndex)
         {
-            case 0:  // Ether — restore 20 MP, end turn
-                RestoreMp(20);
-                GD.Print($"[BattleTest] Ether used. MP: {_playerMp}/{PlayerMaxMp}");
+            case 0:  // Ether — combo animation + effect + sound + restore 20 MP, end turn
                 HideMenu();
-                BeginEnemyAttack();
+                UseEtherItem();
                 break;
             case 1: ShowMenu(); break;  // Back
         }
