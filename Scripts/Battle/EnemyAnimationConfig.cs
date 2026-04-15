@@ -36,6 +36,12 @@ public partial class EnemyAnimationConfig : Resource
     [Export] public int MeleeAttackFrames;
     [Export] public int MeleeImpactFrame;
 
+    // ── Light attack (alternate hop-in strike; optional) ─────────────
+    /// <summary>Row for the light_attack animation. Only registered when LightAttackFrames > 0.</summary>
+    [Export] public int LightAttackRow;
+    [Export] public int LightAttackFrames;
+    [Export] public int LightAttackStartCol;
+
     // ── Hurt (damage reaction) ───────────────────────────────────────
     /// <summary>Row on the main spritesheet for the hurt animation. Used when HurtSheetPath is empty.</summary>
     [Export] public int HurtRow;

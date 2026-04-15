@@ -158,6 +158,8 @@ public partial class BattleTest : Node2D
         AddEnemyAnimation(frames, texture, "idle",         row: cfg.IdleRow,        count: cfg.IdleFrames,        fw: Fw, fh: Fh, fps: 12f, loop: true);
         AddEnemyAnimation(frames, texture, "run",          row: cfg.RunRow,         count: cfg.RunFrames,         fw: Fw, fh: Fh, fps: 12f, loop: true);
         AddEnemyAnimation(frames, texture, "melee_attack", row: cfg.MeleeAttackRow, count: cfg.MeleeAttackFrames, fw: Fw, fh: Fh, fps: 12f, loop: false);
+        if (cfg.LightAttackFrames > 0)
+            AddEnemyAnimation(frames, texture, "light_attack", row: cfg.LightAttackRow, count: cfg.LightAttackFrames, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: cfg.LightAttackStartCol);
         AddEnemyAnimation(frames, texture, "cast_intro",   row: cfg.CastIntroRow,   count: cfg.CastIntroFrames,   fw: Fw, fh: Fh, fps: 12f, loop: false);
         AddEnemyAnimation(frames, texture, "cast_loop",    row: cfg.CastLoopRow,    count: cfg.CastLoopFrames,    fw: Fw, fh: Fh, fps: 12f, loop: true, startCol: cfg.CastLoopStartCol);
 
@@ -234,12 +236,38 @@ public partial class BattleTest : Node2D
         GD.Print("[BattleTest] OnEnemyAttackAnimFinished fired.");
         SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
         if (_enemyDead) return;  // death already in progress — don't interfere
-        // Skip idle only when a parry counter is imminent — _parryClean is true AND
-        // the sequence has already completed (so PlayParryCounter is about to fire).
-        // If the sequence is still running, no counter exists yet and idle is safe.
+
+        // Determine what to show after this animation finishes.
         bool parryCounterImminent = _parryClean && _hopInSequenceCompleted;
-        if (!parryCounterImminent)
+        if (parryCounterImminent)
+        {
+            // Parry counter is about to take ownership — don't play anything.
+        }
+        else if (_battleSystem.CurrentAttackIsHopIn)
+        {
+            // Check if there's a next step with a WaitAnimation to freeze on.
+            int nextIdx = _battleSystem.GetLastStepRun() + 1;
+            var steps   = _battleSystem.GetCurrentAttack()?.Steps;
+            if (steps != null && nextIdx < steps.Count)
+            {
+                var nextStep = steps[nextIdx];
+                if (!string.IsNullOrEmpty(nextStep.WaitAnimation))
+                {
+                    PlayEnemy(nextStep.WaitAnimation);
+                    _enemyAnimSprite.Stop();
+                    _enemyAnimSprite.Frame = 0;
+                }
+                else
+                    PlayEnemy("idle");
+            }
+            else
+                PlayEnemy("idle");  // Last step — return to idle.
+        }
+        else
+        {
             PlayEnemy("idle");
+        }
+
         _hopInAnimFinished = true;
         if (_hopInSequenceCompleted)
             ProceedAfterHopInAnim();

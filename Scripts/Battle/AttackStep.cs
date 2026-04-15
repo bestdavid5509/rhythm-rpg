@@ -130,6 +130,20 @@ public partial class AttackStep : Resource
     [Export] public int PostAnimationDelayMs = 0;
 
     /// <summary>
+    /// Enemy animation to play on the enemy sprite at the start of this step during
+    /// hop-in melee attacks (e.g. "melee_attack"). When empty, no enemy animation is
+    /// driven for this step. Ignored for non-hop-in (cast) attacks.
+    /// </summary>
+    [Export] public string EnemyAnimation = "";
+
+    /// <summary>
+    /// Animation to freeze on frame 0 during the animDelay wait before this step's
+    /// EnemyAnimation plays. Used to show a wind-up pose. When empty, idle is used.
+    /// Only applies to hop-in melee attacks when animDelay > 0.
+    /// </summary>
+    [Export] public string WaitAnimation = "";
+
+    /// <summary>
     /// Audio files to play at specific animation frames during this step.
     /// SoundEffects[i] pairs with SoundTriggerFrames[i] — each pair defines a
     /// res:// path to a sound file and the zero-based animation frame it plays on.

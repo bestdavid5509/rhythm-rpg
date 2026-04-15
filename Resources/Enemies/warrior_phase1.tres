@@ -6,6 +6,7 @@
 [ext_resource type="Resource" uid="uid://cx4nfp7qd2wr8" path="res://Resources/Attacks/red_hammer_swipe.tres" id="4_hammer"]
 [ext_resource type="Resource" uid="uid://dkr7v2m8wnp5j" path="res://Resources/Attacks/ice_sword_swipe.tres" id="5_ice"]
 [ext_resource type="Resource" path="res://Resources/Enemies/warrior_phase1_anim_config.tres" id="6_animconfig"]
+[ext_resource type="Resource" uid="uid://bvkvyw8vi5ul1" path="res://Resources/Attacks/warrior_melee_combo.tres" id="7_meleecombo"]
 
 [resource]
 script = ExtResource("1_enemydata")
@@ -16,5 +17,5 @@ FrameWidth = 130
 FrameHeight = 130
 SpriteOffsetY = 90.0
 AnimationConfig = ExtResource("6_animconfig")
-AttackPool = [ExtResource("2_melee"), ExtResource("3_triple"), ExtResource("4_hammer"), ExtResource("5_ice")]
+AttackPool = [ExtResource("2_melee"), ExtResource("3_triple"), ExtResource("4_hammer"), ExtResource("5_ice"), ExtResource("7_meleecombo")]
 LearnableAttack = ExtResource("5_ice")

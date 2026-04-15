@@ -265,6 +265,20 @@ Impact-frame anchor formula: `animationStartDelay = circleCloseDuration - (Impac
 
 Step scheduling is timer-driven, not completion-driven. Negative `StartOffsetMs` causes steps to overlap (concurrent animations and circles). `_totalPromptsRemaining` counts all circles across all steps; `SequenceCompleted` fires when it reaches 0.
 
+### Hop-In Per-Step Enemy Animation System
+
+Multi-step hop-in melee attacks drive the enemy's own sprite animation per step using three mechanisms:
+
+- **`AttackStep.EnemyAnimation`** — name of the enemy animation to play at the start of this step (e.g. `"melee_attack"`, `"light_attack"`). Empty string = no enemy animation driven (cast attacks use this). Ignored when `AttackData.IsHopIn` is false.
+- **`AttackStep.WaitAnimation`** — name of an animation to freeze on frame 0 during the gap before the **next** step plays (the idle-pose substitute during `StartOffsetMs` delays between steps). Read from the **next step** in `OnEnemyAttackAnimFinished` so the enemy holds a wind-up pose during the wait. Empty = plays idle.
+- **`BattleSystem.StepStarted(stepIndex)`** signal — emitted at the top of `RunStep()` before circles spawn. `BattleTest.OnBattleSystemStepStarted` subscribes and plays `step.EnemyAnimation` after the impact-frame-sync delay so the animation's impact frame lands when the first circle closes.
+
+Step scheduling stays timer-driven in `BattleSystem.RunStep` — `StartOffsetMs` controls the gap between steps. For hop-in combos, authors must set `StartOffsetMs` large enough for the previous animation to complete (e.g. 16 frames at 12 fps ≈ 1.33 s) or use `WaitAnimation` to show a held pose during the gap.
+
+`ProceedAfterHopInAnim` reads `GetLastStepPostAnimDelayMs()` — the **last** step's `PostAnimationDelayMs` controls the hold before retreat on multi-step attacks.
+
+Enemy Physical miss cancellation is gated by `_isPlayerAttack &&` so enemy attacks always play their full sequence regardless of parry outcome. Only player Physical attacks cancel on miss.
+
 ### Player Menu Structure
 
 The battle menu is a `CanvasLayer` with two `PanelContainer` panels — only one visible at a time.

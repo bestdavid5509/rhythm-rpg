@@ -294,6 +294,7 @@ public partial class BattleTest : Node2D
         if (_playerCureAttack == null)
             GD.PrintErr("[BattleTest] Failed to load player_cure.tres");
 
+        _battleSystem.StepStarted       += OnBattleSystemStepStarted;
         _battleSystem.StepPassEvaluated += OnBattleSystemStepPassEvaluated;
         _battleSystem.SequenceCompleted += OnSequenceCompleted;
 
@@ -414,6 +415,8 @@ public partial class BattleTest : Node2D
             // the circle, then retreats once both the circle AND the animation have resolved.
             // Apply the first step's Offset to the close position so the .tres file can tune
             // where the enemy stands during the zoom-in (e.g. push further left to overlap the player).
+            // Enemy animation is now driven per-step by OnBattleSystemStepStarted.
+            // StartSequence triggers StepStarted for step 0 which plays the first animation.
             Vector2 hopInOffset = _battleSystem.GetFirstStep()?.Offset ?? Vector2.Zero;
             PlayHopIn(_enemySprite, _playerSprite, () =>
             {
@@ -422,24 +425,6 @@ public partial class BattleTest : Node2D
                 _targetZone.Position   = promptPos;
                 _targetZone.Visible    = true;
                 _battleSystem.StartSequence(this, defenderCenter, promptPos);
-
-                // Delay the attack animation so its impact frame lands when the first circle closes.
-                // ComputeFirstStepAnimDelay() returns 0 when impact frame / fps <= circleCloseDuration,
-                // in which case we start the animation immediately.
-                // Subscribe OnEnemyAttackAnimFinished to detect when the animation completes
-                // so ProceedAfterHopInAnim can run (after any PostAnimationDelayMs hold).
-                void PlayAttack()
-                {
-                    SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
-                    PlayEnemy("melee_attack");
-                    _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
-                }
-
-                float animDelay = _battleSystem.ComputeFirstStepAnimDelay();
-                if (animDelay > 0f)
-                    GetTree().CreateTimer(animDelay).Timeout += PlayAttack;
-                else
-                    PlayAttack();
             }, hopInOffset);
             return;
         }
@@ -515,6 +500,39 @@ public partial class BattleTest : Node2D
                 _playerAnimSprite.Play("death");
             }
         }
+    }
+
+    /// <summary>
+    /// BattleSystem.StepStarted — fires at the start of each step, before circles spawn.
+    /// For hop-in melee attacks, plays the per-step enemy animation (e.g. melee_attack)
+    /// with timing aligned so the impact frame lands when the first circle closes.
+    /// </summary>
+    private void OnBattleSystemStepStarted(int stepIndex)
+    {
+        if (!_battleSystem.CurrentAttackIsHopIn) return;
+        if (_enemyDead) return;
+
+        var step = _battleSystem.GetCurrentAttack().Steps[stepIndex];
+        if (string.IsNullOrEmpty(step.EnemyAnimation)) return;
+
+        // Compute animation start delay so the impact frame lands when circle 0 closes.
+        float circleCloseDuration = TimingPrompt.DefaultDurationForType(step.CircleType);
+        float rawDelay = circleCloseDuration - step.ImpactFrames[0] / step.Fps;
+        float animDelay = Mathf.Max(0f, rawDelay);
+
+        void PlayStepAnimation()
+        {
+            if (_enemyDead) return;
+            SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
+            PlayEnemy(step.EnemyAnimation);
+            _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
+            _hopInAnimFinished = false;  // Reset for this step's animation.
+        }
+
+        if (animDelay > 0f)
+            GetTree().CreateTimer(animDelay).Timeout += PlayStepAnimation;
+        else
+            PlayStepAnimation();
     }
 
     /// <summary>
@@ -993,7 +1011,7 @@ public partial class BattleTest : Node2D
             }
         }
 
-        int delayMs = _battleSystem.GetFirstStepPostAnimDelayMs();
+        int delayMs = _battleSystem.GetLastStepPostAnimDelayMs();
         if (delayMs > 0)
             GetTree().CreateTimer(delayMs / 1000f).Timeout += DoTeardown;
         else

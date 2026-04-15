@@ -43,6 +43,9 @@ public partial class BattleSystem : Node
     /// </summary>
     [Signal] public delegate void StepPassEvaluatedEventHandler(int result, int passIndex, int stepIndex);
 
+    /// <summary>Emitted at the start of each step, before circles spawn or timers fire.</summary>
+    [Signal] public delegate void StepStartedEventHandler(int stepIndex);
+
     /// <summary>Emitted when every step in the current sequence has resolved.</summary>
     [Signal] public delegate void SequenceCompletedEventHandler();
 
@@ -63,6 +66,7 @@ public partial class BattleSystem : Node
     private bool                     _isPlayerAttack;         // true when player is the attacker — uses step.PlayerOffset
     private bool                     _sequenceCancelled;      // set on Physical miss — prevents new steps from spawning
     private bool                     _sequenceActive;         // true while a sequence is running; prevents multi-emit of SequenceCompleted
+    private int                      _lastStepRun = -1;       // index of the most recently started step
 
     // =========================================================================
     // Legacy battle state — used by stub methods below
@@ -149,6 +153,20 @@ public partial class BattleSystem : Node
         GetFirstStep()?.PostAnimationDelayMs ?? 0;
 
     /// <summary>
+    /// Returns the PostAnimationDelayMs for the last step in the current attack.
+    /// Used for multi-step hop-in attacks where the final step controls the hold before retreat.
+    /// Returns 0 if no attack is loaded or the attack has no steps.
+    /// </summary>
+    public int GetLastStepPostAnimDelayMs()
+    {
+        if (_currentAttack == null || _currentAttack.Steps.Count == 0) return 0;
+        return _currentAttack.Steps[_currentAttack.Steps.Count - 1].PostAnimationDelayMs;
+    }
+
+    /// <summary>Returns the index of the most recently started step, or -1 if none.</summary>
+    public int GetLastStepRun() => _lastStepRun;
+
+    /// <summary>
     /// Returns the effective base damage for a given step. Uses the step's
     /// BaseDamageOverride when set (> 0), otherwise falls back to AttackData.BaseDamage.
     /// </summary>
@@ -194,6 +212,7 @@ public partial class BattleSystem : Node
         _isPlayerAttack    = isPlayerAttack;
         _sequenceCancelled = false;
         _sequenceActive    = true;
+        _lastStepRun       = -1;
 
         // Count every circle across all steps so SequenceCompleted fires only after
         // the last circle of the last concurrent step resolves.
@@ -232,6 +251,9 @@ public partial class BattleSystem : Node
             GD.Print($"[BattleSystem] RunStep({stepIndex}) skipped — sequence cancelled by Physical miss.");
             return;
         }
+
+        _lastStepRun = stepIndex;
+        EmitSignal(SignalName.StepStarted, stepIndex);
 
         var step        = _currentAttack.Steps[stepIndex];
         int circleCount = step.ImpactFrames.Length;
@@ -408,15 +430,15 @@ public partial class BattleSystem : Node
         if (IsInstanceValid(prompt))
             GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += prompt.QueueFree;
 
-        // Physical attacks stop on first miss — cancel pending steps so no new circles spawn.
-        // Circles already spawned (staggered within the current step) still resolve normally;
-        // _totalPromptsRemaining continues to drain until every in-flight circle finishes.
+        // Player Physical attacks stop on first miss — cancel pending steps so no new circles spawn.
+        // Enemy attacks always play their full sequence regardless of parry outcome.
         // TODO: dismiss already-spawned circles with a grey flash when cancelling (stop-on-miss visual).
         if (!_sequenceCancelled &&
+            _isPlayerAttack &&
             _currentAttack?.Category == AttackCategory.Physical &&
             (TimingPrompt.InputResult)result == TimingPrompt.InputResult.Miss)
         {
-            GD.Print("[BattleSystem] Physical miss — cancelling remaining steps.");
+            GD.Print("[BattleSystem] Player Physical miss — cancelling remaining steps.");
             _sequenceCancelled = true;
         }
 

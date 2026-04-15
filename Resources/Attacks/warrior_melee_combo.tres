@@ -8,6 +8,7 @@ script = ExtResource("2_attackstep")
 ImpactFrames = PackedInt32Array(8)
 BounceCount = 0
 Offset = Vector2(-200, 0)
+EnemyAnimation = "melee_attack"
 SoundEffects = PackedStringArray("res://Assets/Audio/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(8)
 
@@ -15,8 +16,10 @@ SoundTriggerFrames = PackedInt32Array(8)
 script = ExtResource("2_attackstep")
 ImpactFrames = PackedInt32Array(8)
 BounceCount = 0
-StartOffsetMs = 200
+StartOffsetMs = 340
 Offset = Vector2(-200, 0)
+EnemyAnimation = "light_attack"
+WaitAnimation = "light_attack"
 SoundEffects = PackedStringArray("res://Assets/Audio/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(8)
 
@@ -24,9 +27,11 @@ SoundTriggerFrames = PackedInt32Array(8)
 script = ExtResource("2_attackstep")
 ImpactFrames = PackedInt32Array(8)
 BounceCount = 0
-StartOffsetMs = 200
+StartOffsetMs = 0
 Offset = Vector2(-200, 0)
 PostAnimationDelayMs = 200
+EnemyAnimation = "melee_attack"
+WaitAnimation = "melee_attack"
 SoundEffects = PackedStringArray("res://Assets/Audio/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(8)
 
