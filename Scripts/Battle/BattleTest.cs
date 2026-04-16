@@ -74,9 +74,17 @@ public partial class BattleTest : Node2D
     // Checked when PromptCompleted fires to decide whether to trigger the auto counter.
     private bool _parryClean;
 
+    // Set true when the player picks Defend from the main menu. While true, miss damage
+    // from enemy passes is halved. Cleared at the start of each player menu turn.
+    private bool _playerDefending;
+
     // True once the player has absorbed the enemy's learnable move via perfect parry.
     // Prevents the absorption moment from triggering more than once per fight.
     private bool _hasAbsorbedLearnableMove = false;
+
+    // Set true by the Beckon ability; consumed on the next SelectEnemyAttack call to
+    // force the enemy to use their LearnableAttack instead of a random pool selection.
+    private bool _beckoning;
 
     // =========================================================================
     // Damage numbers
@@ -495,6 +503,7 @@ public partial class BattleTest : Node2D
         {
             _parryClean   = false;
             int damage    = _battleSystem.GetStepBaseDamage(stepIndex);
+            if (_playerDefending) damage = Mathf.Max(1, damage / 2);
             _playerHP     = Mathf.Max(0, _playerHP - damage);
             GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {_playerHP}/{PlayerMaxHP}");
             PlaySound("player_hit.wav");
@@ -1214,6 +1223,15 @@ public partial class BattleTest : Node2D
         if (LoopAttack && TestEnemyAttack != null)
             return TestEnemyAttack;
 
+        // Beckon forces the learnable move for one turn. Consume the flag whether or
+        // not a learnable exists; LoopAttack above still wins in dev test mode.
+        if (_beckoning)
+        {
+            _beckoning = false;
+            if (EnemyData?.LearnableAttack != null)
+                return EnemyData.LearnableAttack;
+        }
+
         if (EnemyData != null && EnemyData.AttackPool != null && EnemyData.AttackPool.Length > 0)
         {
             var attack = AttackSelector.SelectAttack(EnemyData, ref _lastAttackIndex);
@@ -1251,6 +1269,26 @@ public partial class BattleTest : Node2D
     {
         ShowBattleMessage("If I watch carefully...");
         PlaySound("learnable_signal.wav");
+    }
+
+    /// <summary>
+    /// Beckon ability — if the enemy has an unabsorbed learnable move, sets _beckoning
+    /// so SelectEnemyAttack returns LearnableAttack this turn. Otherwise shows a brief
+    /// message. Always hands off to the enemy turn immediately (no animation).
+    /// </summary>
+    /// <summary>
+    /// Beckon ability — forces the enemy to use their LearnableAttack next turn.
+    /// Selectability (MP, learnable present, not yet absorbed) is gated at the menu
+    /// level by IsSubMenuOptionEnabled, so this method assumes all preconditions hold.
+    /// </summary>
+    private void PerformBeckon()
+    {
+        const int beckonMpCost = 10;
+        _playerMp -= beckonMpCost;
+        UpdateMpBar();
+        _beckoning = true;
+        GD.Print($"[BattleTest] Player beckons (-{beckonMpCost} MP) — enemy will use learnable move next turn.");
+        BeginEnemyAttack();
     }
 
     /// <summary>

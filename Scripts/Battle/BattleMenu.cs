@@ -11,8 +11,8 @@ public partial class BattleTest : Node2D
     // Battle menu
     // =========================================================================
 
-    private static readonly string[] MenuOptionLabels  = { "Attack", "Absorbed Moves", "Items" };
-    private static readonly bool[]   MenuOptionEnabled = { true,     true,             true   };
+    private static readonly string[] MenuOptionLabels  = { "Attack", "Absorbed Moves", "Defend", "Items" };
+    private static readonly bool[]   MenuOptionEnabled = { true,     true,             true,     true   };
 
     // Absorbed Moves submenu — absorbed attack entries followed by "Back".
     // Built dynamically; RebuildSubMenu() appends absorbed moves at runtime.
@@ -23,6 +23,9 @@ public partial class BattleTest : Node2D
 
     // Items submenu — items followed by "Back".
     private static readonly string[] ItemMenuOptionLabels = { "Ether (20 MP)", "Back" };
+
+    // MP cost for Beckon (utility ability with no AttackData backing).
+    private const int BeckonMpCost = 10;
 
     private static readonly Color ColorMenuSelected      = new Color(1.00f, 0.90f, 0.20f, 1.00f);  // yellow — selected item
     private static readonly Color ColorMenuNormal        = new Color(1.00f, 1.00f, 1.00f, 1.00f);  // white  — unselected, no category
@@ -100,6 +103,7 @@ public partial class BattleTest : Node2D
     {
         _state                  = BattleState.PlayerMenu;
         _inputLocked            = false;  // Unlock input — player can interact with menu.
+        _playerDefending        = false;  // Defend only lasts one enemy turn.
         _inSubMenu              = false;
         _inItemMenu             = false;
         _menuIndex              = 0;
@@ -146,9 +150,9 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void InitSubMenuData()
     {
-        _subMenuLabelsData     = new System.Collections.Generic.List<string>          { "Combo Strike", "Comet", "Cure", "Back" };
-        _subMenuCategoriesData = new System.Collections.Generic.List<AttackCategory?> { AttackCategory.Physical, AttackCategory.Magic, AttackCategory.Magic, null };
-        _subMenuAttacksData    = new System.Collections.Generic.List<AttackData>      { null, null, null, null };  // resolved in GetSubMenuAttack
+        _subMenuLabelsData     = new System.Collections.Generic.List<string>          { "Combo Strike", "Beckon", "Comet", "Cure", "Back" };
+        _subMenuCategoriesData = new System.Collections.Generic.List<AttackCategory?> { AttackCategory.Physical, AttackCategory.Magic, AttackCategory.Magic, AttackCategory.Magic, null };
+        _subMenuAttacksData    = new System.Collections.Generic.List<AttackData>      { null, null, null, null, null };  // resolved in GetSubMenuAttack
     }
 
     /// <summary>
@@ -266,7 +270,13 @@ public partial class BattleTest : Node2D
         {
             case 0: HideMenu(); _isComboAttack = false; BeginPlayerAttack(); break;
             case 1: ShowSubMenu(); break;   // Absorbed Moves
-            case 2: ShowItemMenu(); break;  // Items
+            case 2:                         // Defend — halve miss damage this enemy turn
+                _playerDefending = true;
+                GD.Print("[BattleTest] Player defending — incoming miss damage halved this turn.");
+                HideMenu();
+                BeginEnemyAttack();
+                break;
+            case 3: ShowItemMenu(); break;  // Items
         }
     }
 
@@ -280,6 +290,14 @@ public partial class BattleTest : Node2D
         if (_subMenuIndex == _subMenuLabelsData.Count - 1)
         {
             ShowMenu();
+            return;
+        }
+
+        // Beckon — utility action, hands off to enemy turn immediately.
+        if (label == "Beckon")
+        {
+            HideMenu();
+            PerformBeckon();
             return;
         }
 
@@ -329,8 +347,9 @@ public partial class BattleTest : Node2D
 
         // Base hardcoded moves.
         if (index == 0) return _playerComboStrike;
-        if (index == 1) return _playerMagicAttack;
-        if (index == 2) return _playerCureAttack;
+        if (index == 1) return null;  // Beckon — utility, no attack data
+        if (index == 2) return _playerMagicAttack;
+        if (index == 3) return _playerCureAttack;
 
         // Dynamically added absorbed moves.
         return _subMenuAttacksData[index];
@@ -343,6 +362,16 @@ public partial class BattleTest : Node2D
     /// </summary>
     private bool IsSubMenuOptionEnabled(int index)
     {
+        // Beckon — utility ability with a fixed MP cost (no AttackData backing).
+        // Also disabled when there's nothing to draw out (no learnable move or already absorbed).
+        if (_subMenuLabelsData[index] == "Beckon")
+        {
+            if (_playerMp < BeckonMpCost) return false;
+            if (EnemyData?.LearnableAttack == null) return false;
+            if (_hasAbsorbedLearnableMove) return false;
+            return true;
+        }
+
         var attack = GetSubMenuAttack(index);
         if (attack == null) return true;  // Back
         if (attack.MpCost > 0 && _playerMp < attack.MpCost) return false;
@@ -360,6 +389,8 @@ public partial class BattleTest : Node2D
             string label = _subMenuLabelsData[i];
             if (attack != null && attack.MpCost > 0)
                 label += $" ({attack.MpCost} MP)";
+            else if (label == "Beckon")
+                label += $" ({BeckonMpCost} MP)";
 
             string prefix = (selected && enabled) ? "▶ " : "  ";
             _subMenuLabels[i].Text = prefix + label;

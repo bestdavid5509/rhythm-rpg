@@ -412,6 +412,7 @@ Any active player-attack `TimingPrompt` must be forcibly freed at the top of `Be
 - **Phase transition** — trigger Phase 2 when Phase 1 HP hits zero (explosion, sprite swap to 8 Sword Warrior); architecture supports it but the transition sequence is not yet implemented
 - **Phase 2 boss setup** — new `EnemyData` + `EnemyAnimationConfig` for the 8 Sword Warrior; architecture already supports it
 - **Battle menu UI polish** — layout, positioning, visual feedback
+- **Hover descriptions / tooltips for menu options** (post-Phase-1 polish) — short flavor + mechanical description for each main-menu and submenu option (Attack, Defend, Beckon, Combo Strike, etc.) shown on selection focus, so the player understands what each ability does without trial-and-error
 - **ATTACK_AUTHORING.md** — documentation for creating new AttackData/AttackStep resources
 - **Reusable `AttackStep` resources** — refactor embedded sub-resources into standalone `.tres` files that can be referenced by multiple `AttackData` resources, avoiding duplication of shared values (frame dimensions, Fps, spritesheet path, etc.)
 - **Bouncing circle color customisation** — color gradient (purple→white) and pass count are currently fixed per-type in `ApplyTypeSettings`; could be exposed as per-step inspector fields for more expressive attack authoring
