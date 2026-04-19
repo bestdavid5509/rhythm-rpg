@@ -513,6 +513,12 @@ public partial class BattleSystem : Node
         sprite.FlipH        = step.FlipH;
         sprite.Scale        = step.Scale;
         sprite.Position     = new Vector2(_defenderCenter.X, FloorY) + activeOffset;
+        // Effect sprites (explosions, slashes, smoke, comet trails, etc.) must render
+        // on top of the combatants they hit. During the Phase 1 → Phase 2 transition
+        // the reveal sprite is at ZIndex 1 and the bumped warrior is at ZIndex 2, so
+        // effects at ZIndex 3 stay strictly above both throughout the sequence (and
+        // above everything in normal combat, where combatants sit at 0 or 1).
+        sprite.ZIndex       = 3;
         // Use an explicit named delegate so the handler can disconnect itself before
         // calling QueueFree. The direct `+= sprite.QueueFree` pattern causes Godot's
         // automatic signal cleanup (which runs when the node is freed) to attempt a

@@ -64,6 +64,7 @@ public partial class BattleTest : Node2D
     private ColorRect _playerMPFill;
     private Label     _playerHPLabel;
     private Label     _enemyHPLabel;
+    private Label     _enemyNameLabel;  // rewritten on phase transition
     private Label     _playerMPLabel;
 
     // =========================================================================
@@ -110,6 +111,30 @@ public partial class BattleTest : Node2D
     // Use for large/stationary enemies that hold their ground (e.g. 8 Sword Warrior).
     // Slam tweens are also skipped — the cross-screen lunge would look wrong for a non-hopping attacker.
     [Export] public bool SkipHopIn = true;
+
+    // =========================================================================
+    // Phase transition (Phase 1 → Phase 2)
+    // =========================================================================
+
+    // When assigned, the enemy's death triggers the Phase 2 reveal sequence and swaps
+    // to this EnemyData instead of ending the battle. Null disables the transition.
+    [Export] public EnemyData Phase2EnemyData;
+
+    // When true, skip the reveal animation + dialogue entirely and swap directly to
+    // Phase 2 once the Phase 1 death animation completes. Test hook.
+    [Export] public bool SkipPhaseTransition = false;
+
+    // When true, start the battle with the enemy at 1 HP so the first player hit
+    // kills the warrior and triggers the Phase 1 → Phase 2 transition immediately.
+    // Test hook — lets us exercise the full reveal sequence without playing through
+    // the whole Phase 1 fight.
+    [Export] public bool TestPhaseTransition = false;
+
+    private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
+    private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
+    private bool             _phase2Finalised;          // guards SwapToPhase2 state-finalisation from running twice
+    private AnimatedSprite2D _revealSprite;             // one-off boss reveal animation sprite
+    private int              _enemyZIndexBeforeReveal;  // warrior ZIndex snapshot for restore in ApplyPhase2Sprite
 
     /// <summary>
     /// Inspector-assigned enemy attack resource. Overrides BattleSystem's built-in
@@ -323,6 +348,17 @@ public partial class BattleTest : Node2D
 
         _targetZone = GetNode<TargetZone>("TargetZone");
 
+        // Phase 2 fallback — if the scene didn't wire up Phase2EnemyData in the inspector,
+        // load the default Phase 2 resource from disk so the transition works out of the box.
+        if (Phase2EnemyData == null)
+        {
+            Phase2EnemyData = GD.Load<EnemyData>("res://Resources/Enemies/8_sword_warrior_phase2.tres");
+            if (Phase2EnemyData == null)
+                GD.PrintErr("[BattleTest] Failed to load default Phase2EnemyData (8_sword_warrior_phase2.tres).");
+            else
+                GD.Print("[BattleTest] Phase2EnemyData defaulted to 8_sword_warrior_phase2.tres.");
+        }
+
         // EnemyData overrides the default max HP when assigned in the inspector.
         if (EnemyData != null && EnemyData.MaxHp > 0)
         {
@@ -330,6 +366,15 @@ public partial class BattleTest : Node2D
             _enemyHP    = EnemyData.MaxHp;
             GD.Print($"[BattleTest] EnemyData \"{EnemyData.EnemyName}\" loaded — " +
                      $"MaxHp={EnemyData.MaxHp}, AttackPool={EnemyData.AttackPool?.Length ?? 0} attack(s).");
+        }
+
+        // Test hook: drop enemy HP to 1 so the first player hit triggers the phase
+        // transition immediately. Applied AFTER EnemyData HP init so it isn't clobbered.
+        // MaxHP is preserved so the HP bar shows the (nearly empty) correct scale.
+        if (TestPhaseTransition)
+        {
+            _enemyHP = 1;
+            GD.Print("[BattleTest] TestPhaseTransition active — enemy HP forced to 1.");
         }
 
         BuildMenu();
@@ -801,6 +846,7 @@ public partial class BattleTest : Node2D
                 SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
                 _enemyAnimSprite.Play("death");
                 _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+                ScheduleBossRevealIfPhase1();
                 PlayPlayer("idle");
             }
         }
@@ -1006,6 +1052,7 @@ public partial class BattleTest : Node2D
             SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
             _enemyAnimSprite.Play("death");
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+            ScheduleBossRevealIfPhase1();
         }
         else
         {
@@ -1184,6 +1231,7 @@ public partial class BattleTest : Node2D
                     SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
                     _enemyAnimSprite.Play("death");
                     _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+                    ScheduleBossRevealIfPhase1();
                     PlayPlayer("idle");
                 }
             }
@@ -1434,11 +1482,11 @@ public partial class BattleTest : Node2D
         row.AddThemeConstantOverride("separation", 12);
         parent.AddChild(row);
 
-        var nameLabel = new Label();
-        nameLabel.Text = name;
-        nameLabel.CustomMinimumSize = new Vector2(140f, 0f);
-        nameLabel.AddThemeFontSizeOverride("font_size", 18);
-        row.AddChild(nameLabel);
+        _enemyNameLabel = new Label();
+        _enemyNameLabel.Text = name;
+        _enemyNameLabel.CustomMinimumSize = new Vector2(140f, 0f);
+        _enemyNameLabel.AddThemeFontSizeOverride("font_size", 18);
+        row.AddChild(_enemyNameLabel);
 
         // HP bar — background + fill + overlaid label.
         var barContainer = new Control();
@@ -1910,8 +1958,12 @@ public partial class BattleTest : Node2D
                 PlayEnemy("idle");
             }
             // Restore default ZIndex on both sprites now that the attack is over.
+            // Exception: if the enemy is dying (phase transition in progress), leave
+            // its ZIndex alone — SpawnBossReveal bumped it up so the reveal stays
+            // strictly behind, and SwapToPhase2 restores the original snapshot value.
             _playerAnimSprite.ZIndex = 0;
-            _enemyAnimSprite.ZIndex  = 0;
+            if (!_enemyDead)
+                _enemyAnimSprite.ZIndex = 0;
             onComplete?.Invoke();
         };
     }

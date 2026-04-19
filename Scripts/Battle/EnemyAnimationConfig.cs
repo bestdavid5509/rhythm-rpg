@@ -59,4 +59,10 @@ public partial class EnemyAnimationConfig : Resource
     // ── Death ────────────────────────────────────────────────────────
     [Export] public int DeathRow;
     [Export] public int DeathFrames;
+    /// <summary>
+    /// Playback speed for the death animation specifically. Defaults to 12 fps
+    /// (matches all other enemy animations). Set lower to draw out the death —
+    /// e.g. 6 on Warrior Phase 1 so its death plays over the boss reveal.
+    /// </summary>
+    [Export] public float DeathFps = 12f;
 }

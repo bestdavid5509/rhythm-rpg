@@ -370,6 +370,49 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
 Any active player-attack `TimingPrompt` must be forcibly freed at the top of `BeginEnemyAttack()` via `FreeActivePrompt()` — do not rely on delayed flash-duration timers to clean up prompts before the enemy turn starts. The prompt may still be alive and emitting `PassEvaluated` signals when the enemy sequence begins, causing combo animation callbacks to fire on enemy circle results. `_isComboAttack` is also reset to `false` at the top of `BeginEnemyAttack()` as a secondary guard.
 
+### Phase 1 → Phase 2 Transition
+
+Triggered automatically on Warrior (Phase 1) death when `BattleTest.Phase2EnemyData` is assigned — defaults to `res://Resources/Enemies/8_sword_warrior_phase2.tres` via a `_Ready()` fallback.
+
+**Inspector exports:**
+- `Phase2EnemyData` — Phase 2 `EnemyData` resource. `null` disables the transition; default fallback loaded at boot.
+- `SkipPhaseTransition` — skip the reveal + dialogue and swap directly when the Phase 1 death animation completes. Test hook.
+- `TestPhaseTransition` — start the battle with Warrior HP = 1 so the first hit triggers the transition.
+
+**State flags** (in `BattleTest.cs`):
+| Flag | Purpose |
+|---|---|
+| `_phaseTransitionConsumed` | Point-of-no-return. Set at the top of `ApplyPhase2Sprite`; `IsPhaseTransitionPending()` returns false once true. Blocks re-entry for any subsequent enemy death. |
+| `_phase2SpriteApplied` | Idempotent guard on `ApplyPhase2Sprite`. |
+| `_phase2Finalised` | Idempotent guard on `SwapToPhase2` — the state-finalisation step runs exactly once. |
+| `_revealSprite` | One-off `AnimatedSprite2D` node; freed in `ApplyPhase2Sprite`. |
+| `_enemyZIndexBeforeReveal` | Snapshot of the warrior's ZIndex, restored after the reveal ends. |
+
+**Sequence** (at Warrior HP = 0 with player attack):
+1. Enemy sprite plays `death` (slowed to 6 fps on the Warrior via `EnemyAnimationConfig.DeathFps`).
+2. `ScheduleBossRevealIfPhase1()` at every enemy-death-trigger site fires a `4 / DeathFps` timer (~0.67s) → `SpawnBossReveal()`.
+3. `SpawnBossReveal()` constructs a single `"default"` animation **in code** from two textures: 12 frames from `8_sword_warrior__red_boss_reveal.png` (row 0, 160×160) **followed by 3 cycles of the 8 Sword Warrior idle** (row 0 of `8_sword_warrior_red-Sheet.png`, 14 frames × 3 = 42 frames). Total 54 frames @ 12 fps, `loop = false`. `FlipH = true` to mirror-match the 8 Sword Warrior's gameplay orientation. Position = warrior's local position − `(0, 10)` (10px lift to align visually with the Phase 2 idle).
+4. Reveal plays through concurrently with the warrior's slowed death. Warrior AnimationFinished fires `OnEnemyDeathFinished`.
+5. `OnEnemyDeathFinished` calls `ApplyPhase2Sprite()` which: sets `_phaseTransitionConsumed = true`, frees the reveal, reassigns `EnemyData = Phase2EnemyData`, disconnects every stale enemy `AnimationFinished` handler (`OnEnemyDeathFinished`, `OnCastIntroFinished`, `OnCastEndFinished`, `OnEnemyAttackAnimFinished`, `OnEnemyHurtFlashFinished`), nulls `SpriteFrames` to defeat the `BuildEnemySpriteFrames` early-return, rebuilds frames for the new enemy, repositions via the standard floor-anchored formula, and plays `idle`.
+6. 0.5s pause → `ShowBattleMessage("You've only just begun to suffer.")` → 3s timer → `SwapToPhase2()` finalises state: resets HP (`_enemyMaxHP = _enemyHP = EnemyData.MaxHp`), updates the enemy name label, calls `UpdateHPBars()`, resets per-fight flags (`_hasAbsorbedLearnableMove`, `_beckoning`, `_playerDefending`, `_parryClean`, `_pendingGameOver`, hop-in rendezvous flags, `_lastAttackIndex`).
+7. 0.5s → `ShowMenu()` — Phase 2 begins.
+
+**ZIndex layering** during the reveal sequence (everything ≥ 0 so the default-ZIndex `Background` ColorRect stays at the bottom):
+| Layer | ZIndex |
+|---|---|
+| Background ColorRect (scene, tree-order 0) | 0 |
+| Reveal sprite | 1 |
+| Warrior (bumped during reveal) | 2 |
+| Effect sprites (`SpawnEffectSprite`) | 3 |
+
+`PlayTeardown` normally resets `_enemyAnimSprite.ZIndex = 0` at the end of every attack tween — that clobber would knock the warrior below the reveal mid-sequence, so it is guarded with `if (!_enemyDead)`. `SwapToPhase2` restores the pre-reveal snapshot explicitly.
+
+**Player retreat in the killing-blow path:** `OnFinalSlashFinished` and `BeginComboMissRetreat`'s `_pendingGameOver` branches run the same 0.3s hold + `PlayPlayerBackwards("run")` + `PlayTeardown` + `OnRetreatFinished → PlayPlayer("idle")` treatment as the non-game-over path. Without this the player freezes on the last slash frame because `PlayTeardown(null)` only tweens positions; the run-backwards animation and idle return are what make the retreat visually complete. Required for Phase 2 to start with the player idling.
+
+**Stale-handler disconnect in `ApplyPhase2Sprite`:** every named handler that might still be bound to `_enemyAnimSprite.AnimationFinished` from Phase 1 is disconnected before `BuildEnemySpriteFrames` runs. Without this, the first Phase 2 animation completion (idle → hurt → cast_intro) would fire the stale `OnEnemyDeathFinished` and drop straight into the Victory path.
+
+**Reveal-sprite missing-asset fallback:** if `8_sword_warrior__red_boss_reveal.png` fails to load, `SpawnBossReveal` logs an error and calls `SwapToPhase2()` directly. If the appended idle sheet is missing, the reveal plays with only the 12 reveal frames.
+
 ### SkipHopIn Flag and FloorY Constant
 
 `[Export] public bool SkipHopIn = true` — when set, the enemy stays at origin for the entire turn. Setup and teardown tweens are skipped (no hop-in, no camera zoom). `_attackerClosePos` is set to the enemy origin so `PlayTeardown` is a zero-distance no-op. Used for large/stationary enemies like the 8 Sword Warrior. Set to `false` for the Warrior Phase 1 which hops in for melee attacks.
@@ -409,8 +452,6 @@ Any active player-attack `TimingPrompt` must be forcibly freed at the top of `Be
 
 ## Known Next Steps
 
-- **Phase transition** — trigger Phase 2 when Phase 1 HP hits zero (explosion, sprite swap to 8 Sword Warrior); architecture supports it but the transition sequence is not yet implemented
-- **Phase 2 boss setup** — new `EnemyData` + `EnemyAnimationConfig` for the 8 Sword Warrior; architecture already supports it
 - **Battle menu UI polish** — layout, positioning, visual feedback
 - **Hover descriptions / tooltips for menu options** (post-Phase-1 polish) — short flavor + mechanical description for each main-menu and submenu option (Attack, Defend, Beckon, Combo Strike, etc.) shown on selection focus, so the player understands what each ability does without trial-and-error
 - **ATTACK_AUTHORING.md** — documentation for creating new AttackData/AttackStep resources

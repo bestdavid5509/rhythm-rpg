@@ -20,3 +20,4 @@ HurtRow = 5
 HurtFrames = 4
 DeathRow = 6
 DeathFrames = 15
+DeathFps = 6.0

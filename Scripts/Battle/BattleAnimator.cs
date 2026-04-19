@@ -198,7 +198,7 @@ public partial class BattleTest : Node2D
         if (cfg.HasCastEnd)
             AddEnemyAnimation(frames, texture, "cast_end", row: cfg.CastEndRow, count: cfg.CastEndFrames, fw: Fw, fh: Fh, fps: 12f, loop: false, startCol: cfg.CastEndStartCol);
 
-        AddEnemyAnimation(frames, texture, "death", row: cfg.DeathRow, count: cfg.DeathFrames, fw: Fw, fh: Fh, fps: 12f, loop: false);
+        AddEnemyAnimation(frames, texture, "death", row: cfg.DeathRow, count: cfg.DeathFrames, fw: Fw, fh: Fh, fps: cfg.DeathFps, loop: false);
 
         // Hurt animations — from separate sheet (hurt_flash + hurt_full) or main sheet (hurt).
         if (!string.IsNullOrEmpty(cfg.HurtSheetPath))
@@ -384,12 +384,276 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Fires when the enemy death animation completes (from player attack or parry counter).
     /// Does not return to idle — the sprite holds on the final death frame.
+    /// If Phase2EnemyData is assigned and the transition hasn't fired yet, the death
+    /// completion is the handoff moment for the phase swap — the reveal sprite spawned
+    /// earlier (at frame 4 of death) is already playing behind the now-transparent
+    /// warrior sprite.
     /// </summary>
     private void OnEnemyDeathFinished()
     {
         SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
+        if (SkipPhaseTransition && IsPhaseTransitionPending())
+        {
+            GD.Print("[BattleTest] SkipPhaseTransition — swapping to Phase 2 immediately.");
+            SwapToPhase2();
+            return;
+        }
+        if (IsPhaseTransitionPending())
+        {
+            // Warrior death finished on the main sprite. The reveal sprite has been
+            // playing concurrently (reveal frames → appended idle frames) and is
+            // holding on its last idle frame by now. Swap to Phase 2 sprite + play
+            // idle (frees the reveal), then run the dialogue and finalise.
+            GD.Print("[BattleTest] Phase 1 death complete — applying Phase 2 sprite and queueing dialogue.");
+            ApplyPhase2Sprite();
+            GetTree().CreateTimer(0.5f).Timeout += () =>
+            {
+                ShowBattleMessage("You've only just begun to suffer.");
+                GetTree().CreateTimer(3.0f).Timeout += SwapToPhase2;
+            };
+            return;
+        }
         GD.Print("[BattleTest] Enemy defeated.");
         GetTree().CreateTimer(1.0f).Timeout += () => ShowEndLabel("Victory!");
+    }
+
+    // =========================================================================
+    // Phase 1 → Phase 2 transition
+    // =========================================================================
+
+    /// <summary>
+    /// Gating predicate: transition is pending if a Phase 2 EnemyData is assigned,
+    /// _phaseTransitionConsumed is still false (point-of-no-return not yet crossed),
+    /// and the player is not also dead (simultaneous death falls through to the
+    /// normal Game Over path).
+    /// </summary>
+    private bool IsPhaseTransitionPending()
+        => Phase2EnemyData != null && !_phaseTransitionConsumed && !_playerDead;
+
+    /// <summary>
+    /// Called next to every site that starts the enemy death animation. Schedules the
+    /// boss reveal sprite to spawn at frame 4 of death (4 / 12fps = 0.333s after play start).
+    /// No-op unless the transition is pending and not skipped.
+    /// </summary>
+    private void ScheduleBossRevealIfPhase1()
+    {
+        if (!IsPhaseTransitionPending()) return;
+        if (SkipPhaseTransition) return;  // SwapToPhase2 runs directly in OnEnemyDeathFinished
+        GetTree().CreateTimer(4f / 12f).Timeout += SpawnBossReveal;
+    }
+
+    /// <summary>
+    /// Spawns the one-off boss reveal AnimatedSprite2D behind the warrior death sprite.
+    /// Texture: res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior__red_boss_reveal.png
+    /// Expected layout: 12 frames × 160×160 px, 12fps, no loop. If the texture is missing,
+    /// falls through to SwapToPhase2 so the game never softlocks during early development.
+    /// </summary>
+    private void SpawnBossReveal()
+    {
+        if (_phaseTransitionConsumed) return;  // guard against late fire after a direct swap
+
+        const string revealPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior__red_boss_reveal.png";
+        const string idlePath   = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior_red-Sheet.png";
+        var revealTexture = GD.Load<Texture2D>(revealPath);
+        if (revealTexture == null)
+        {
+            GD.PrintErr($"[BattleTest] Boss reveal sprite missing ({revealPath}) — skipping reveal and swapping directly.");
+            SwapToPhase2();
+            return;
+        }
+        var idleTexture = GD.Load<Texture2D>(idlePath);
+        if (idleTexture == null)
+        {
+            GD.PrintErr($"[BattleTest] 8 Sword Warrior idle sheet missing ({idlePath}) — reveal will play without the idle tail.");
+        }
+
+        const int frameSize        = 160;
+        const int revealFrameCount = 12;
+        const int idleFrameCount   = 14;   // row 0, 14 frames
+        const int idleRow          = 0;
+        const int idleCycles       = 3;    // append 3 full idle cycles so the reveal
+                                           // keeps idling even if the warrior death
+                                           // animation runs long. ApplyPhase2Sprite
+                                           // frees the reveal when death completes,
+                                           // so trailing cycles are cut off naturally.
+        const float fps = 12f;
+
+        var frames = new SpriteFrames();
+        if (frames.HasAnimation("default")) frames.RemoveAnimation("default");
+        frames.AddAnimation("default");
+        frames.SetAnimationSpeed("default", fps);
+        frames.SetAnimationLoop("default", false);
+
+        // Reveal frames (horizontal strip).
+        for (int i = 0; i < revealFrameCount; i++)
+        {
+            var atlas = new AtlasTexture();
+            atlas.Atlas  = revealTexture;
+            atlas.Region = new Rect2(i * frameSize, 0, frameSize, frameSize);
+            frames.AddFrame("default", atlas);
+        }
+
+        // Append idle frames from the 8 Sword Warrior main sheet, repeated for
+        // `idleCycles` full passes. The combined animation plays reveal → idle ×N in
+        // one linear pass; with loop=false it holds on the final idle frame if it
+        // outlasts the warrior death. ApplyPhase2Sprite frees the reveal when the
+        // warrior death AnimationFinished fires, so any unplayed cycles are cut off.
+        if (idleTexture != null)
+        {
+            for (int cycle = 0; cycle < idleCycles; cycle++)
+            {
+                for (int i = 0; i < idleFrameCount; i++)
+                {
+                    var atlas = new AtlasTexture();
+                    atlas.Atlas  = idleTexture;
+                    atlas.Region = new Rect2(i * frameSize, idleRow * frameSize, frameSize, frameSize);
+                    frames.AddFrame("default", atlas);
+                }
+            }
+        }
+
+        _revealSprite = new AnimatedSprite2D();
+        _revealSprite.SpriteFrames = frames;
+        _revealSprite.Centered     = true;
+        _revealSprite.Scale        = new Vector2(3f, 3f);
+        // The source reveal sheet faces right; the 8 Sword Warrior faces left in
+        // gameplay. Mirror horizontally so orientation matches.
+        _revealSprite.FlipH        = true;
+        // ZIndex strategy for the reveal sequence — everything stays ≥ 0 so the
+        // scene's default-ZIndex Background ColorRect (at 0, first in tree order)
+        // stays at the bottom:
+        //   Background: 0 (unchanged in scene)
+        //   Reveal:     1
+        //   Warrior:    2 (bumped; teardown clobber is guarded below)
+        //   Effects:    3 (set in BattleSystem.SpawnEffectSprite)
+        // PlayTeardown from the killing attack clobbers the warrior's ZIndex back to 0
+        // at the end of its tween, which would knock it below the reveal. That clobber
+        // is now guarded with an _enemyDead check so the dying warrior's bumped ZIndex
+        // survives until SwapToPhase2 restores the snapshot value.
+        _enemyZIndexBeforeReveal = _enemyAnimSprite.ZIndex;
+        _enemyAnimSprite.ZIndex  = 2;
+        _revealSprite.ZIndex     = 1;
+        GD.Print($"[BossReveal] ZIndex set — reveal: {_revealSprite.ZIndex}, warrior: {_enemyAnimSprite.ZIndex} " +
+                 $"(snapshot was {_enemyZIndexBeforeReveal}; background at 0)");
+        // Attach under the same parent as the warrior sprite and use its LOCAL position
+        // so the reveal shares whatever coordinate space the warrior lives in — including
+        // any camera/viewport transform chain that would misplace a world-coord child of
+        // the BattleTest root.
+        var enemyParent = _enemyAnimSprite.GetParent();
+        enemyParent.AddChild(_revealSprite);
+        // Shift the reveal up 10px so its final frame lines up more closely with the
+        // Phase 2 idle pose, reducing the vertical jump at the swap moment.
+        _revealSprite.Position = _enemyAnimSprite.Position + new Vector2(0f, -10f);
+        _revealSprite.Play("default");
+        GD.Print("[BattleTest] Boss reveal sprite spawned.");
+    }
+
+    /// <summary>
+    /// Visual-only half of the Phase 2 swap: frees the reveal sprite, reassigns EnemyData,
+    /// rebuilds SpriteFrames, repositions, restores the warrior ZIndex, and starts idle.
+    /// Idempotent — guarded by _phase2SpriteApplied so SwapToPhase2 can safely call it
+    /// again on the SkipPhaseTransition path.
+    /// </summary>
+    private void ApplyPhase2Sprite()
+    {
+        if (_phase2SpriteApplied) return;
+        _phase2SpriteApplied     = true;
+        // Point-of-no-return: the warrior is gone on screen from this moment. Any
+        // subsequent enemy death (Phase 2) must go through the normal Victory path,
+        // not retrigger the transition. Setting this BEFORE any other logic means
+        // even a re-entrant death-trigger in the same tick is blocked by
+        // IsPhaseTransitionPending on its next check.
+        _phaseTransitionConsumed = true;
+
+        if (_revealSprite != null)
+        {
+            _revealSprite.QueueFree();
+            _revealSprite = null;
+        }
+
+        // Drop every named AnimationFinished handler from the Phase 1 warrior before
+        // the Phase 2 sprite starts playing. Without this, a stale OnEnemyDeathFinished
+        // connection from the warrior's death fires on the first Phase 2 animation
+        // completion (idle → hurt → cast_intro etc.) and incorrectly triggers Victory.
+        // We also clear the other turn-scoped handlers defensively.
+        SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
+        SafeDisconnectEnemyAnim(OnCastIntroFinished);
+        SafeDisconnectEnemyAnim(OnCastEndFinished);
+        SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
+        SafeDisconnectEnemyAnim(OnEnemyHurtFlashFinished);
+
+        EnemyData  = Phase2EnemyData;
+        _enemyDead = false;  // clear BEFORE PlayEnemy so the _enemyDead guard doesn't block idle
+
+        // Force BuildEnemySpriteFrames to rebuild — the "already built" early-return
+        // checks for an existing idle animation, so null out SpriteFrames first.
+        _enemyAnimSprite.SpriteFrames = null;
+        BuildEnemySpriteFrames();
+
+        // Restore the warrior sprite's ZIndex to whatever it was before the reveal bumped
+        // it. The warrior is gone now; the Phase 2 sprite takes over the slot at its
+        // original layer.
+        _enemyAnimSprite.ZIndex = _enemyZIndexBeforeReveal;
+
+        // Re-apply floor-anchored positioning with the new enemy's dimensions and offset.
+        // Mirrors the formula in _Ready so Phase 2 lands correctly on the ground line.
+        float enemyFh      = EnemyData.FrameHeight;
+        float enemyOffsetY = EnemyData.SpriteOffsetY;
+        _enemyAnimSprite.Scale    = new Vector2(3f, 3f);
+        _enemyAnimSprite.Position = new Vector2(_enemyAnimSprite.Position.X,
+                                                FloorY - enemyFh * 3f * 0.6f + enemyOffsetY);
+        _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;
+        _enemyAnimSprite.Play("idle");
+    }
+
+    /// <summary>
+    /// State-only half of the Phase 2 swap: clears per-fight flags, resets HP, updates
+    /// the name label + HP bar, and returns control to the player. The sprite work
+    /// already happened earlier in ApplyPhase2Sprite (unless SkipPhaseTransition is set,
+    /// in which case it runs here as a fallback).
+    /// </summary>
+    private void SwapToPhase2()
+    {
+        // Guard against double-invocation of the state-finalisation step. Note the
+        // point-of-no-return flag (_phaseTransitionConsumed) was already set in
+        // ApplyPhase2Sprite — we can't reuse it here because on the normal path it's
+        // true by now but the finalisation still needs to run exactly once.
+        if (_phase2Finalised) return;
+        _phase2Finalised = true;
+        GD.Print($"[BattleTest] Finalising Phase 2 swap: {Phase2EnemyData.EnemyName}.");
+
+        // SkipPhaseTransition path: OnBossRevealFinished never ran, so do the sprite
+        // work now. No-op on the normal path (ApplyPhase2Sprite already ran).
+        // ApplyPhase2Sprite also sets _phaseTransitionConsumed as a belt-and-suspenders
+        // guarantee for the SkipPhaseTransition path.
+        ApplyPhase2Sprite();
+
+        // Per-fight flags that must not carry over from Phase 1 into Phase 2.
+        // Critically: _hasAbsorbedLearnableMove must reset so the Phase 2 learnable
+        // can be absorbed. Other flags are one-shot or turn-scoped but are cleared
+        // here for defense-in-depth against stale state from the final Phase 1 turn.
+        _hasAbsorbedLearnableMove = false;
+        _beckoning                = false;
+        _playerDefending          = false;
+        _parryClean               = false;
+        _pendingGameOver          = false;
+        _hopInOver                = false;
+        _hopInSequenceCompleted   = false;
+        _hopInAnimFinished        = false;
+
+        // Reset HP and UI. EnemyData was reassigned in ApplyPhase2Sprite above, so
+        // reading EnemyData.MaxHp here pulls the Phase 2 value.
+        _enemyMaxHP = EnemyData.MaxHp;
+        _enemyHP    = EnemyData.MaxHp;
+        if (_enemyNameLabel != null) _enemyNameLabel.Text = EnemyData.EnemyName;
+        UpdateHPBars();
+
+        // Reset attack-pool rotation so the new pool starts fresh.
+        _lastAttackIndex = -1;
+
+        // Brief pause before the player regains control in Phase 2.
+        GetTree().CreateTimer(0.5f).Timeout += ShowMenu;
+        // TODO: Phase 2 music cue goes here.
     }
 
     // -------------------------------------------------------------------------
@@ -456,7 +720,19 @@ public partial class BattleTest : Node2D
             SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
             _enemyAnimSprite.Play("death");  // OWNER: enemy death from combo miss damage
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
-            PlayTeardown(null);
+            ScheduleBossRevealIfPhase1();
+            // Retreat the player to origin and return to idle — mirrors the non-game-over
+            // path below so the player doesn't freeze on the last combo miss frame.
+            GetTree().CreateTimer(0.3f).Timeout += () =>
+            {
+                if (_playerDead) return;
+                _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
+                _playerAnimSprite.SpeedScale = 2f;
+                SafeDisconnectPlayerAnim(OnRetreatFinished);
+                PlayPlayerBackwards("run");  // OWNER: killing-blow retreat (combo miss)
+                _playerAnimSprite.AnimationFinished += OnRetreatFinished;
+                PlayTeardown(null);
+            };
             return;
         }
         GetTree().CreateTimer(0.3f).Timeout += () =>
@@ -496,7 +772,22 @@ public partial class BattleTest : Node2D
             SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
             _enemyAnimSprite.Play("death");         // OWNER: enemy death from player attack
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
-            PlayTeardown(null);
+            ScheduleBossRevealIfPhase1();
+            // Retreat the player to origin and return to idle — same hop-back treatment
+            // as the non-game-over path. Without this the player freezes on the last
+            // slash frame (PlayTeardown would tween the ColorRect back but no run
+            // animation is played and OnRetreatFinished never fires PlayPlayer("idle")).
+            // Required for the phase transition so Phase 2 starts with the player idling.
+            GetTree().CreateTimer(0.3f).Timeout += () =>
+            {
+                if (_playerDead) return;
+                _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
+                _playerAnimSprite.SpeedScale = 2f;
+                SafeDisconnectPlayerAnim(OnRetreatFinished);
+                PlayPlayerBackwards("run");  // OWNER: killing-blow retreat
+                _playerAnimSprite.AnimationFinished += OnRetreatFinished;
+                PlayTeardown(null);
+            };
             return;
         }
 
