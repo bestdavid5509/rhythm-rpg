@@ -21,8 +21,8 @@ public partial class BattleTest : Node2D
     private System.Collections.Generic.List<AttackCategory?> _subMenuCategoriesData;
     private System.Collections.Generic.List<AttackData>      _subMenuAttacksData;  // null for Back
 
-    // Items submenu — items followed by "Back".
-    private static readonly string[] ItemMenuOptionLabels = { "Ether (20 MP)", "Back" };
+    // Items submenu — items followed by "Back". Built dynamically based on item counts.
+    private System.Collections.Generic.List<string> _itemMenuLabelsData;
 
     // MP cost for Beckon (utility ability with no AttackData backing).
     private const int BeckonMpCost = 10;
@@ -83,18 +83,9 @@ public partial class BattleTest : Node2D
         InitSubMenuData();
         PopulateSubMenuPanel();
 
-        // Items submenu — Ether / Back.
-        _itemMenuPanel  = MakePanel(_menuLayer);
-        _itemMenuLabels = new Label[ItemMenuOptionLabels.Length];
-        var itemVBox    = _itemMenuPanel.GetChild<VBoxContainer>(0);
-        for (int i = 0; i < ItemMenuOptionLabels.Length; i++)
-        {
-            var label = new Label();
-            label.AddThemeFontSizeOverride("font_size", 24);
-            label.HorizontalAlignment = HorizontalAlignment.Left;
-            itemVBox.AddChild(label);
-            _itemMenuLabels[i] = label;
-        }
+        // Items submenu — built dynamically from _itemMenuLabelsData.
+        _itemMenuPanel = MakePanel(_menuLayer);
+        RebuildItemMenu();
 
         _menuLayer.Visible = false;
     }
@@ -135,8 +126,35 @@ public partial class BattleTest : Node2D
         _mainMenuPanel.Visible  = false;
         _subMenuPanel.Visible   = false;
         _itemMenuPanel.Visible  = true;
+        RebuildItemMenu();
         RefreshItemMenuLabels();
         GD.Print("[BattleTest] Items submenu shown.");
+    }
+
+    /// <summary>
+    /// Rebuilds the Items submenu labels based on current item counts.
+    /// Ether appears only when EtherCount > 0; Back is always the last entry.
+    /// </summary>
+    private void RebuildItemMenu()
+    {
+        _itemMenuLabelsData = new System.Collections.Generic.List<string>();
+        if (EtherCount > 0)
+            _itemMenuLabelsData.Add($"Ether x{EtherCount}");
+        _itemMenuLabelsData.Add("Back");
+
+        var itemVBox = _itemMenuPanel.GetChild<VBoxContainer>(0);
+        foreach (var child in itemVBox.GetChildren())
+            child.QueueFree();
+
+        _itemMenuLabels = new Label[_itemMenuLabelsData.Count];
+        for (int i = 0; i < _itemMenuLabelsData.Count; i++)
+        {
+            var label = new Label();
+            label.AddThemeFontSizeOverride("font_size", 24);
+            label.HorizontalAlignment = HorizontalAlignment.Left;
+            itemVBox.AddChild(label);
+            _itemMenuLabels[i] = label;
+        }
     }
 
     private void HideMenu()
@@ -244,21 +262,28 @@ public partial class BattleTest : Node2D
 
     private void NavigateItemMenu(int direction)
     {
-        int count = ItemMenuOptionLabels.Length;
+        int count = _itemMenuLabelsData.Count;
         _itemMenuIndex = (_itemMenuIndex + direction + count) % count;
         RefreshItemMenuLabels();
     }
 
     private void ConfirmItemMenuSelection()
     {
-        GD.Print($"[BattleTest] Player selects item: {ItemMenuOptionLabels[_itemMenuIndex]}.");
-        switch (_itemMenuIndex)
+        string label = _itemMenuLabelsData[_itemMenuIndex];
+        GD.Print($"[BattleTest] Player selects item: {label}.");
+
+        // "Back" is always the last entry.
+        if (_itemMenuIndex == _itemMenuLabelsData.Count - 1)
         {
-            case 0:  // Ether — combo animation + effect + sound + restore 20 MP, end turn
-                HideMenu();
-                UseEtherItem();
-                break;
-            case 1: ShowMenu(); break;  // Back
+            ShowMenu();
+            return;
+        }
+
+        if (label.StartsWith("Ether"))
+        {
+            EtherCount--;
+            HideMenu();
+            UseEtherItem();
         }
     }
 
@@ -414,7 +439,7 @@ public partial class BattleTest : Node2D
         {
             bool selected = (i == _itemMenuIndex);
             string prefix = selected ? "▶ " : "  ";
-            _itemMenuLabels[i].Text     = prefix + ItemMenuOptionLabels[i];
+            _itemMenuLabels[i].Text     = prefix + _itemMenuLabelsData[i];
             _itemMenuLabels[i].Modulate = selected ? ColorMenuSelected : ColorMenuNormal;
         }
     }

@@ -56,6 +56,8 @@ public partial class BattleTest : Node2D
 
     [Export] public int PlayerMaxMp = 50;
 
+    [Export] public int EtherCount = 1;
+
     private int _playerMp;  // initialized to PlayerMaxMp in _Ready
 
     // UI bar references — built in BuildStatusPanels(), updated by UpdateHPBars()/UpdateMpBar().
