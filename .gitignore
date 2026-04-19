@@ -26,3 +26,6 @@ Thumbs.db
 # Editor metadata
 .idea/
 .vscode/
+
+# Claude Code — local-only settings (not shared across machines)
+.claude/settings.local.json
