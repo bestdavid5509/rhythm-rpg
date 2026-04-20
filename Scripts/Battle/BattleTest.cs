@@ -1440,10 +1440,10 @@ public partial class BattleTest : Node2D
     // Kenney fantasy-ui-borders panels are 48×48. PatchMargin=16 gives 16×16 corner regions
     // and a 16-wide stretchable center — standard for this pack.
     internal const int   PanelPatchMargin      = 16;
-    internal const int   PanelContentPad       = 14;  // inner padding between border art and content
+    internal const int   PanelContentPad       = 18;  // inner padding between border art and content
     internal const float PanelMinWidthStatus   = 260f;  // player panel (kept at 260)
     internal const float PanelMinWidthEnemy    = 220f;  // enemy panel (smaller — less content)
-    internal const float PanelMinWidthMenu     = 200f;  // battle menu panels
+    internal const float PanelMinWidthMenu     = 180f;  // battle menu panels
     internal const float PanelMinWidthMessage  = 400f;  // battle message panel
 
     // Fill layer tint — applied as Modulate on a NinePatchRect of panel-transparent-center-000.png.
@@ -1689,7 +1689,7 @@ public partial class BattleTest : Node2D
         // Name above, HP bar below.
         _enemyNameLabel      = new Label();
         _enemyNameLabel.Text = name;
-        StyleLabel(_enemyNameLabel);
+        StyleLabel(_enemyNameLabel, fontSize: 15);
         parent.AddChild(_enemyNameLabel);
 
         var barContainer = new Control();
@@ -1730,7 +1730,7 @@ public partial class BattleTest : Node2D
         // Name, then HP bar, then MP bar stacked vertically with 4px gap (VBox separation).
         var nameLabel = new Label();
         nameLabel.Text = name;
-        StyleLabel(nameLabel);
+        StyleLabel(nameLabel, fontSize: 15);
         parent.AddChild(nameLabel);
 
         var hpContainer = new Control();
