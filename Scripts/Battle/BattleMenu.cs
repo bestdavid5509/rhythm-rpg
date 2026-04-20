@@ -33,18 +33,21 @@ public partial class BattleTest : Node2D
     private static readonly Color ColorCategoryPhysical  = new Color(1.00f, 0.50f, 0.00f, 1.00f);  // orange — Physical attacks in submenu
     private static readonly Color ColorCategoryMagic     = new Color(0.60f, 0.30f, 1.00f, 1.00f);  // purple — Magic attacks in submenu
 
-    private bool           _inSubMenu;      // true while the Absorbed Moves submenu is open
-    private bool           _inItemMenu;     // true while the Items submenu is open
-    private int            _menuIndex;
-    private int            _subMenuIndex;
-    private int            _itemMenuIndex;
-    private CanvasLayer    _menuLayer;
-    private PanelContainer _mainMenuPanel;
-    private PanelContainer _subMenuPanel;
-    private PanelContainer _itemMenuPanel;
-    private Label[]        _menuLabels;
-    private Label[]        _subMenuLabels;
-    private Label[]        _itemMenuLabels;
+    private bool            _inSubMenu;      // true while the Absorbed Moves submenu is open
+    private bool            _inItemMenu;     // true while the Items submenu is open
+    private int             _menuIndex;
+    private int             _subMenuIndex;
+    private int             _itemMenuIndex;
+    private CanvasLayer     _menuLayer;
+    private PanelContainer  _mainMenuPanel;
+    private PanelContainer  _subMenuPanel;
+    private PanelContainer  _itemMenuPanel;
+    private VBoxContainer   _mainMenuVBox;   // direct reference — labels sit inside MarginContainer inside panel
+    private VBoxContainer   _subMenuVBox;
+    private VBoxContainer   _itemMenuVBox;
+    private Label[]         _menuLabels;
+    private Label[]         _subMenuLabels;
+    private Label[]         _itemMenuLabels;
 
     private void BuildMenu()
     {
@@ -52,42 +55,91 @@ public partial class BattleTest : Node2D
         _menuLayer.Name = "BattleMenu";
         AddChild(_menuLayer);
 
-        // Both panels share the same canvas position. Only one is visible at a time.
-        static PanelContainer MakePanel(CanvasLayer layer)
-        {
-            var p = new PanelContainer();
-            p.Position          = new Vector2(810f, 470f);
-            p.CustomMinimumSize = new Vector2(300f, 0f);
-            layer.AddChild(p);
-            var vbox = new VBoxContainer();
-            vbox.AddThemeConstantOverride("separation", 8);
-            p.AddChild(vbox);
-            return p;
-        }
-
-        // Main menu — Attack / Absorbed Moves.
-        _mainMenuPanel = MakePanel(_menuLayer);
+        // Main menu — Attack / Absorbed Moves / Defend / Items.
+        _mainMenuPanel = MakeMenuPanel(_menuLayer, out _mainMenuVBox);
         _menuLabels    = new Label[MenuOptionLabels.Length];
-        var mainVBox   = _mainMenuPanel.GetChild<VBoxContainer>(0);
         for (int i = 0; i < MenuOptionLabels.Length; i++)
         {
+            if (i > 0) AddMenuDivider(_mainMenuVBox);
             var label = new Label();
-            label.AddThemeFontSizeOverride("font_size", 24);
+            StyleLabel(label);
             label.HorizontalAlignment = HorizontalAlignment.Left;
-            mainVBox.AddChild(label);
+            _mainMenuVBox.AddChild(label);
             _menuLabels[i] = label;
         }
 
         // Absorbed Moves submenu — built dynamically from _subMenuLabelsData.
-        _subMenuPanel = MakePanel(_menuLayer);
+        _subMenuPanel = MakeMenuPanel(_menuLayer, out _subMenuVBox);
         InitSubMenuData();
         PopulateSubMenuPanel();
 
         // Items submenu — built dynamically from _itemMenuLabelsData.
-        _itemMenuPanel = MakePanel(_menuLayer);
+        _itemMenuPanel = MakeMenuPanel(_menuLayer, out _itemMenuVBox);
         RebuildItemMenu();
 
         _menuLayer.Visible = false;
+
+        // Position menu panels directly above the player panel once its size is known.
+        // Runs deferred so the PanelContainer layout pass has completed; also re-fires on resize.
+        if (_playerPanel != null)
+        {
+            _playerPanel.Resized += PositionMenuPanelsAbovePlayerPanel;
+            CallDeferred(MethodName.PositionMenuPanelsAbovePlayerPanel);
+        }
+    }
+
+    /// <summary>
+    /// Builds a layered Kenney 9-slice panel anchored to the bottom-left of the viewport.
+    /// The panel's OffsetBottom is set by <see cref="PositionMenuPanelsAbovePlayerPanel"/>
+    /// once the player panel's post-layout height is known. Every menu variant (main,
+    /// absorbed moves, items) uses this same position — only one is visible at a time.
+    /// </summary>
+    private PanelContainer MakeMenuPanel(CanvasLayer layer, out VBoxContainer content)
+    {
+        var p = MakeLayeredPanel(PanelMinWidthMenu, out content);
+        p.AnchorLeft     = 0f;
+        p.AnchorRight    = 0f;
+        p.AnchorTop      = 1f;
+        p.AnchorBottom   = 1f;
+        p.GrowHorizontal = Control.GrowDirection.End;
+        p.GrowVertical   = Control.GrowDirection.Begin;
+        p.OffsetLeft     = UiEdgeMargin;
+        // OffsetBottom populated by PositionMenuPanelsAbovePlayerPanel — default here keeps
+        // the panel visible if the player panel is unavailable for some reason.
+        p.OffsetBottom   = -(UiEdgeMargin + 100f + UiPanelSpacing);
+        layer.AddChild(p);
+        return p;
+    }
+
+    /// <summary>
+    /// Repositions all menu panels so their bottom edge sits exactly
+    /// (UiPanelSpacing + UiEdgeMargin) below the player panel's top edge, using the
+    /// player panel's actual post-layout height.
+    /// </summary>
+    private void PositionMenuPanelsAbovePlayerPanel()
+    {
+        if (_playerPanel == null) return;
+        float playerHeight = _playerPanel.Size.Y;
+        float offsetBottom = -(UiEdgeMargin + playerHeight + UiPanelSpacing);
+        if (_mainMenuPanel != null) _mainMenuPanel.OffsetBottom = offsetBottom;
+        if (_subMenuPanel  != null) _subMenuPanel .OffsetBottom = offsetBottom;
+        if (_itemMenuPanel != null) _itemMenuPanel.OffsetBottom = offsetBottom;
+    }
+
+    /// <summary>
+    /// Adds a Kenney Divider Fade TextureRect between menu options. Not a Label —
+    /// navigation logic iterates the `_menuLabels` / `_subMenuLabels` / `_itemMenuLabels`
+    /// arrays directly, so dividers are purely decorative siblings in the VBox.
+    /// </summary>
+    private void AddMenuDivider(VBoxContainer parent)
+    {
+        var divider = new TextureRect();
+        divider.Texture             = GD.Load<Texture2D>(UiDividerPath);
+        divider.StretchMode         = TextureRect.StretchModeEnum.Scale;
+        divider.CustomMinimumSize   = new Vector2(0f, 6f);
+        divider.SizeFlagsHorizontal = Control.SizeFlags.Fill;
+        divider.Modulate            = new Color(1f, 1f, 1f, 0.25f);
+        parent.AddChild(divider);
     }
 
     private void ShowMenu()
@@ -142,17 +194,17 @@ public partial class BattleTest : Node2D
             _itemMenuLabelsData.Add($"Ether x{EtherCount}");
         _itemMenuLabelsData.Add("Back");
 
-        var itemVBox = _itemMenuPanel.GetChild<VBoxContainer>(0);
-        foreach (var child in itemVBox.GetChildren())
+        foreach (var child in _itemMenuVBox.GetChildren())
             child.QueueFree();
 
         _itemMenuLabels = new Label[_itemMenuLabelsData.Count];
         for (int i = 0; i < _itemMenuLabelsData.Count; i++)
         {
+            if (i > 0) AddMenuDivider(_itemMenuVBox);
             var label = new Label();
-            label.AddThemeFontSizeOverride("font_size", 24);
+            StyleLabel(label);
             label.HorizontalAlignment = HorizontalAlignment.Left;
-            itemVBox.AddChild(label);
+            _itemMenuVBox.AddChild(label);
             _itemMenuLabels[i] = label;
         }
     }
@@ -174,22 +226,23 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Creates Label nodes in the submenu panel to match _subMenuLabelsData.
+    /// Creates Label nodes in the submenu panel to match _subMenuLabelsData, with Kenney
+    /// divider TextureRects between entries.
     /// </summary>
     private void PopulateSubMenuPanel()
     {
-        var subVBox = _subMenuPanel.GetChild<VBoxContainer>(0);
-        // Clear existing labels.
-        foreach (var child in subVBox.GetChildren())
+        // Clear existing labels and dividers.
+        foreach (var child in _subMenuVBox.GetChildren())
             child.QueueFree();
 
         _subMenuLabels = new Label[_subMenuLabelsData.Count];
         for (int i = 0; i < _subMenuLabelsData.Count; i++)
         {
+            if (i > 0) AddMenuDivider(_subMenuVBox);
             var label = new Label();
-            label.AddThemeFontSizeOverride("font_size", 24);
+            StyleLabel(label);
             label.HorizontalAlignment = HorizontalAlignment.Left;
-            subVBox.AddChild(label);
+            _subMenuVBox.AddChild(label);
             _subMenuLabels[i] = label;
         }
     }

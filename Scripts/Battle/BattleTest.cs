@@ -61,9 +61,12 @@ public partial class BattleTest : Node2D
     private int _playerMp;  // initialized to PlayerMaxMp in _Ready
 
     // UI bar references — built in BuildStatusPanels(), updated by UpdateHPBars()/UpdateMpBar().
-    private ColorRect _playerHPFill;
-    private ColorRect _enemyHPFill;
-    private ColorRect _playerMPFill;
+    // Type is Control (not ColorRect) because the fill uses 3-part TextureRect children
+    // and relies on ClipContents for the drain-from-right visual. The existing
+    // `.Size = new Vector2(BarWidth * pct, ...)` update logic continues to work.
+    private Control _playerHPFill;
+    private Control _enemyHPFill;
+    private Control _playerMPFill;
     private Label     _playerHPLabel;
     private Label     _enemyHPLabel;
     private Label     _enemyNameLabel;  // rewritten on phase transition
@@ -266,6 +269,7 @@ public partial class BattleTest : Node2D
         _timingPromptScene = GD.Load<PackedScene>("res://Scenes/Battle/TimingPrompt.tscn");
 
         _playerMp = PlayerMaxMp;
+        ApplyBackgroundGradient();
         BuildStatusPanels();
         _battleMessage = new BattleMessage(this);
 
@@ -1423,11 +1427,234 @@ public partial class BattleTest : Node2D
     }
 
     // =========================================================================
-    // Status panels — enemy (top) and player party (bottom)
+    // Status panels — enemy (top-right) and player party (bottom-left)
+    // Kenney Fantasy UI borders + RPG-expansion 3-part bars
     // =========================================================================
 
-    private const float BarWidth  = 220f;
-    private const float BarHeight = 20f;
+    // Bars — status panel width minus content padding (260 - 2*14 = 232).
+    private const float BarWidth          = 232f;
+    private const float BarHeight         = 20f;
+    private const float BarCapDisplayWidth = 8f;  // width each end-cap occupies inside the bar
+
+    // Panel layout constants (swap panel numbers here to retune the whole UI).
+    // Kenney fantasy-ui-borders panels are 48×48. PatchMargin=16 gives 16×16 corner regions
+    // and a 16-wide stretchable center — standard for this pack.
+    internal const int   PanelPatchMargin      = 16;
+    internal const int   PanelContentPad       = 14;  // inner padding between border art and content
+    internal const float PanelMinWidthStatus   = 260f;  // player panel (kept at 260)
+    internal const float PanelMinWidthEnemy    = 220f;  // enemy panel (smaller — less content)
+    internal const float PanelMinWidthMenu     = 200f;  // battle menu panels
+    internal const float PanelMinWidthMessage  = 400f;  // battle message panel
+
+    // Fill layer tint — applied as Modulate on a NinePatchRect of panel-transparent-center-000.png.
+    // RGB-only; do not manipulate alpha (leave at 1.0) — the Kenney texture carries its own
+    // alpha at 0x7f (~50%) via its tRNS chunk, which we keep so the gradient shows through.
+    internal static readonly Color PanelFillTint = new Color(0.22f, 0.28f, 0.45f, 1.00f);
+
+    internal const float UiEdgeMargin   = 20f;  // distance from viewport edge for status/menu panels
+    internal const float UiPanelSpacing = 8f;   // gap between menu panel and player panel
+
+    // Panel texture picks — const strings so a single swap retunes the whole UI.
+    internal const string UiPanelFillPath    = "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Transparent center/panel-transparent-center-000.png";
+    internal const string UiPanelBorderPath  = "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Border/panel-border-019.png";
+    internal const string UiPanelMessagePath = "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Transparent border/panel-transparent-border-000.png";
+    internal const string UiDividerPath      = "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Divider Fade/divider-fade-000.png";
+
+    // Text — white with subtle drop shadow; every status/menu Label passes through StyleLabel.
+    internal const int   UiFontSize            = 14;
+    internal const float UiFontShadowAlpha     = 0.7f;
+    internal const int   UiFontShadowOffset    = 1;
+
+    // Background gradient shader.
+    internal const string UiBackgroundShaderPath = "res://Assets/Shaders/UiBackgroundGradient.gdshader";
+
+    private const string UiBarBackLeftPath  = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barBack_horizontalLeft.png";
+    private const string UiBarBackMidPath   = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barBack_horizontalMid.png";
+    private const string UiBarBackRightPath = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barBack_horizontalRight.png";
+    private const string UiBarRedLeftPath   = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barRed_horizontalLeft.png";
+    private const string UiBarRedMidPath    = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barRed_horizontalMid.png";
+    private const string UiBarRedRightPath  = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barRed_horizontalRight.png";
+    // Note: the blue bar pack names its mid piece `barBlue_horizontalBlue.png` rather than
+    // the `barBlue_horizontalMid.png` convention the other bars use.
+    private const string UiBarBlueLeftPath  = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barBlue_horizontalLeft.png";
+    private const string UiBarBlueMidPath   = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barBlue_horizontalBlue.png";
+    private const string UiBarBlueRightPath = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barBlue_horizontalRight.png";
+
+    // Reference to the player panel node — BattleMenu reads its actual post-layout height
+    // to position the menu panel directly above it, regardless of panel content size.
+    internal PanelContainer _playerPanel;
+
+    /// <summary>
+    /// Applies the subtle vertical navy gradient shader to the existing Background ColorRect
+    /// defined in BattleTest.tscn. The ColorRect's own `color` property still contributes —
+    /// the shader overrides it by assigning directly to COLOR.
+    /// </summary>
+    private void ApplyBackgroundGradient()
+    {
+        var bg = GetNodeOrNull<ColorRect>("Background");
+        if (bg == null) return;
+
+        var shader = GD.Load<Shader>(UiBackgroundShaderPath);
+        if (shader == null) { GD.PrintErr("[BattleTest] Failed to load background gradient shader."); return; }
+
+        var material = new ShaderMaterial();
+        material.Shader = shader;
+        bg.Material     = material;
+    }
+
+    /// <summary>
+    /// Builds a layered Kenney 9-slice panel: a semi-transparent fill NinePatchRect with
+    /// an ornate border NinePatchRect overlaid on top, both anchored full-rect inside a
+    /// PanelContainer that auto-sizes from a MarginContainer's content.
+    ///
+    /// Returns the outer PanelContainer (for anchoring/positioning) and the VBoxContainer
+    /// where content should be added.
+    /// </summary>
+    internal static PanelContainer MakeLayeredPanel(float minWidth, out VBoxContainer content, float minHeight = 0f)
+    {
+        var panel = new PanelContainer();
+        panel.CustomMinimumSize = new Vector2(minWidth, minHeight);
+        // StyleBoxEmpty with no content margin — the MarginContainer inside provides padding,
+        // and the NinePatchRect backgrounds fill the entire panel rect.
+        var empty = new StyleBoxEmpty();
+        panel.AddThemeStyleboxOverride("panel", empty);
+
+        // Fill layer: NinePatchRect of the transparent-center texture, tinted by PanelFillTint.
+        var fill = MakeNinePatch(UiPanelFillPath);
+        fill.Modulate = PanelFillTint;
+
+        var border = MakeNinePatch(UiPanelBorderPath);
+
+        // Add order IS draw order — fill underneath, border on top.
+        panel.AddChild(fill);
+        panel.AddChild(border);
+
+        var margin = new MarginContainer();
+        margin.AddThemeConstantOverride("margin_left",   PanelContentPad);
+        margin.AddThemeConstantOverride("margin_right",  PanelContentPad);
+        margin.AddThemeConstantOverride("margin_top",    PanelContentPad);
+        margin.AddThemeConstantOverride("margin_bottom", PanelContentPad);
+        panel.AddChild(margin);
+
+        content = new VBoxContainer();
+        content.AddThemeConstantOverride("separation", 4);
+        margin.AddChild(content);
+
+        return panel;
+    }
+
+    /// <summary>
+    /// Creates a NinePatchRect with the standard panel patch margins and mouse-ignore filter.
+    /// Used as the fill and border layers of <see cref="MakeLayeredPanel"/>.
+    ///
+    /// Full-rect anchors (0,0,1,1) are set so that when this NinePatchRect is a child of a
+    /// Container (e.g. PanelContainer), `fit_child_in_rect` stretches it to fill the content
+    /// rect. Without anchors, fit_child_in_rect would size the NinePatchRect to its own
+    /// `size` property (default 0,0) — it would render invisibly.
+    ///
+    /// Callers outside a Container (e.g. BattleMessage with manual anchor/offset positioning)
+    /// will overwrite these anchors explicitly.
+    /// </summary>
+    internal static NinePatchRect MakeNinePatch(string texturePath)
+    {
+        var np = new NinePatchRect();
+        np.Texture            = GD.Load<Texture2D>(texturePath);
+        np.PatchMarginLeft    = PanelPatchMargin;
+        np.PatchMarginRight   = PanelPatchMargin;
+        np.PatchMarginTop     = PanelPatchMargin;
+        np.PatchMarginBottom  = PanelPatchMargin;
+        np.MouseFilter        = Control.MouseFilterEnum.Ignore;
+        np.AnchorLeft         = 0f;
+        np.AnchorRight        = 1f;
+        np.AnchorTop          = 0f;
+        np.AnchorBottom       = 1f;
+        return np;
+    }
+
+    /// <summary>
+    /// Applies the standard battle-UI text styling: white body, subtle dark drop shadow,
+    /// consistent font size. All status/menu labels should route through this.
+    /// </summary>
+    internal static void StyleLabel(Label label, int fontSize = UiFontSize)
+    {
+        label.AddThemeFontSizeOverride("font_size", fontSize);
+        label.AddThemeColorOverride("font_color", new Color(1f, 1f, 1f, 1f));
+        label.AddThemeColorOverride("font_shadow_color", new Color(0f, 0f, 0f, UiFontShadowAlpha));
+        label.AddThemeConstantOverride("shadow_offset_x", UiFontShadowOffset);
+        label.AddThemeConstantOverride("shadow_offset_y", UiFontShadowOffset);
+    }
+
+    // Modulate tint applied to HP-fill Controls. Kenney's `barRed` asset reads warm/orange —
+    // multiplying green and blue by 0.30 shifts it to a saturated deep red while preserving the
+    // texture's highlights. Blue/back bars use Color(1,1,1,1) = no tint.
+    private static readonly Color HpFillTint = new Color(1.00f, 0.30f, 0.30f, 1.00f);
+
+    /// <summary>
+    /// Builds an HP/MP bar with a 3-part Kenney background and a 3-part Kenney fill overlay.
+    /// The returned fill Control is resized by <see cref="UpdateHPBars"/> / <see cref="UpdateMpBar"/>
+    /// via `.Size = new Vector2(BarWidth * pct, ...)`. ClipContents hides the portion of the fill's
+    /// 3-part texture that extends past the fill's current width — producing a drain-from-right look
+    /// that keeps the left cap visible at any HP%.
+    ///
+    /// <paramref name="fillTint"/> is applied as a Modulate on the fill Control (propagates to
+    /// all 3 children). Used to shift Kenney's warm `barRed` toward a truer red.
+    /// </summary>
+    private void BuildStyledBar(Control parent,
+                                string backLeft, string backMid, string backRight,
+                                string fillLeft, string fillMid, string fillRight,
+                                out Control fillControl, out Label overlayLabel,
+                                Color? fillTint = null)
+    {
+        // Background (always full width, never resized).
+        AddThreePartBarChildren(parent, backLeft, backMid, backRight);
+
+        // Fill — resized by HP/MP percentage. ClipContents crops its children when it shrinks.
+        fillControl = new Control();
+        fillControl.Position     = Vector2.Zero;
+        fillControl.Size         = new Vector2(BarWidth, BarHeight);
+        fillControl.ClipContents = true;
+        if (fillTint.HasValue) fillControl.Modulate = fillTint.Value;
+        parent.AddChild(fillControl);
+        AddThreePartBarChildren(fillControl, fillLeft, fillMid, fillRight);
+
+        // Numeric overlay label centered over the full bar.
+        overlayLabel                     = new Label();
+        overlayLabel.Size                = new Vector2(BarWidth, BarHeight);
+        overlayLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        overlayLabel.VerticalAlignment   = VerticalAlignment.Center;
+        StyleLabel(overlayLabel);
+        parent.AddChild(overlayLabel);
+    }
+
+    /// <summary>
+    /// Adds three TextureRects (left cap, stretched mid, right cap) at absolute positions
+    /// sized to span the full BarWidth × BarHeight. Children use Position/Size — not anchors —
+    /// so they stay at fixed pixel locations even when the parent resizes (ClipContents handles crop).
+    /// </summary>
+    private void AddThreePartBarChildren(Control parent,
+                                         string leftPath, string midPath, string rightPath)
+    {
+        var left = new TextureRect();
+        left.Texture     = GD.Load<Texture2D>(leftPath);
+        left.Position    = Vector2.Zero;
+        left.Size        = new Vector2(BarCapDisplayWidth, BarHeight);
+        left.StretchMode = TextureRect.StretchModeEnum.Scale;
+        parent.AddChild(left);
+
+        var mid = new TextureRect();
+        mid.Texture     = GD.Load<Texture2D>(midPath);
+        mid.Position    = new Vector2(BarCapDisplayWidth, 0f);
+        mid.Size        = new Vector2(BarWidth - 2f * BarCapDisplayWidth, BarHeight);
+        mid.StretchMode = TextureRect.StretchModeEnum.Scale;
+        parent.AddChild(mid);
+
+        var right = new TextureRect();
+        right.Texture     = GD.Load<Texture2D>(rightPath);
+        right.Position    = new Vector2(BarWidth - BarCapDisplayWidth, 0f);
+        right.Size        = new Vector2(BarCapDisplayWidth, BarHeight);
+        right.StretchMode = TextureRect.StretchModeEnum.Scale;
+        parent.AddChild(right);
+    }
 
     private void BuildStatusPanels()
     {
@@ -1435,182 +1662,93 @@ public partial class BattleTest : Node2D
         layer.Name = "StatusPanels";
         AddChild(layer);
 
-        // ── Enemy panel (top-center) ─────────────────────────────────
         BuildEnemyPanel(layer);
-
-        // ── Player party panel (bottom-center) ──────────────────────
         BuildPlayerPanel(layer);
     }
 
     private void BuildEnemyPanel(CanvasLayer layer)
     {
-        // Panel container anchored to top-center.
-        var panel = new PanelContainer();
-        panel.AnchorLeft   = 0.5f;
-        panel.AnchorRight  = 0.5f;
-        panel.AnchorTop    = 0f;
-        panel.AnchorBottom = 0f;
-        panel.GrowHorizontal = Control.GrowDirection.Both;
-        panel.OffsetTop    = 20f;
-        panel.OffsetBottom = 10f;  // let content size it
-
-        // Semi-transparent dark background.
-        var style = new StyleBoxFlat();
-        style.BgColor      = new Color(0f, 0f, 0f, 0.55f);
-        style.CornerRadiusBottomLeft  = 6;
-        style.CornerRadiusBottomRight = 6;
-        style.CornerRadiusTopLeft     = 6;
-        style.CornerRadiusTopRight    = 6;
-        style.ContentMarginLeft   = 16f;
-        style.ContentMarginRight  = 16f;
-        style.ContentMarginTop    = 10f;
-        style.ContentMarginBottom = 10f;
-        panel.AddThemeStyleboxOverride("panel", style);
+        // Anchored to the top-right corner of the viewport, grows leftward.
+        var panel = MakeLayeredPanel(PanelMinWidthEnemy, out var content);
+        panel.AnchorLeft     = 1f;
+        panel.AnchorRight    = 1f;
+        panel.AnchorTop      = 0f;
+        panel.AnchorBottom   = 0f;
+        panel.GrowHorizontal = Control.GrowDirection.Begin;
+        panel.OffsetRight    = -UiEdgeMargin;
+        panel.OffsetTop      = UiEdgeMargin;
         layer.AddChild(panel);
 
-        // One row per enemy — for now just one.
-        var vbox = new VBoxContainer();
-        vbox.AddThemeConstantOverride("separation", 6);
-        panel.AddChild(vbox);
-
         string enemyName = EnemyData != null ? EnemyData.EnemyName : "Enemy";
-        AddEnemyRow(vbox, enemyName, out _enemyHPFill, out _enemyHPLabel);
+        AddEnemyRow(content, enemyName, out _enemyHPFill, out _enemyHPLabel);
     }
 
     private void AddEnemyRow(VBoxContainer parent, string name,
-                              out ColorRect hpFill, out Label hpLabel)
+                              out Control hpFill, out Label hpLabel)
     {
-        var row = new HBoxContainer();
-        row.AddThemeConstantOverride("separation", 12);
-        parent.AddChild(row);
-
-        _enemyNameLabel = new Label();
+        // Name above, HP bar below.
+        _enemyNameLabel      = new Label();
         _enemyNameLabel.Text = name;
-        _enemyNameLabel.CustomMinimumSize = new Vector2(140f, 0f);
-        _enemyNameLabel.AddThemeFontSizeOverride("font_size", 18);
-        row.AddChild(_enemyNameLabel);
+        StyleLabel(_enemyNameLabel);
+        parent.AddChild(_enemyNameLabel);
 
-        // HP bar — background + fill + overlaid label.
         var barContainer = new Control();
         barContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
-        row.AddChild(barContainer);
+        parent.AddChild(barContainer);
 
-        var bg = new ColorRect();
-        bg.Size  = new Vector2(BarWidth, BarHeight);
-        bg.Color = new Color(0.15f, 0.05f, 0.05f, 1f);
-        barContainer.AddChild(bg);
-
-        hpFill       = new ColorRect();
-        hpFill.Size  = new Vector2(BarWidth, BarHeight);
-        hpFill.Color = new Color(0.80f, 0.12f, 0.12f, 1f);
-        barContainer.AddChild(hpFill);
-
-        hpLabel = new Label();
-        hpLabel.Size                = new Vector2(BarWidth, BarHeight);
-        hpLabel.HorizontalAlignment = HorizontalAlignment.Center;
-        hpLabel.VerticalAlignment   = VerticalAlignment.Center;
-        hpLabel.AddThemeFontSizeOverride("font_size", 14);
-        barContainer.AddChild(hpLabel);
+        BuildStyledBar(barContainer,
+                       UiBarBackLeftPath, UiBarBackMidPath, UiBarBackRightPath,
+                       UiBarRedLeftPath,  UiBarRedMidPath,  UiBarRedRightPath,
+                       out hpFill, out hpLabel,
+                       fillTint: HpFillTint);
     }
 
     private void BuildPlayerPanel(CanvasLayer layer)
     {
-        // Panel container anchored to bottom-center.
-        var panel = new PanelContainer();
-        panel.AnchorLeft   = 0.5f;
-        panel.AnchorRight  = 0.5f;
-        panel.AnchorTop    = 1f;
-        panel.AnchorBottom = 1f;
-        panel.GrowHorizontal = Control.GrowDirection.Both;
+        // Anchored to the bottom-left corner of the viewport.
+        var panel = MakeLayeredPanel(PanelMinWidthStatus, out var content);
+        panel.AnchorLeft     = 0f;
+        panel.AnchorRight    = 0f;
+        panel.AnchorTop      = 1f;
+        panel.AnchorBottom   = 1f;
+        panel.GrowHorizontal = Control.GrowDirection.End;
         panel.GrowVertical   = Control.GrowDirection.Begin;
-        panel.OffsetBottom = -10f;
-
-        var style = new StyleBoxFlat();
-        style.BgColor      = new Color(0f, 0f, 0f, 0.55f);
-        style.CornerRadiusBottomLeft  = 6;
-        style.CornerRadiusBottomRight = 6;
-        style.CornerRadiusTopLeft     = 6;
-        style.CornerRadiusTopRight    = 6;
-        style.ContentMarginLeft   = 16f;
-        style.ContentMarginRight  = 16f;
-        style.ContentMarginTop    = 10f;
-        style.ContentMarginBottom = 10f;
-        panel.AddThemeStyleboxOverride("panel", style);
+        panel.OffsetLeft     = UiEdgeMargin;
+        panel.OffsetBottom   = -UiEdgeMargin;
         layer.AddChild(panel);
+        _playerPanel = panel;
 
-        // One row per party member — for now just the knight.
-        var vbox = new VBoxContainer();
-        vbox.AddThemeConstantOverride("separation", 6);
-        panel.AddChild(vbox);
-
-        AddPlayerRow(vbox, "Knight",
+        AddPlayerRow(content, "Knight",
                      out _playerHPFill, out _playerHPLabel,
                      out _playerMPFill, out _playerMPLabel);
     }
 
     private void AddPlayerRow(VBoxContainer parent, string name,
-                               out ColorRect hpFill, out Label hpLabel,
-                               out ColorRect mpFill, out Label mpLabel)
+                               out Control hpFill, out Label hpLabel,
+                               out Control mpFill, out Label mpLabel)
     {
-        // Outer row: name on the left, bars stacked on the right.
-        var row = new HBoxContainer();
-        row.AddThemeConstantOverride("separation", 12);
-        parent.AddChild(row);
-
+        // Name, then HP bar, then MP bar stacked vertically with 4px gap (VBox separation).
         var nameLabel = new Label();
         nameLabel.Text = name;
-        nameLabel.CustomMinimumSize = new Vector2(140f, 0f);
-        nameLabel.AddThemeFontSizeOverride("font_size", 18);
-        row.AddChild(nameLabel);
+        StyleLabel(nameLabel);
+        parent.AddChild(nameLabel);
 
-        // Vertical stack of HP and MP bars.
-        var bars = new VBoxContainer();
-        bars.AddThemeConstantOverride("separation", 4);
-        row.AddChild(bars);
-
-        // HP bar
         var hpContainer = new Control();
         hpContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
-        bars.AddChild(hpContainer);
+        parent.AddChild(hpContainer);
+        BuildStyledBar(hpContainer,
+                       UiBarBackLeftPath, UiBarBackMidPath, UiBarBackRightPath,
+                       UiBarRedLeftPath,  UiBarRedMidPath,  UiBarRedRightPath,
+                       out hpFill, out hpLabel,
+                       fillTint: HpFillTint);
 
-        var hpBg = new ColorRect();
-        hpBg.Size  = new Vector2(BarWidth, BarHeight);
-        hpBg.Color = new Color(0.15f, 0.05f, 0.05f, 1f);
-        hpContainer.AddChild(hpBg);
-
-        hpFill       = new ColorRect();
-        hpFill.Size  = new Vector2(BarWidth, BarHeight);
-        hpFill.Color = new Color(0.80f, 0.12f, 0.12f, 1f);
-        hpContainer.AddChild(hpFill);
-
-        hpLabel = new Label();
-        hpLabel.Size                = new Vector2(BarWidth, BarHeight);
-        hpLabel.HorizontalAlignment = HorizontalAlignment.Center;
-        hpLabel.VerticalAlignment   = VerticalAlignment.Center;
-        hpLabel.AddThemeFontSizeOverride("font_size", 14);
-        hpContainer.AddChild(hpLabel);
-
-        // MP bar
         var mpContainer = new Control();
         mpContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
-        bars.AddChild(mpContainer);
-
-        var mpBg = new ColorRect();
-        mpBg.Size  = new Vector2(BarWidth, BarHeight);
-        mpBg.Color = new Color(0.05f, 0.05f, 0.15f, 1f);
-        mpContainer.AddChild(mpBg);
-
-        mpFill       = new ColorRect();
-        mpFill.Size  = new Vector2(BarWidth, BarHeight);
-        mpFill.Color = new Color(0.15f, 0.30f, 0.85f, 1f);
-        mpContainer.AddChild(mpFill);
-
-        mpLabel = new Label();
-        mpLabel.Size                = new Vector2(BarWidth, BarHeight);
-        mpLabel.HorizontalAlignment = HorizontalAlignment.Center;
-        mpLabel.VerticalAlignment   = VerticalAlignment.Center;
-        mpLabel.AddThemeFontSizeOverride("font_size", 14);
-        mpContainer.AddChild(mpLabel);
+        parent.AddChild(mpContainer);
+        BuildStyledBar(mpContainer,
+                       UiBarBackLeftPath, UiBarBackMidPath, UiBarBackRightPath,
+                       UiBarBlueLeftPath, UiBarBlueMidPath, UiBarBlueRightPath,
+                       out mpFill, out mpLabel);
     }
 
     /// <summary>
