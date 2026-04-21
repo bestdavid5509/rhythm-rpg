@@ -386,7 +386,21 @@ public partial class BattleTest : Node2D
     {
         if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnHitAnimFinished);
-        PlayPlayer("idle");  // OWNER: enemy pass resolved, flinch complete
+        if (_playerDead) return;
+        // Freeze on the last hit frame for 4 frames (4 / 12fps ≈ 0.333s) before returning
+        // to idle — gives the flinch pose time to read.
+        // Capture-before-Stop pattern: currently hit is a 1-frame animation so the Stop()
+        // reset-to-0 bug is invisible (frame 0 IS the last frame), but this hardens against
+        // multi-frame hit animations in future.
+        int lastFrame = _playerAnimSprite.Frame;
+        StopPlayer();
+        SetPlayerFrame(lastFrame);
+        GetTree().CreateTimer(4f / 12f).Timeout += () =>
+        {
+            if (!GodotObject.IsInstanceValid(this)) return;
+            if (_playerDead) return;
+            PlayPlayer("idle");  // OWNER: enemy pass resolved, flinch complete
+        };
     }
 
     // -------------------------------------------------------------------------
