@@ -46,12 +46,14 @@
 | Ice spell impact | EminYILDIRIM | CC-BY 4.0 — credit required | "Magic Ice Impact Skill Spell" — https://freesound.org/people/EminYILDIRIM/sounds/550267 |
 | Magic conjure (cast windup) | mikiko850 | CC-BY 4.0 — credit required | "Channeling Magic Texture" — https://freesound.org/people/mikiko850/sounds/849806 |
 | Ice conjure | Omiranda14 | CC-BY 4.0 — credit required | "SFX_Spell_Freeze_03" — https://freesound.org/people/Omiranda14/sounds/790465 |
-| Battle Theme A (reserved for Phase 2 general battle music) | cynicmusic | CC0 — no attribution required | https://opengameart.org/content/battle-theme-a — credit: cynicmusic.com / pixelsphere.org |
-| Battle Themes — Phase 1 battle theme | Alexandr Zhelanov | CC-BY 4.0 — credit required: "Alexandr Zhelanov https://soundcloud.com/alexandr-zhelanov" | https://opengameart.org/content/battle-themes |
-| Orchestral Battle Music — Phase 2 battle theme | Lisboa / João Vitor | CC-BY 3.0 — credit composer name | https://opengameart.org/content/orchestral-battle-music-0 |
-| Passionate Dramatic Battle Music | ISAo | OGA-BY 3.0 — credit required: "SOUND AIRYLUVS by ISAo https://airyluvs.com/" | https://opengameart.org/content/passionate-dramatic-battle-music |
-| Emotional Strings Dramatic Battle Scene | ISAo | OGA-BY 3.0 — credit required: "SOUND AIRYLUVS by ISAo https://airyluvs.com/" | https://opengameart.org/content/emotional-strings-dramatic-battle-scene |
-| "Can't Stop Winning" (upbeat overworld theme, reserved for later phase) | Jonathan Shaw / InspectorJ | CC-BY 3.0 — credit required: "Can't Stop Winning" Composed by Jonathan Shaw (www.jshaw.co.uk) | https://opengameart.org/content/cant-stop-winning-rpg-orchestral-essentials-battle-victory-music |
+| Battle Theme A (reserved for Phase 2 general battle music) | cynicmusic | CC0 — no attribution required | "battleThemeA.mp3" — https://opengameart.org/content/battle-theme-a — credit: cynicmusic.com / pixelsphere.org |
+| Battle Themes — Phase 1 battle theme | Alexandr Zhelanov | CC-BY 4.0 — credit required: "Alexandr Zhelanov https://soundcloud.com/alexandr-zhelanov" | "Zhelanov_Battle_Themes/" (folder of 5 tracks) — https://opengameart.org/content/battle-themes |
+| Orchestral Battle Music — Phase 2 battle theme | Lisboa / João Vitor | CC-BY 3.0 — credit composer name | "Batalha #1.ogg" — https://opengameart.org/content/orchestral-battle-music-0 |
+| Passionate Dramatic Battle Music | ISAo | OGA-BY 3.0 — credit required: "SOUND AIRYLUVS by ISAo https://airyluvs.com/" | "19 Itsuwari No Ai.mp3" — https://opengameart.org/content/passionate-dramatic-battle-music |
+| Emotional Strings Dramatic Battle Scene remixed — Phase 1 battle theme candidate | glitchart (remix of ISAo tracks) | OGA-BY 3.0 — credit required: "Emotional Strings Dramatic Battle Scene by LSAo https://opengameart.org/content/emotional-strings-dramatic-battle-scene / Inspiring Trailer For Advertisement by LSAo / Fantastic Electronic Emotional Battle by LSao — all OGA-BY 3.0" | "melty_oga_loopable.ogg" — https://opengameart.org/content/emotional-strings-dramatic-battle-scene-remixed-lsao |
+| "Can't Stop Winning" (upbeat overworld theme, reserved for later phase) | Jonathan Shaw / InspectorJ | CC-BY 3.0 — credit required: "Can't Stop Winning" Composed by Jonathan Shaw (www.jshaw.co.uk) | "Cant Stop Winning MP3.mp3" — https://opengameart.org/content/cant-stop-winning-rpg-orchestral-essentials-battle-victory-music |
+| Epic Boss Battle — Phase 2 boss theme | migfus20 | CC-BY 4.0 — credit required: credit "migfus20" | "colossal_3_looped.mp3" — https://opengameart.org/content/epic-boss-battle |
+| Cynic Battle Loop (looped version of Battle Theme A, reserved for Phase 2) | Ferk (loop edit) / cynicmusic (original) | CC0 — no attribution required (credit: cynicmusic.com / pixelsphere.org) | "cynicbattleloop.ogg" — https://opengameart.org/content/cynic-battle-loop |
 
 ## Tools Used
 

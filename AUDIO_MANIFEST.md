@@ -30,3 +30,16 @@
 | Player attack swing | player_attack_swing.wav | swing2.wav |
 | Player hit | player_hit.wav | 547580__fmaudio__hitting-cabbage-against-wooden-door-frame-1.wav |
 | Victory | victory.wav | 835009__silverillusionist__mission-complete-divine-radiance-2.wav |
+
+## Music
+
+| Purpose | Filename | Original Filename |
+|---|---|---|
+| Battle Theme A (Phase 2 general battle, reserved) | battleThemeA.mp3 | battleThemeA.mp3 |
+| Battle Theme A looped (Phase 2 general battle, reserved) | cynicbattleloop.ogg | cynicbattleloop.ogg |
+| "Can't Stop Winning" (upbeat overworld, later phase) | Cant Stop Winning MP3.mp3 | Cant Stop Winning MP3.mp3 |
+| Emotional Strings remixed loopable — Phase 1 battle theme candidate | melty_oga_loopable.ogg | melty_oga_loopable.ogg |
+| Orchestral Battle Music — Phase 2 battle theme candidate | Batalha #1.ogg | Batalha #1.ogg |
+| Passionate Dramatic Battle Music — candidate | 19 Itsuwari No Ai.mp3 | 19 Itsuwari No Ai.mp3 |
+| Phase 1 battle themes (Zhelanov) | Zhelanov_Battle_Themes/ | Zhelanov_Battle_Themes/ (folder of tracks) |
+| Phase 2 boss theme | colossal_3_looped.mp3 | colossal_3.mp3 (looped in Audacity) |
