@@ -241,6 +241,7 @@ public partial class BattleSystem : Node
     /// </summary>
     private void RunStep(int stepIndex)
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         if (!_sequenceActive)
         {
             GD.Print($"[BattleSystem] RunStep({stepIndex}) skipped — sequence no longer active.");
@@ -414,6 +415,7 @@ public partial class BattleSystem : Node
     /// </summary>
     private void OnAnyCircleCompleted(TimingPrompt prompt, int result, int stepIndex)
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         // Guard: ignore callbacks from a previous sequence that has already completed.
         if (!_sequenceActive)
         {
@@ -468,6 +470,7 @@ public partial class BattleSystem : Node
     /// </summary>
     private void SpawnEffectSprite(AttackStep step, int startFrame = 0)
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         if (string.IsNullOrEmpty(step.SpritesheetPath)) return;
 
         var texture = GD.Load<Texture2D>(step.SpritesheetPath);
@@ -567,6 +570,7 @@ public partial class BattleSystem : Node
     /// </summary>
     private void ScheduleStepSounds(AttackStep step, int animStartFrame, float baseDelay)
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         if (step.SoundEffects == null || step.SoundEffects.Length == 0) return;
 
         int soundCount = Mathf.Min(step.SoundEffects.Length, step.SoundTriggerFrames.Length);
@@ -589,6 +593,7 @@ public partial class BattleSystem : Node
     /// </summary>
     private void PlaySound(string resPath)
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         var stream = GD.Load<AudioStream>(resPath);
         if (stream == null)
         {

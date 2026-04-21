@@ -203,6 +203,16 @@ public partial class BattleTest : Node2D
     private bool      _endLabelShown;     // idempotent guard for ShowEndLabel — lets death-start sites trigger the
                                           // Game Over overlay + music fade immediately while OnPlayerDeathFinished's
                                           // own ShowEndLabel call (at death-anim completion) becomes a no-op.
+    private bool      _reloadPending;     // true once the Retry fade-to-black begins. Documentation flag — actual
+                                          // callback guards use IsInsideTree() so they work without accessing
+                                          // BattleTest state from BattleSystem (a separate class).
+
+    // Game Over options panel — populated by AddGameOverOptions from ShowEndLabel.
+    // Navigation handled by HandleGameOverInput when _state == BattleState.GameOver.
+    private int       _gameOverOptionIndex;    // 0 = Retry, 1 = Quit
+    private Label[]   _gameOverTextLabels;     // centered option text; yellow when selected, white otherwise
+    private Label[]   _gameOverArrows;         // ► cursor absolutely anchored left; Visible toggled per selection
+    private static readonly string[] GameOverOptionLabels = { "Retry", "Quit" };
     private bool      _isComboAttack;       // true when the current player turn uses Combo Strike (Bouncing prompt)
     private bool      _isPlayerMagicAttack; // true when the current player turn uses a magic attack via BattleSystem
     private bool      _isPlayerHealAttack;  // true when the current player turn uses Cure (heal self instead of damage enemy)
@@ -411,8 +421,12 @@ public partial class BattleTest : Node2D
         // No input of any kind is processed until the next input-accepting state begins.
         if (_inputLocked) return;
 
-        // GameOver — all input dead.
-        if (_state == BattleState.GameOver) return;
+        // GameOver — route to the Retry/Quit options handler. No other input is accepted.
+        if (_state == BattleState.GameOver)
+        {
+            HandleGameOverInput(@event);
+            return;
+        }
 
         switch (_state)
         {
@@ -538,6 +552,178 @@ public partial class BattleTest : Node2D
             if (_musicPlayer != null) _musicPlayer.Stop();
         }));
         GD.Print($"[BattleTest] Music fading out over {durationSec}s.");
+    }
+
+    // =========================================================================
+    // Game Over options panel — Retry / Quit shown under the "Game Over" text
+    // =========================================================================
+
+    /// <summary>
+    /// Builds the Retry/Quit options rows under the Game Over title. Called from ShowEndLabel
+    /// with the layered panel's content VBox as host. Each row is a Control containing two
+    /// siblings:
+    ///   • a full-rect-anchored text Label (centered, so text is always horizontally centered
+    ///     within the row)
+    ///   • an absolutely-positioned ► arrow Label on the left (fixed offset, not part of the
+    ///     text flow, so text width doesn't shift centering and arrow position is identical
+    ///     across rows regardless of which option is longer)
+    /// Selected row: arrow visible, text tinted yellow. Unselected: arrow hidden, text white.
+    /// Options fade in with the rest of the overlay via the wrapper's Modulate tween.
+    /// </summary>
+    private void AddGameOverOptions(VBoxContainer host)
+    {
+        _gameOverOptionIndex  = 0;
+        _gameOverTextLabels   = new Label[GameOverOptionLabels.Length];
+        _gameOverArrows       = new Label[GameOverOptionLabels.Length];
+
+        const float RowWidth         = 320f;
+        const float RowHeight        = 56f;   // accommodates larger option font (~44px) + drop shadow
+        const int   OptionFontSize   = 44;
+        const int   ArrowFontSize    = 24;    // more proportional to the 44px option text while still
+                                              // reading as a cursor mark, not a peer of the label text
+        const float ArrowOffsetLeft  = 72f;   // fixed distance from row's left edge — identical per row
+        const float ArrowWidth       = 24f;
+        const float ArrowBoxHeight   = 32f;   // explicit height anchored to row midline for predictable
+                                              // vertical centering regardless of font metric differences
+                                              // between the small arrow glyph and the large option text
+
+        // Nested options stack inside the host — keeps option-to-option separation (12) tighter
+        // than the host's title/options separation (24 from ShowEndLabel).
+        var stack = new VBoxContainer();
+        stack.AddThemeConstantOverride("separation", 12);
+        stack.MouseFilter = Control.MouseFilterEnum.Ignore;
+        host.AddChild(stack);
+
+        for (int i = 0; i < GameOverOptionLabels.Length; i++)
+        {
+            // Row container — fixed size. Houses text + arrow as independent siblings.
+            var row = new Control();
+            row.CustomMinimumSize = new Vector2(RowWidth, RowHeight);
+            row.MouseFilter       = Control.MouseFilterEnum.Ignore;
+            stack.AddChild(row);
+
+            // Text label — full-rect anchored so HorizontalAlignment.Center centers within
+            // the full row width. Arrow is a sibling, not part of this label, so text width
+            // doesn't affect arrow position and arrow doesn't shift the text.
+            var textLabel = new Label();
+            textLabel.Text                = GameOverOptionLabels[i];
+            textLabel.HorizontalAlignment = HorizontalAlignment.Center;
+            textLabel.VerticalAlignment   = VerticalAlignment.Center;
+            textLabel.AnchorLeft          = 0f;
+            textLabel.AnchorRight         = 1f;
+            textLabel.AnchorTop           = 0f;
+            textLabel.AnchorBottom        = 1f;
+            textLabel.MouseFilter         = Control.MouseFilterEnum.Ignore;
+            StyleLabel(textLabel, fontSize: OptionFontSize);
+            row.AddChild(textLabel);
+            _gameOverTextLabels[i] = textLabel;
+
+            // Arrow label — absolutely positioned at a fixed left offset. Width/position are
+            // identical for every row so the cursor snaps cleanly when moving between options.
+            // Height is a small explicit box anchored to the row midline (AnchorTop/Bottom=0.5)
+            // so the arrow glyph's visual center aligns with the row center regardless of the
+            // font metric difference between 18px arrow and 44px option text.
+            var arrow = new Label();
+            arrow.Text                = "▶";
+            arrow.HorizontalAlignment = HorizontalAlignment.Center;
+            arrow.VerticalAlignment   = VerticalAlignment.Center;
+            arrow.AnchorLeft          = 0f;
+            arrow.AnchorRight         = 0f;
+            arrow.AnchorTop           = 0.5f;
+            arrow.AnchorBottom        = 0.5f;
+            arrow.OffsetLeft          = ArrowOffsetLeft;
+            arrow.OffsetRight         = ArrowOffsetLeft + ArrowWidth;
+            arrow.OffsetTop           = -ArrowBoxHeight * 0.5f;
+            arrow.OffsetBottom        =  ArrowBoxHeight * 0.5f;
+            arrow.MouseFilter         = Control.MouseFilterEnum.Ignore;
+            StyleLabel(arrow, fontSize: ArrowFontSize);
+            arrow.Modulate            = ColorMenuSelected;  // always yellow; visibility toggled by selection
+            row.AddChild(arrow);
+            _gameOverArrows[i] = arrow;
+        }
+
+        RefreshGameOverOptions();
+    }
+
+    /// <summary>
+    /// Repaints the Retry/Quit options based on <see cref="_gameOverOptionIndex"/>.
+    /// Selected row: arrow visible, text tinted yellow. Unselected: arrow hidden, text white.
+    /// </summary>
+    private void RefreshGameOverOptions()
+    {
+        if (_gameOverTextLabels == null) return;
+        for (int i = 0; i < _gameOverTextLabels.Length; i++)
+        {
+            bool selected = (i == _gameOverOptionIndex);
+            _gameOverTextLabels[i].Modulate = selected ? ColorMenuSelected : ColorMenuNormal;
+            _gameOverArrows[i].Visible      = selected;
+        }
+    }
+
+    /// <summary>
+    /// Handles input while the Game Over overlay is active. Called from <see cref="_Input"/>
+    /// when _state is BattleState.GameOver. No-op until AddGameOverOptions has populated the
+    /// labels (brief window between _state transition and overlay construction).
+    /// </summary>
+    private void HandleGameOverInput(InputEvent @event)
+    {
+        if (_gameOverTextLabels == null) return;
+
+        if (@event.IsActionPressed("ui_up") || @event.IsActionPressed("ui_down"))
+        {
+            int direction = @event.IsActionPressed("ui_up") ? -1 : 1;
+            int count     = GameOverOptionLabels.Length;
+            _gameOverOptionIndex = (_gameOverOptionIndex + direction + count) % count;
+            RefreshGameOverOptions();
+            GetViewport().SetInputAsHandled();
+        }
+        else if (@event.IsActionPressed("battle_confirm"))
+        {
+            GetViewport().SetInputAsHandled();
+            GD.Print($"[BattleTest] Game Over → {GameOverOptionLabels[_gameOverOptionIndex]}");
+            switch (_gameOverOptionIndex)
+            {
+                case 0: FadeToBlackAndReload(); break;  // Retry
+                case 1: GetTree().Quit();       break;  // Quit
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds a full-screen black overlay on its own top-most CanvasLayer and tweens its
+    /// alpha from 0 → 1 over 0.5s. On tween completion, calls ReloadCurrentScene() so the
+    /// battle starts fresh with everything reset. _inputLocked is set immediately so the
+    /// player can't retrigger the retry or navigate the options during the fade.
+    /// </summary>
+    private void FadeToBlackAndReload()
+    {
+        _inputLocked   = true;
+        _reloadPending = true;
+
+        var fadeLayer   = new CanvasLayer();
+        fadeLayer.Name  = "GameOverFadeLayer";
+        fadeLayer.Layer = 100;  // above every other CanvasLayer (status panels, menu, message, end overlay)
+        AddChild(fadeLayer);
+
+        var fadeRect = new ColorRect();
+        fadeRect.Color       = new Color(0f, 0f, 0f, 1f);  // opaque black; Modulate drives the fade
+        fadeRect.Modulate    = new Color(1f, 1f, 1f, 0f);  // start fully transparent
+        fadeRect.MouseFilter = Control.MouseFilterEnum.Ignore;
+        fadeRect.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        fadeRect.OffsetLeft   = 0f;
+        fadeRect.OffsetTop    = 0f;
+        fadeRect.OffsetRight  = 0f;
+        fadeRect.OffsetBottom = 0f;
+        fadeLayer.AddChild(fadeRect);
+
+        var tween = CreateTween();
+        tween.TweenProperty(fadeRect, "modulate:a", 1.0f, 0.5f);
+        tween.TweenInterval(0.5f);  // hold fully black before reloading so the transition feels deliberate
+        tween.TweenCallback(Callable.From(() =>
+        {
+            if (!GodotObject.IsInstanceValid(this)) return;  // scene already disposed — skip double-reload
+            GetTree().ReloadCurrentScene();
+        }));
     }
 
     // =========================================================================

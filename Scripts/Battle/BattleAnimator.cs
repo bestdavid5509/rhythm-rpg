@@ -253,6 +253,7 @@ public partial class BattleTest : Node2D
 
     private void OnCastIntroFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         GD.Print("[BattleTest] OnCastIntroFinished fired.");
         SafeDisconnectEnemyAnim(OnCastIntroFinished);
         if (_enemyDead) return;
@@ -269,6 +270,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnEnemyAttackAnimFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         GD.Print("[BattleTest] OnEnemyAttackAnimFinished fired.");
         SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
         if (_enemyDead) return;  // death already in progress — don't interfere
@@ -311,6 +313,7 @@ public partial class BattleTest : Node2D
 
     private void OnCastEndFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         GD.Print("[BattleTest] OnCastEndFinished fired.");
         SafeDisconnectEnemyAnim(OnCastEndFinished);
         PlayEnemy("idle");
@@ -327,6 +330,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnPlayerCastFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnPlayerCastFinished);
         if (_playerDead) return;
 
@@ -350,18 +354,21 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnPlayerCastTransitionFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnPlayerCastTransitionFinished);
         PlayPlayer("idle");  // OWNER: OnPlayerCastTransitionFinished — magic resolved, return to rest
     }
 
     private void OnParryFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnParryFinished);
         PlayPlayer("idle");  // OWNER: enemy pass resolved, parry complete
     }
 
     private void OnHitAnimFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnHitAnimFinished);
         PlayPlayer("idle");  // OWNER: enemy pass resolved, flinch complete
     }
@@ -376,6 +383,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnPlayerDeathFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
         GD.Print("[BattleTest] Player died.");
         ShowEndLabel("Game Over");
@@ -391,6 +399,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnEnemyDeathFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
         if (SkipPhaseTransition && IsPhaseTransitionPending())
         {
@@ -673,6 +682,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnComboPass0SlashFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnComboPass0SlashFinished);
         if (_playerDead) return;
         if (_comboMissed)
@@ -694,6 +704,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnComboPass1SlashFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnComboPass1SlashFinished);
         if (_playerDead) return;
         if (_comboMissed)
@@ -761,6 +772,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnFinalSlashFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnFinalSlashFinished);
         StopPlayer();  // OWNER: OnFinalSlashFinished — hold last slash frame (sheet frame 3 or 9)
         // Godot 4 resets Frame to 0 when Stop() is called on a finished non-looping animation.
@@ -823,6 +835,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnRetreatFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnRetreatFinished);
         _playerAnimSprite.SpeedScale = 1f;  // always reset — SpeedScale affects all animations
         // Restore looping on "run" — it was disabled before PlayBackwards so AnimationFinished
@@ -1077,6 +1090,7 @@ public partial class BattleTest : Node2D
 
     private void OnEnemyHurtFlashFinished()
     {
+        if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectEnemyAnim(OnEnemyHurtFlashFinished);
         PlayEnemy("idle");
     }
@@ -1157,23 +1171,81 @@ public partial class BattleTest : Node2D
         var layer = new CanvasLayer();
         AddChild(layer);
 
-        var label = new Label();
-        label.Text                = text;
-        label.HorizontalAlignment = HorizontalAlignment.Center;
-        label.VerticalAlignment   = VerticalAlignment.Center;
-        label.AddThemeFontSizeOverride("font_size", 64);
-        label.Modulate = new Color(1f, 1f, 1f, 0f);  // start transparent; Tween fades in below
+        // Wrapper Control owns everything (label + optional options panel) so a single
+        // Modulate tween on the wrapper fades all end-of-battle UI in together.
+        var wrapper = new Control();
+        wrapper.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        wrapper.OffsetLeft   = 0f;
+        wrapper.OffsetTop    = 0f;
+        wrapper.OffsetRight  = 0f;
+        wrapper.OffsetBottom = 0f;
+        wrapper.MouseFilter  = Control.MouseFilterEnum.Ignore;
+        wrapper.Modulate     = new Color(1f, 1f, 1f, 0f);  // start transparent; Tween fades in below
+        layer.AddChild(wrapper);
 
-        // Stretch the label to fill the entire CanvasLayer viewport so the text centers
-        // correctly regardless of resolution. Anchors: (0,0)→(1,1), offsets cleared.
-        label.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-        label.OffsetLeft   = 0f;
-        label.OffsetTop    = 0f;
-        label.OffsetRight  = 0f;
-        label.OffsetBottom = 0f;
-        layer.AddChild(label);
+        if (text.Contains("Game Over"))
+        {
+            // Game Over uses a layered panel (dark navy fill + fantasy border) so the UI
+            // stays readable even if battle effects (circles, sprites, damage numbers) are
+            // still animating behind it. Panel anchors to viewport center and auto-sizes
+            // from its content VBox.
+            var panel = BattleTest.MakeLayeredPanel(minWidth: 400f, out var content);
+            panel.AnchorLeft     = 0.5f;
+            panel.AnchorRight    = 0.5f;
+            panel.AnchorTop      = 0.5f;
+            panel.AnchorBottom   = 0.5f;
+            panel.GrowHorizontal = Control.GrowDirection.Both;
+            panel.GrowVertical   = Control.GrowDirection.Both;
+            wrapper.AddChild(panel);
+
+            // Content VBox holds the "Game Over" title, a fade divider, and the options stack.
+            // Separation of 24 gives breathing room between title/divider/options groups.
+            content.AddThemeConstantOverride("separation", 24);
+
+            // Top breathing room — 8px above "Game Over" so it sits comfortably below the
+            // border art rather than hugging the top edge of the panel padding.
+            var topSpacer = new Control();
+            topSpacer.CustomMinimumSize = new Vector2(0, 8);
+            content.AddChild(topSpacer);
+
+            var label = new Label();
+            label.Text                = text;
+            label.HorizontalAlignment = HorizontalAlignment.Center;
+            label.VerticalAlignment   = VerticalAlignment.Center;
+            label.AddThemeFontSizeOverride("font_size", 64);
+            content.AddChild(label);
+
+            // Horizontal divider between the title and the options. Uses the symmetric
+            // divider art (not the battle menu's divider-fade variant) for a more decorative
+            // split under the Game Over title.
+            AddMenuDivider(content,
+                "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Divider/divider-002_symmetric.png");
+
+            AddGameOverOptions(content);
+
+            // Bottom breathing room — mirrors the top spacer so the panel reads as balanced
+            // and feels a touch taller overall.
+            var bottomSpacer = new Control();
+            bottomSpacer.CustomMinimumSize = new Vector2(0, 8);
+            content.AddChild(bottomSpacer);
+        }
+        else
+        {
+            // Victory — full-screen label, unchanged from the original centered layout.
+            var label = new Label();
+            label.Text                = text;
+            label.HorizontalAlignment = HorizontalAlignment.Center;
+            label.VerticalAlignment   = VerticalAlignment.Center;
+            label.AddThemeFontSizeOverride("font_size", 64);
+            label.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+            label.OffsetLeft   = 0f;
+            label.OffsetTop    = 0f;
+            label.OffsetRight  = 0f;
+            label.OffsetBottom = 0f;
+            wrapper.AddChild(label);
+        }
 
         var tween = CreateTween();
-        tween.TweenProperty(label, "modulate:a", 1.0f, 0.5f);
+        tween.TweenProperty(wrapper, "modulate:a", 1.0f, 0.5f);
     }
 }

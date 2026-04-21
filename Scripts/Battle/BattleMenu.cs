@@ -130,11 +130,14 @@ public partial class BattleTest : Node2D
     /// Adds a Kenney Divider Fade TextureRect between menu options. Not a Label —
     /// navigation logic iterates the `_menuLabels` / `_subMenuLabels` / `_itemMenuLabels`
     /// arrays directly, so dividers are purely decorative siblings in the VBox.
+    ///
+    /// <paramref name="texturePath"/> defaults to the battle-menu divider-fade asset;
+    /// callers (e.g. the Game Over panel) can pass a different divider art file.
     /// </summary>
-    private void AddMenuDivider(VBoxContainer parent)
+    private void AddMenuDivider(VBoxContainer parent, string texturePath = null)
     {
         var divider = new TextureRect();
-        divider.Texture             = GD.Load<Texture2D>(UiDividerPath);
+        divider.Texture             = GD.Load<Texture2D>(texturePath ?? UiDividerPath);
         divider.StretchMode         = TextureRect.StretchModeEnum.Scale;
         divider.CustomMinimumSize   = new Vector2(0f, 6f);
         divider.SizeFlagsHorizontal = Control.SizeFlags.Fill;
