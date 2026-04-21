@@ -11,7 +11,7 @@ FrameHeight = 144
 ImpactFrames = PackedInt32Array(10)
 Scale = Vector2(3, 3)
 PlayerOffset = Vector2(-15, -70)
-SoundEffects = PackedStringArray("res://Assets/Audio/cure_spell.wav")
+SoundEffects = PackedStringArray("res://Assets/Audio/SFX/cure_spell.wav")
 SoundTriggerFrames = PackedInt32Array(10)
 
 [resource]

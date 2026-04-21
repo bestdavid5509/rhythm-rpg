@@ -68,7 +68,7 @@ Effect sprites always spawn at `(defenderCenter.X, FloorY=750) + Offset/PlayerOf
 
 | Field | Default | Notes |
 |---|---|---|
-| `SoundEffects` | `[]` | `res://Assets/Audio/` paths to sounds |
+| `SoundEffects` | `[]` | `res://Assets/Audio/SFX/` paths to sounds |
 | `SoundTriggerFrames` | `[]` | Zero-based frame indices, paired 1:1 with `SoundEffects`. On Bouncing steps, sounds replay each inward pass |
 
 ## Timing Math

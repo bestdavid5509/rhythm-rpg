@@ -1299,13 +1299,13 @@ public partial class BattleTest : Node2D
     public void ShowBattleMessage(string text) => _battleMessage.Show(text);
 
     /// <summary>
-    /// Fire-and-forget one-shot sound playback from res://Assets/Audio/.
+    /// Fire-and-forget one-shot sound playback from res://Assets/Audio/SFX/.
     /// Creates a temporary AudioStreamPlayer that frees itself when done.
     /// <paramref name="volumeDb"/> adjusts volume in decibels (0 = full, -6 ≈ 50%, -4 ≈ 60%).
     /// </summary>
     private void PlaySound(string filename, float volumeDb = 0f)
     {
-        var stream = GD.Load<AudioStream>($"res://Assets/Audio/{filename}");
+        var stream = GD.Load<AudioStream>($"res://Assets/Audio/SFX/{filename}");
         if (stream == null)
         {
             GD.PrintErr($"[BattleTest] Failed to load audio: {filename}");

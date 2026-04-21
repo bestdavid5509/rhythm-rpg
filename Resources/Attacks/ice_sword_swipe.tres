@@ -13,7 +13,7 @@ CircleType = 1
 FlipH = true
 Offset = Vector2(25, -218)
 PlayerOffset = Vector2(25, -218)
-SoundEffects = PackedStringArray("res://Assets/Audio/ice_conjure.wav", "res://Assets/Audio/ice_impact.wav")
+SoundEffects = PackedStringArray("res://Assets/Audio/SFX/ice_conjure.wav", "res://Assets/Audio/SFX/ice_impact.wav")
 SoundTriggerFrames = PackedInt32Array(0, 10)
 
 [resource]

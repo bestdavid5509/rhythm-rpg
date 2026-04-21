@@ -12,7 +12,7 @@ ImpactFrames = PackedInt32Array(5)
 CircleType = 2
 BounceCount = 4
 Offset = Vector2(-15, -210)
-SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch.wav", "res://Assets/Audio/magic_impact.wav")
+SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(0, 5)
 
 [resource]

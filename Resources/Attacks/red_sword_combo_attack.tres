@@ -11,7 +11,7 @@ FrameHeight = 256
 Fps = 8.0
 ImpactFrames = PackedInt32Array(6, 7, 8)
 Offset = Vector2(-15, -336)
-SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/magic_impact.wav", "res://Assets/Audio/magic_impact.wav", "res://Assets/Audio/magic_impact.wav")
+SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_impact.wav", "res://Assets/Audio/SFX/magic_impact.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(5, 6, 7, 6, 7, 8)
 
 [sub_resource type="Resource" id="AttackStep_2"]
@@ -22,7 +22,7 @@ FrameHeight = 256
 ImpactFrames = PackedInt32Array(6)
 StartOffsetMs = -200
 Offset = Vector2(-15, -369)
-SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_heavy.wav", "res://Assets/Audio/fire_hammer.wav")
+SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(5, 6)
 
 [resource]

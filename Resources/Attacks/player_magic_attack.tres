@@ -11,7 +11,7 @@ FrameHeight = 160
 ImpactFrames = PackedInt32Array(5)
 BounceCount = 0
 PlayerOffset = Vector2(0, -205)
-SoundEffects = PackedStringArray("res://Assets/Audio/magic_launch_5.wav", "res://Assets/Audio/magic_conjure.wav")
+SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_5.wav", "res://Assets/Audio/SFX/magic_conjure.wav")
 SoundTriggerFrames = PackedInt32Array(0, 5)
 
 [resource]

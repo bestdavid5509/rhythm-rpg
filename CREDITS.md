@@ -13,6 +13,8 @@
 | Magic Spell Effects 11 (sword effects) | CreativeKind | Free for commercial use, modifications allowed, no redistribution or resale of assets alone | https://creativekind.itch.io/magic-spell-effects-11 |
 | Magic Spell Effects 14 (additional effects) | CreativeKind | Free for commercial use, modifications allowed, no redistribution or resale of assets alone | https://creativekind.itch.io/magic-spell-effects-14 |
 | Anime slash effect (derived from CreativeKind ice knife asset, modified and recolored) | CreativeKind | Free for commercial use, modifications allowed, no redistribution or resale of assets alone | https://creativekind.itch.io/magic-spell-effects-11 |
+| Fantasy UI Borders | Kenney | CC0 — no attribution required | https://kenney.nl/assets/fantasy-ui-borders |
+| UI Pack RPG Expansion | Kenney | CC0 — no attribution required | https://kenney.nl/assets/ui-pack-rpg-expansion |
 
 ## Audio
 
@@ -22,24 +24,14 @@
 | RPG Sound Pack (sword swing and others TBD) | artisticdude | CC0 — no attribution required | https://opengameart.org/content/rpg-sound-pack |
 | Magic impact sound | EminYILDIRIM | CC-BY 4.0 — credit required | "Magic Fire Spell Impact & Punch" — https://freesound.org/people/EminYILDIRIM/sounds/541478 |
 | Fire hammer | SonoFxAudio | CC-BY 4.0 — credit required | "Sword_Fire01.wav" — https://freesound.org/people/SonoFxAudio/sounds/649361 |
-| Enemy hit impact (TBD which variant) | CogFireStudios | CC0 — no attribution required | "Hits and Swings" pack — https://freesound.org/people/CogFireStudios/packs/30820 (sounds 547036, 547041, 547042) |
+| Enemy hit impact | CogFireStudios | CC0 — no attribution required | "547041__cogfirestudios__hit-swing-sword-small-3.wav" from "Hits and Swings" pack — https://freesound.org/people/CogFireStudios/packs/30820 |
 | Parry/block sound (candidate) | JohnBuhr | CC0 | "Sword_Clash (7).wav" — https://freesound.org/people/JohnBuhr/sounds/326868 |
-| Perfect parry shimmer (candidate 1) | reliops123 | CC0 | "Tink divine orb" — https://freesound.org/people/reliops123/sounds/791861 |
-| Perfect parry shimmer (candidate 2) | SoundEffectsForAll | CC0 | "Distorted Whoosh Impactful" — https://freesound.org/people/SoundEffectsForAll/sounds/840813 |
-| Perfect parry shimmer (candidate 3) | _lucy | CC0 | "Success notification" — https://freesound.org/people/_lucy/sounds/780010 |
-| Perfect parry shimmer (candidate 4) | 13712885766 | CC0 | "Chimes 1 - Short" — https://freesound.org/people/13712885766/sounds/789596 |
 | Learned/absorbed attack sound | IENBA | CC0 | "Game Pickup" (split into game_pickup_1/2/3) — https://freesound.org/people/IENBA/sounds/698768 |
-| Learnable move signal (candidate 1) | mikiko850 | CC-BY 4.0 — credit required | "Magical Airy Transition-Riser" — https://freesound.org/people/mikiko850/sounds/848208 |
-| Learnable move signal (candidate 2) | mehraniiii | CC0 | "magical warning" — https://freesound.org/people/mehraniiii/sounds/588220 |
-| Learnable move signal (candidate 3) | IanStarGem | CC0 | "scifi hit thing 2.wav" — https://freesound.org/people/IanStarGem/sounds/478809 |
-| Magic attack launch (candidate 1) | MeanRaccoon | CC0 | "whoosh low" — https://freesound.org/people/MeanRaccoon/sounds/830856 |
-| Magic attack launch (candidate 2) | 1bob | CC0 | "Woosh" — https://freesound.org/people/1bob/sounds/831936 |
-| Enemy defeat sound (candidate 1) | IndyArts | CC0 | "Echoing Retro Impact" — https://freesound.org/people/IndyArts/sounds/756357 |
-| Enemy defeat sound (candidate 2) | Zulfish | CC-BY 4.0 — credit required | "Monster Dying" — https://freesound.org/people/Zulfish/sounds/704635 |
-| Game over theme (candidate 1) | kanaizo | CC0 | "Piano Game Over Theme (85 BPM) (F Minor)" — https://freesound.org/people/kanaizo/sounds/731657 |
-| Game over theme (candidate 2) | XloenP | CC-BY 4.0 — credit required | "war defeated symphony Japanstyle emotional sound effect" — https://freesound.org/people/XloenP/sounds/727625 |
-| Battle victory sting (candidate 1) | xkeril | CC0 | "Victory (short sting)" — https://freesound.org/people/xkeril/sounds/706753 |
-| Battle victory sting (candidate 2) | Dylan Kelk / SilverIllusionist | CC-BY 4.0 — credit required, credit as "Dylan Kelk/SilverIllusionist (Freesound)" | "Mission Complete (Divine Radiance) 2" — https://freesound.org/people/SilverIllusionist/sounds/835009 |
+| Learnable move signal | IanStarGem | CC0 | "scifi hit thing 2.wav" — https://freesound.org/people/IanStarGem/sounds/478809 |
+| Magic launch (heavy) | 1bob | CC0 | "Woosh" — https://freesound.org/people/1bob/sounds/831936 |
+| Enemy defeat sound | Zulfish | CC-BY 4.0 — credit required | "Monster Dying" — https://freesound.org/people/Zulfish/sounds/704635 |
+| Game over theme | XloenP | CC-BY 4.0 — credit required | "war defeated symphony Japanstyle emotional sound effect" — https://freesound.org/people/XloenP/sounds/727625 |
+| Battle victory sting | Dylan Kelk / SilverIllusionist | CC-BY 4.0 — credit required, credit as "Dylan Kelk/SilverIllusionist (Freesound)" | "Mission Complete (Divine Radiance) 2" — https://freesound.org/people/SilverIllusionist/sounds/835009 |
 | UI audio | Kenney | CC0 | UI Audio pack — https://kenney.nl/assets/ui-audio |
 | Multi-cut slash effect (counter attack) | Corruptinator | CC-BY 4.0 — credit required | "Whoosh Flurry 2.wav" — https://freesound.org/people/Corruptinator/sounds/457169 |
 | Counter attack sword swing | Squirrel_404 | CC-BY 4.0 — credit required (derivative work) | "Large sword swing" — https://freesound.org/people/Squirrel_404/sounds/737748 |
@@ -47,13 +39,19 @@
 | Counter attack sword swing (source 2) | julianmateo_ | CC-BY 4.0 — credit required | Metallic layer — https://freesound.org/people/julianmateo_/sounds/522701 |
 | Hop-in footstep | Cris_MarYan | CC0 | "Quick_Steps_SFX" — https://freesound.org/people/Cris_MarYan/sounds/816211 |
 | Perfect parry instance (shing) | Artninja | CC-BY 4.0 — credit required | "true_assassin_knife_shing_sounds_02032026" — https://freesound.org/people/Artninja/sounds/844278 |
-| Perfect parry shimmer (alt) | newagesoup | CC0 | "bicycle-bell_09.wav" — https://freesound.org/people/newagesoup/sounds/383602 |
-| Magic impact (alt 2) | EminYILDIRIM | CC-BY 4.0 — credit required | "Dark Tonal Magic Whoosh" — https://freesound.org/people/EminYILDIRIM/sounds/580456 |
-| Magic impact (alt 3/4/5) | EminYILDIRIM | CC-BY 4.0 — credit required | "Holy Protection Skill Buff" — https://freesound.org/people/EminYILDIRIM/sounds/621206 |
+| Perfect parry shimmer | newagesoup | CC0 | "bicycle-bell_09.wav" — https://freesound.org/people/newagesoup/sounds/383602 |
+| Magic launch (alt) | EminYILDIRIM | CC-BY 4.0 — credit required | "Dark Tonal Magic Whoosh" — https://freesound.org/people/EminYILDIRIM/sounds/580456 |
+| Magic launch (versions 4 and 5, trimmed from same source) | EminYILDIRIM | CC-BY 4.0 — credit required | "Holy Protection Skill Buff" — https://freesound.org/people/EminYILDIRIM/sounds/621206 |
 | Cure spell | EminYILDIRIM | CC-BY 4.0 — credit required | "Heal Magic Buff" — https://freesound.org/people/EminYILDIRIM/sounds/590975 |
 | Ice spell impact | EminYILDIRIM | CC-BY 4.0 — credit required | "Magic Ice Impact Skill Spell" — https://freesound.org/people/EminYILDIRIM/sounds/550267 |
 | Magic conjure (cast windup) | mikiko850 | CC-BY 4.0 — credit required | "Channeling Magic Texture" — https://freesound.org/people/mikiko850/sounds/849806 |
 | Ice conjure | Omiranda14 | CC-BY 4.0 — credit required | "SFX_Spell_Freeze_03" — https://freesound.org/people/Omiranda14/sounds/790465 |
+| Battle Theme A (reserved for Phase 2 general battle music) | cynicmusic | CC0 — no attribution required | https://opengameart.org/content/battle-theme-a — credit: cynicmusic.com / pixelsphere.org |
+| Battle Themes — Phase 1 battle theme | Alexandr Zhelanov | CC-BY 4.0 — credit required: "Alexandr Zhelanov https://soundcloud.com/alexandr-zhelanov" | https://opengameart.org/content/battle-themes |
+| Orchestral Battle Music — Phase 2 battle theme | Lisboa / João Vitor | CC-BY 3.0 — credit composer name | https://opengameart.org/content/orchestral-battle-music-0 |
+| Passionate Dramatic Battle Music | ISAo | OGA-BY 3.0 — credit required: "SOUND AIRYLUVS by ISAo https://airyluvs.com/" | https://opengameart.org/content/passionate-dramatic-battle-music |
+| Emotional Strings Dramatic Battle Scene | ISAo | OGA-BY 3.0 — credit required: "SOUND AIRYLUVS by ISAo https://airyluvs.com/" | https://opengameart.org/content/emotional-strings-dramatic-battle-scene |
+| "Can't Stop Winning" (upbeat overworld theme, reserved for later phase) | Jonathan Shaw / InspectorJ | CC-BY 3.0 — credit required: "Can't Stop Winning" Composed by Jonathan Shaw (www.jshaw.co.uk) | https://opengameart.org/content/cant-stop-winning-rpg-orchestral-essentials-battle-victory-music |
 
 ## Tools Used
 
