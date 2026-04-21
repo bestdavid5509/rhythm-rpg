@@ -1138,6 +1138,12 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void ShowEndLabel(string text)
     {
+        // Idempotent — player-death sites call ShowEndLabel at death-start (so the Game Over
+        // overlay and music fade appear immediately, before the enemy's sequence finishes),
+        // and OnPlayerDeathFinished also calls it at death-anim completion. Second call no-ops.
+        if (_endLabelShown) return;
+        _endLabelShown = true;
+
         // Fade the battle music out before the sting plays. Applies to both Victory and
         // Game Over — same 1.5s fade, then Stop. Safe to call if music isn't currently
         // playing (no-op when _musicPlayer.Playing is false).

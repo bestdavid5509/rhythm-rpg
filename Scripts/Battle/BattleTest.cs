@@ -200,6 +200,9 @@ public partial class BattleTest : Node2D
     private bool      _pendingGameOver;   // cached result of CheckGameOver(); read by OnFinalSlashFinished
     private bool      _playerDead;        // true once player death animation begins; guards all subsequent sprite calls
     private bool      _enemyDead;         // true once enemy death animation begins; guards all subsequent sprite calls
+    private bool      _endLabelShown;     // idempotent guard for ShowEndLabel — lets death-start sites trigger the
+                                          // Game Over overlay + music fade immediately while OnPlayerDeathFinished's
+                                          // own ShowEndLabel call (at death-anim completion) becomes a no-op.
     private bool      _isComboAttack;       // true when the current player turn uses Combo Strike (Bouncing prompt)
     private bool      _isPlayerMagicAttack; // true when the current player turn uses a magic attack via BattleSystem
     private bool      _isPlayerHealAttack;  // true when the current player turn uses Cure (heal self instead of damage enemy)
@@ -673,6 +676,10 @@ public partial class BattleTest : Node2D
                 _state      = BattleState.GameOver;
                 TimingPrompt.SuppressInput = true;
                 _playerAnimSprite.Play("death");
+                // Show Game Over overlay + fade music immediately; enemy sequence continues playing out.
+                // No OnPlayerDeathFinished is wired at this mid-sequence site, so this is the only
+                // place the overlay can be triggered.
+                ShowEndLabel("Game Over");
             }
         }
     }
@@ -944,6 +951,9 @@ public partial class BattleTest : Node2D
                 SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
                 _playerAnimSprite.Play("death");
                 _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+                // Early overlay + music fade so the Game Over reads the moment the knight falls.
+                // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
+                ShowEndLabel("Game Over");
             }
             else // _enemyHP <= 0 — perfect parry counter killed the enemy
             {
@@ -1166,6 +1176,9 @@ public partial class BattleTest : Node2D
             SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
             _playerAnimSprite.Play("death");
             _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+            // Early overlay + music fade so the Game Over reads the moment the knight falls.
+            // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
+            ShowEndLabel("Game Over");
         }
     }
 
@@ -1324,6 +1337,9 @@ public partial class BattleTest : Node2D
                     SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
                     _playerAnimSprite.Play("death");
                     _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+                    // Early overlay + music fade so the Game Over reads the moment the knight falls.
+                    // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
+                    ShowEndLabel("Game Over");
                 }
                 else if (_playerHP <= 0 && _playerDead)
                 {
