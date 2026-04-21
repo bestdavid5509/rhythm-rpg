@@ -900,6 +900,13 @@ public partial class BattleTest : Node2D
         const int CounterDamage = 20;
         PlaySound("perfect_parry_shimmer_2.wav");
 
+        // Disconnect OnParryFinished before it fires naturally on parry AnimationFinished.
+        // Without this, OnParryFinished schedules a PlayPlayer("idle") ~250ms after the
+        // parry completes, creating a visible idle frame before PlayParryCounter's first
+        // timer fires its wind-up at t=0.5s. Killing the connection lets the player stay
+        // on the last parry frame continuously until the counter takes over.
+        SafeDisconnectPlayerAnim(OnParryFinished);
+
         // Disconnect cast_end callback so it doesn't fire during the counter.
         // OnEnemyAttackAnimFinished is NOT disconnected — it must still set _hopInAnimFinished
         // for the hop-in rendezvous. Its idle call is guarded below.
