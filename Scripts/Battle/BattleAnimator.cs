@@ -579,6 +579,11 @@ public partial class BattleTest : Node2D
         // IsPhaseTransitionPending on its next check.
         _phaseTransitionConsumed = true;
 
+        // Reset enemy SpeedScale — may still be 2f from a hop-in charge if the warrior
+        // died before the normal teardown reset ran. Without this, the Phase 2 sprite
+        // inherits the scaled speed and all its animations play too fast.
+        _enemyAnimSprite.SpeedScale = 1f;
+
         if (_revealSprite != null)
         {
             _revealSprite.QueueFree();
