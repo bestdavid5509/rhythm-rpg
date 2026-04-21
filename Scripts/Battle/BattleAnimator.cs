@@ -409,6 +409,7 @@ public partial class BattleTest : Node2D
             GetTree().CreateTimer(0.5f).Timeout += () =>
             {
                 ShowBattleMessage("You've only just begun to suffer.");
+                StartPhase2Music();
                 GetTree().CreateTimer(3.0f).Timeout += SwapToPhase2;
             };
             return;
@@ -438,6 +439,10 @@ public partial class BattleTest : Node2D
     private void ScheduleBossRevealIfPhase1()
     {
         if (!IsPhaseTransitionPending()) return;
+        // Fade Phase 1 music over the death-to-reveal window. The silence that follows
+        // holds through the boss reveal animation; Phase 2 music starts only when the
+        // "You've only just begun to suffer." dialogue appears (below in OnEnemyDeathFinished).
+        FadeOutMusic(2.5f);
         if (SkipPhaseTransition) return;  // SwapToPhase2 runs directly in OnEnemyDeathFinished
         GetTree().CreateTimer(4f / 12f).Timeout += SpawnBossReveal;
     }
@@ -1133,6 +1138,11 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void ShowEndLabel(string text)
     {
+        // Fade the battle music out before the sting plays. Applies to both Victory and
+        // Game Over — same 1.5s fade, then Stop. Safe to call if music isn't currently
+        // playing (no-op when _musicPlayer.Playing is false).
+        FadeOutMusic(1.5f);
+
         if (text.Contains("Victory"))
             PlaySound("victory.wav");
         else if (text.Contains("Game Over"))

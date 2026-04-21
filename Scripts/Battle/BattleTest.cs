@@ -164,6 +164,17 @@ public partial class BattleTest : Node2D
     private ShaderMaterial _enemyFlashMaterial;
     private Tween          _enemyFlashTween;
 
+    // Music playback — dedicated AudioStreamPlayer, separate from one-shot SFX players
+    // created by PlaySound. Loops via Finished signal so format-specific loop flags aren't
+    // relied on. _musicStopping suppresses the loop during a fade-out so FadeOutMusic → Stop
+    // is authoritative.
+    private const string Phase1MusicPath = "res://Assets/Audio/Music/Batalha #1.ogg";
+    private const string Phase2MusicPath = "res://Assets/Audio/Music/colossal_3_looped.mp3";
+    private AudioStreamPlayer _musicPlayer;
+    private AudioStream       _currentMusicStream;
+    private Tween             _musicFadeTween;
+    private bool              _musicStopping;
+
     private TimingPrompt     _activePrompt;
     private PackedScene      _timingPromptScene;
     private BattleSystem     _battleSystem;
@@ -272,6 +283,8 @@ public partial class BattleTest : Node2D
         ApplyBackgroundGradient();
         BuildStatusPanels();
         _battleMessage = new BattleMessage(this);
+        BuildMusicPlayer();
+        StartPhase1Music();
 
         // Grab character sprites and record their original positions for teardown restoration.
         _playerSprite = GetNode<ColorRect>("PlayerSprite");
@@ -435,6 +448,93 @@ public partial class BattleTest : Node2D
             (float)GD.RandRange(-_shakeIntensity, _shakeIntensity),
             (float)GD.RandRange(-_shakeIntensity, _shakeIntensity)
         ) * t;
+    }
+
+    // =========================================================================
+    // Music playback — Phase 1 / Phase 2 tracks, loop via Finished signal,
+    // fade-out for phase transition and end-of-battle
+    // =========================================================================
+
+    /// <summary>
+    /// Creates the dedicated music AudioStreamPlayer and wires the Finished signal to
+    /// seamlessly restart the current track. Called once from _Ready.
+    /// </summary>
+    private void BuildMusicPlayer()
+    {
+        _musicPlayer      = new AudioStreamPlayer();
+        _musicPlayer.Name = "MusicPlayer";
+        _musicPlayer.Bus  = "Master";
+        AddChild(_musicPlayer);
+        _musicPlayer.Finished += OnMusicFinished;
+    }
+
+    /// <summary>
+    /// Loops the currently-assigned stream by replaying on Finished — unless a fade-out
+    /// has set <see cref="_musicStopping"/>, in which case we let the player stay stopped.
+    /// </summary>
+    private void OnMusicFinished()
+    {
+        if (_musicStopping || _musicPlayer == null || _currentMusicStream == null) return;
+        _musicPlayer.Play();
+    }
+
+    /// <summary>
+    /// Starts Phase 1 battle music at 0 dB. Cancels any pending fade-out and resets the
+    /// stopping flag so the Finished-signal loop resumes.
+    /// </summary>
+    private void StartPhase1Music() => PlayMusicStream(Phase1MusicPath, volumeDb: 0f);
+
+    /// <summary>
+    /// Starts Phase 2 battle music at +2 dB — roughly 20% louder than Phase 1 — so the
+    /// boss theme reads as more intense than the Phase 1 track. Same semantics as
+    /// <see cref="StartPhase1Music"/> otherwise.
+    /// </summary>
+    private void StartPhase2Music() => PlayMusicStream(Phase2MusicPath, volumeDb: 2f);
+
+    /// <summary>
+    /// Shared implementation for StartPhaseXMusic — loads the stream, resets volume/flag,
+    /// and plays at the requested <paramref name="volumeDb"/>. Silently no-ops if the
+    /// player isn't built yet or the stream fails to load.
+    /// </summary>
+    private void PlayMusicStream(string resPath, float volumeDb)
+    {
+        if (_musicPlayer == null) return;
+
+        var stream = GD.Load<AudioStream>(resPath);
+        if (stream == null)
+        {
+            GD.PrintErr($"[BattleTest] Music failed to load: {resPath}");
+            return;
+        }
+
+        _musicFadeTween?.Kill();
+        _musicStopping      = false;
+        _currentMusicStream = stream;
+        _musicPlayer.Stream = stream;
+        _musicPlayer.VolumeDb = volumeDb;
+        _musicPlayer.Play();
+        GD.Print($"[BattleTest] Music started: {resPath} @ {volumeDb}dB");
+    }
+
+    /// <summary>
+    /// Fades the music player's VolumeDb from current to -80 dB (effectively silent) over
+    /// <paramref name="durationSec"/> seconds, then calls Stop(). Sets _musicStopping first
+    /// so the Finished-signal loop handler doesn't resurrect the track mid-fade.
+    /// Safe to call when no music is playing — becomes a no-op.
+    /// </summary>
+    private void FadeOutMusic(float durationSec)
+    {
+        if (_musicPlayer == null || !_musicPlayer.Playing) return;
+
+        _musicStopping = true;
+        _musicFadeTween?.Kill();
+        _musicFadeTween = CreateTween();
+        _musicFadeTween.TweenProperty(_musicPlayer, "volume_db", -80f, durationSec);
+        _musicFadeTween.TweenCallback(Callable.From(() =>
+        {
+            if (_musicPlayer != null) _musicPlayer.Stop();
+        }));
+        GD.Print($"[BattleTest] Music fading out over {durationSec}s.");
     }
 
     // =========================================================================
