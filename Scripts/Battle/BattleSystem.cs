@@ -513,7 +513,11 @@ public partial class BattleSystem : Node
         var sprite          = new AnimatedSprite2D();
         sprite.SpriteFrames = spriteFrames;
         sprite.Centered     = true;
-        sprite.FlipH        = step.FlipH;
+        // Player-used attacks fire right-to-left against the enemy, whereas the same
+        // attack used by an enemy fires left-to-right against the player. Invert FlipH
+        // when _isPlayerAttack so .tres files authored for the enemy version auto-flip
+        // without needing a separate PlayerFlipH field.
+        sprite.FlipH        = _isPlayerAttack ? !step.FlipH : step.FlipH;
         sprite.Scale        = step.Scale;
         sprite.Position     = new Vector2(_defenderCenter.X, FloorY) + activeOffset;
         // Effect sprites (explosions, slashes, smoke, comet trails, etc.) must render
