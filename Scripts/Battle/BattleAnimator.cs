@@ -363,7 +363,23 @@ public partial class BattleTest : Node2D
     {
         if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectPlayerAnim(OnParryFinished);
-        PlayPlayer("idle");  // OWNER: enemy pass resolved, parry complete
+        if (_playerDead) return;
+        // Freeze on the last parry frame for 4 frames (4 / 12fps ≈ 0.333s) before returning
+        // to idle — gives the pose time to read rather than snapping away instantly.
+        // Capture-before-Stop pattern: AnimatedSprite2D.Stop() resets Frame to 0 on non-looping
+        // animations (Godot 4 gotcha). We cache the last frame first, call Stop, then restore it.
+        int lastFrame = _playerAnimSprite.Frame;
+        StopPlayer();
+        SetPlayerFrame(lastFrame);
+        // 3-frame hold (~0.25s at 12fps). Shorter than hit because parry has visible
+        // follow-through frames (2–5 of _Attack2NoMovement.png) that already register
+        // the action before the hold begins.
+        GetTree().CreateTimer(3f / 12f).Timeout += () =>
+        {
+            if (!GodotObject.IsInstanceValid(this)) return;
+            if (_playerDead) return;
+            PlayPlayer("idle");  // OWNER: enemy pass resolved, parry complete
+        };
     }
 
     private void OnHitAnimFinished()
