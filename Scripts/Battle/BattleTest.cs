@@ -101,11 +101,21 @@ public partial class BattleTest : Node2D
     private static readonly Color DmgColorMiss    = new Color(0.60f, 0.60f, 0.60f, 1.00f);  // grey (weak hit)
     private static readonly Color DmgColorPlayer  = new Color(1.00f, 0.25f, 0.25f, 1.00f);  // red
 
-    // Spawn points — centered on each sprite, just above its top edge.
-    // PlayerSprite: offset_left=390, offset_right=490 → center X=440,  top Y=590
-    // EnemySprite:  offset_left=1420, offset_right=1540 → center X=1480, top Y=550
-    private static readonly Vector2 PlayerDamageOrigin = new Vector2(440f,  570f);
-    private static readonly Vector2 EnemyDamageOrigin  = new Vector2(1480f, 530f);
+    /// <summary>
+    /// Returns the world-space spawn position for a damage number floating above the
+    /// given combatant's sprite. For the 1v1 prototype these are visually-tuned per-side
+    /// constants matching the sprites' rest positions in the current scene.
+    ///
+    /// TODO (audit finding B5 / scaffolding phase): derive at call time from the unit's
+    /// rest-position sprite anchor + frame-size offset so damage numbers track per-unit
+    /// locations at multi-combat density, rather than hardcoded per-side values. Using
+    /// rest position (not live <c>sprite.GlobalPosition</c>) keeps the number anchored
+    /// to the unit's home location, unaffected by slam or hop-in tweens mid-combat.
+    /// </summary>
+    private static Vector2 ComputeDamageOrigin(Combatant unit) =>
+        unit.Side == CombatantSide.Player
+            ? new Vector2(440f,  570f)
+            : new Vector2(1480f, 530f);
 
     // =========================================================================
     // Prompt management
@@ -166,8 +176,9 @@ public partial class BattleTest : Node2D
     [Export] public EnemyData EnemyData;
 
     private BattleMessage  _battleMessage;
-    private ShaderMaterial _enemyFlashMaterial;
-    private Tween          _enemyFlashTween;
+    // Flash material and tween live on enemyCombatant (see Combatant.FlashMaterial /
+    // FlashTween). The material is created in _Ready, attached to the enemy AnimatedSprite2D,
+    // and then referenced on the Combatant in BuildInitialParties.
 
     // Music playback — dedicated AudioStreamPlayer, separate from one-shot SFX players
     // created by PlaySound. Loops via Finished signal so format-specific loop flags aren't
@@ -403,12 +414,14 @@ public partial class BattleTest : Node2D
         _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;  // snapshot for teardown restoration
         _enemyAnimSprite.Play("idle");
 
-        // White flash shader — used for learnable move signalling.
+        // White flash shader — used for learnable move signalling. Created here, attached
+        // to the enemy AnimatedSprite2D, and later referenced by enemyCombatant.FlashMaterial
+        // in BuildInitialParties (which reads _enemyAnimSprite.Material back as ShaderMaterial).
         var flashShader = GD.Load<Shader>("res://Assets/Shaders/WhiteFlash.gdshader");
-        _enemyFlashMaterial = new ShaderMaterial();
-        _enemyFlashMaterial.Shader = flashShader;
-        _enemyFlashMaterial.SetShaderParameter("flash_amount", 0.0f);
-        _enemyAnimSprite.Material = _enemyFlashMaterial;
+        var flashMaterial = new ShaderMaterial();
+        flashMaterial.Shader = flashShader;
+        flashMaterial.SetShaderParameter("flash_amount", 0.0f);
+        _enemyAnimSprite.Material = flashMaterial;
 
         _battleSystem = new BattleSystem();
         AddChild(_battleSystem);  // triggers BattleSystem._Ready, which loads _currentAttack
@@ -1197,7 +1210,7 @@ public partial class BattleTest : Node2D
             player.CurrentHp = Mathf.Max(0, player.CurrentHp - damage);
             GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {player.CurrentHp}/{player.MaxHp}");
             PlaySound("player_hit.wav");
-            SpawnDamageNumber(PlayerDamageOrigin, damage, DmgColorPlayer);
+            SpawnDamageNumber(ComputeDamageOrigin(player), damage, DmgColorPlayer);
             UpdateHPBars();
             ShakeCamera(intensity: 8f, duration: 0.3f);  // shake — player takes a hit
 
@@ -1553,9 +1566,11 @@ public partial class BattleTest : Node2D
         _defender         = _isPlayerHealAttack ? _playerSprite : _enemySprite;
         _attackerClosePos = GetOrigin(_playerSprite);
 
+        // .Size reads migrated to Combatant.PositionRect.Size (B-category). GetOrigin(ColorRect)
+        // and the _isPlayerHealAttack binary target dispatch stay for C-category work.
         Vector2 defenderCenter = _isPlayerHealAttack
-            ? GetOrigin(_playerSprite) + _playerSprite.Size / 2f
-            : GetOrigin(_enemySprite)  + _enemySprite.Size / 2f;
+            ? GetOrigin(_playerSprite) + _playerParty[0].PositionRect.Size / 2f
+            : GetOrigin(_enemySprite)  + _enemyParty[0].PositionRect.Size  / 2f;
         Vector2 promptPos      = ComputeCameraMidpoint();
 
         // Play cast animation; defer StartSequence until it finishes so the wind-up
@@ -1608,7 +1623,7 @@ public partial class BattleTest : Node2D
         enemy.CurrentHp = Mathf.Max(0, enemy.CurrentHp - damage);
         GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
-        SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
+        SpawnDamageNumber(ComputeDamageOrigin(enemy), damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
         PlayEnemyHurtFlash();
 
@@ -1645,7 +1660,7 @@ public partial class BattleTest : Node2D
             GD.Print($"[BattleTest] Cure pass {passIndex + 1} resolved: {r}  ({amount} HP).");
             player.CurrentHp = Mathf.Min(player.MaxHp, player.CurrentHp + amount);
             GD.Print($"[BattleTest] Cure heals {amount} HP. Player HP: {player.CurrentHp}/{player.MaxHp}");
-            SpawnDamageNumber(PlayerDamageOrigin, amount, DmgColorPerfect);  // green for healing
+            SpawnDamageNumber(ComputeDamageOrigin(player), amount, DmgColorPerfect);  // green for healing
             UpdateHPBars();
             return;
         }
@@ -1666,7 +1681,7 @@ public partial class BattleTest : Node2D
         enemy.CurrentHp = Mathf.Max(0, enemy.CurrentHp - amount);
         GD.Print($"[BattleTest] Magic hit deals {amount} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
-        SpawnDamageNumber(EnemyDamageOrigin, amount, dmgColor);
+        SpawnDamageNumber(ComputeDamageOrigin(enemy), amount, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         PlayEnemyHurtFlash();
         UpdateHPBars();
@@ -1802,7 +1817,10 @@ public partial class BattleTest : Node2D
             frames.AddFrame("default", atlas);
         }
 
-        Vector2 playerCenter = GetOrigin(_playerSprite) + _playerSprite.Size / 2f;
+        // Ether spawns on the item user. Single player in current UI; takes a Combatant
+        // target parameter when F-category widens this call's contract at density.
+        var user = _playerParty[0];
+        Vector2 playerCenter = GetOrigin(_playerSprite) + user.PositionRect.Size / 2f;
         var sprite          = new AnimatedSprite2D();
         sprite.SpriteFrames = frames;
         sprite.Centered     = true;
@@ -2037,20 +2055,24 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Flashes the enemy sprite white 3 times over ~0.6s using the WhiteFlash shader.
+    /// Reads / writes the flash material and tween on the Combatant so per-enemy flashes
+    /// remain independently trackable at multi-combat density.
     /// </summary>
     private void FlashEnemyWhite()
     {
-        _enemyFlashTween?.Kill();
-        _enemyFlashMaterial.SetShaderParameter("flash_amount", 0.0f);
+        var enemy = _enemyParty[0];  // single enemy in current UI; per-target at density
+        enemy.FlashTween?.Kill();
+        enemy.FlashMaterial.SetShaderParameter("flash_amount", 0.0f);
 
-        _enemyFlashTween = CreateTween();
+        enemy.FlashTween = CreateTween();
+        var material = enemy.FlashMaterial;
         for (int i = 0; i < 3; i++)
         {
-            _enemyFlashTween.TweenMethod(
-                Callable.From((float v) => _enemyFlashMaterial.SetShaderParameter("flash_amount", v)),
+            enemy.FlashTween.TweenMethod(
+                Callable.From((float v) => material.SetShaderParameter("flash_amount", v)),
                 0.0f, 1.0f, 0.1f);
-            _enemyFlashTween.TweenMethod(
-                Callable.From((float v) => _enemyFlashMaterial.SetShaderParameter("flash_amount", v)),
+            enemy.FlashTween.TweenMethod(
+                Callable.From((float v) => material.SetShaderParameter("flash_amount", v)),
                 1.0f, 0.0f, 0.1f);
         }
     }
@@ -2392,7 +2414,7 @@ public partial class BattleTest : Node2D
             PositionRect  = _enemySprite,
             AnimSprite    = _enemyAnimSprite,
             Data          = EnemyData,
-            FlashMaterial = _enemyFlashMaterial,
+            FlashMaterial = _enemyAnimSprite.Material as ShaderMaterial,
         };
         _enemyParty.Add(enemyCombatant);
 
@@ -2606,7 +2628,9 @@ public partial class BattleTest : Node2D
         // ColorRect. Compute the same X delta and apply it to the sprite's floor-anchored origin.
         if (attacker == _playerSprite)
         {
-            float   hopDeltaX  = _attackerClosePos.X - _playerOrigin.X;
+            // Origin read migrated to Combatant (B-category). The outer `attacker == _playerSprite`
+            // branch is a C-category binary-side check — stays for Phase 3.4.
+            float   hopDeltaX  = _attackerClosePos.X - _playerParty[0].Origin.X;
             Vector2 animTarget = new Vector2(_playerAnimSpriteOrigin.X + hopDeltaX,
                                              _playerAnimSpriteOrigin.Y);
             tween.TweenProperty(_playerAnimSprite, "position", animTarget, SetupDuration)
@@ -2623,7 +2647,9 @@ public partial class BattleTest : Node2D
         // without affecting the camera or target zone).
         if (attacker == _enemySprite)
         {
-            float   hopDeltaX  = _attackerClosePos.X - _enemyOrigin.X;
+            // Origin read migrated to Combatant (B-category). The outer `attacker == _enemySprite`
+            // branch is a C-category binary-side check — stays for Phase 3.4.
+            float   hopDeltaX  = _attackerClosePos.X - _enemyParty[0].Origin.X;
             Vector2 animTarget = new Vector2(_enemyAnimSpriteOrigin.X + hopDeltaX,
                                              _enemyAnimSpriteOrigin.Y + attackerOffset.Y);
             tween.TweenProperty(_enemyAnimSprite, "position", animTarget, SetupDuration)
@@ -2769,7 +2795,7 @@ public partial class BattleTest : Node2D
         GD.Print($"[BattleTest] Combo pass {passIndex + 1} {comboDmgResult}: {comboDamage} damage. " +
                  $"Enemy HP: {comboTarget.CurrentHp}/{comboTarget.MaxHp}");
         PlaySound("enemy_hit.wav");
-        SpawnDamageNumber(EnemyDamageOrigin, comboDamage, comboDmgColor);
+        SpawnDamageNumber(ComputeDamageOrigin(comboTarget), comboDamage, comboDmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         PlayEnemyHurtFlash();
         UpdateHPBars();

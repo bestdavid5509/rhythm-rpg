@@ -58,4 +58,10 @@ public class Combatant
     public bool HasBeenAbsorbed;
 
     public ShaderMaterial FlashMaterial;
+
+    // Currently-running flash tween (e.g., the white-flash on learnable-move selection).
+    // Per-enemy because simultaneous enemies in multi-combat might each run their own
+    // flash concurrently. Lifetime is short (~0.6s); safe to hold as a reference until
+    // the tween self-destructs.
+    public Tween FlashTween;
 }

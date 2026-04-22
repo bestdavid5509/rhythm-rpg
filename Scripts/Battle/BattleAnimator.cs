@@ -996,13 +996,17 @@ public partial class BattleTest : Node2D
                     counterTarget.CurrentHp = Mathf.Max(0, counterTarget.CurrentHp - CounterDamage);
                     GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {counterTarget.CurrentHp}/{counterTarget.MaxHp}");
                     PlaySound("enemy_hit.wav");
-                    // Spawn damage number at the enemy's current world position, offset
+                    // Spawn damage number at the target's current world position, offset
                     // upward above the head. Parented to BattleTest root (not the sprite)
                     // so scale inheritance doesn't affect label size or float speed.
-                    float fh = EnemyData?.FrameHeight ?? 160;
-                    float sy = _enemyAnimSprite.Scale.Y;
-                    Vector2 counterDmgPos = new Vector2(_enemyAnimSprite.GlobalPosition.X,
-                                                        _enemyAnimSprite.GlobalPosition.Y - fh * sy * 0.3f + 50f);
+                    // Sprite reads migrated to Combatant.AnimSprite (B-category); counter
+                    // has its own formula (different offset from standard damage numbers)
+                    // because the counter is visually dramatic.
+                    var targetSprite = counterTarget.AnimSprite;
+                    float fh = counterTarget.Data?.FrameHeight ?? 160;
+                    float sy = targetSprite.Scale.Y;
+                    Vector2 counterDmgPos = new Vector2(targetSprite.GlobalPosition.X,
+                                                        targetSprite.GlobalPosition.Y - fh * sy * 0.3f + 50f);
                     SpawnDamageNumber(counterDmgPos, CounterDamage, DmgColorPerfect);
                     ShakeCamera(intensity: 10f, duration: 0.3f);
                     UpdateHPBars();
@@ -1071,11 +1075,15 @@ public partial class BattleTest : Node2D
             frames.AddFrame("slash", atlas);
         }
 
+        // Target is the enemy who was just parried — the single enemy in the current UI.
+        // Position read migrated to Combatant.AnimSprite (B-category). When F-category
+        // widens the API, this function will take a Combatant target parameter.
+        var target = _enemyParty[0];
         var sprite = new AnimatedSprite2D();
         sprite.SpriteFrames = frames;
         sprite.Centered     = true;
         sprite.Scale        = new Vector2(3f, 3f);
-        sprite.Position     = _enemyAnimSprite.Position;
+        sprite.Position     = target.AnimSprite.Position;
         AddChild(sprite);
         sprite.Play("slash");
 
@@ -1091,20 +1099,24 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Rapidly oscillates the enemy sprite horizontally to convey impact during the counter slash.
+    /// Rapidly oscillates the target enemy's sprite horizontally to convey impact during
+    /// the counter slash. Single enemy in current UI; will take a Combatant parameter
+    /// when F-category widens effect-function contracts at density.
     /// </summary>
     private void ShakeEnemySprite(int passes, float duration, float intensity)
     {
-        if (_enemyParty[0].IsDead) return;
-        Vector2 origin = _enemyAnimSprite.Position;
+        var enemy = _enemyParty[0];
+        if (enemy.IsDead) return;
+        var sprite = enemy.AnimSprite;
+        Vector2 origin = sprite.Position;
         float passTime = duration / passes;
 
         var tween = CreateTween();
         for (int i = 0; i < passes; i++)
         {
             float dir = (i % 2 == 0) ? intensity : -intensity;
-            tween.TweenProperty(_enemyAnimSprite, "position:x", origin.X + dir, passTime * 0.5f);
-            tween.TweenProperty(_enemyAnimSprite, "position:x", origin.X,       passTime * 0.5f);
+            tween.TweenProperty(sprite, "position:x", origin.X + dir, passTime * 0.5f);
+            tween.TweenProperty(sprite, "position:x", origin.X,       passTime * 0.5f);
         }
     }
 
