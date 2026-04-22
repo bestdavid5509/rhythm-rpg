@@ -34,6 +34,7 @@ The Absorber accumulates a library of absorbed moves over time.
 | `BattleTest.cs` | Core turn loop, state machine, lifecycle (`_Ready`/`_Input`), all field declarations, tween helpers, position helpers, shared combat helpers |
 | `BattleAnimator.cs` | Sprite frame construction, all `AnimationFinished` callbacks, dead-flag guards (`PlayPlayer`/`PlayEnemy`/etc.), safe-disconnect helpers, end-of-battle overlay |
 | `BattleMenu.cs` | Battle menu construction, navigation, input handling — main menu and Absorbed Moves submenu |
+| `BattleDialogue.cs` | Narrative dialogue component — multi-line speaker-tagged character speech with character-by-character reveal; constructed per use and `QueueFree`'d after `DialogueCompleted`. Standalone class, not a `BattleTest` partial. |
 | `BattleSystem.cs` | Attack sequence runner — drives `AttackData` steps, spawns `TimingPrompt` circles and timed effect `AnimatedSprite2D` nodes, emits `StepPassEvaluated` / `SequenceCompleted` |
 | `TimingPrompt.cs` | Single closing circle — Standard, Slow, and Bouncing variants; draws only the moving ring and hit/miss flash; does **not** draw the target ring (see `TargetZone`); emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
 | `TargetZone.cs` | Persistent shared target ring node in `BattleTest.tscn`; draws the stationary white ring and green hit-window band; shown/hidden by `BattleTest` at sequence start/end; has no knowledge of individual circles |
@@ -313,6 +314,8 @@ All knight animations use 120×80 px frames from horizontal-strip PNGs at `res:/
 
 **Wind-up hold behaviour:** after the hop-in completes, `Animation = "combo"`, `Stop()`, `Frame = 0` freezes the sprite on the first wind-up pose while the player waits to input. `Stop()` is called before `Frame =` to counteract Godot 4's reset-to-0 on a stopped non-looping animation.
 
+**Parry and hit frame-hold pattern:** `OnParryFinished` and `OnHitAnimFinished` use a variant of the combo wind-up's Stop/Frame ordering — `int lastFrame = _playerAnimSprite.Frame; StopPlayer(); SetPlayerFrame(lastFrame);`. Where the combo wind-up deliberately sets a specific target frame (`Stop()` then `Frame = 0`), the parry/hit handlers capture the *natural* last frame of the just-completed animation so the held pose always matches wherever the animation ended. Capturing `Frame` *before* `StopPlayer()` is load-bearing because Godot 4's `AnimatedSprite2D.Stop()` resets `Frame` to 0 on a finished non-looping animation; `SetPlayerFrame` after `Stop` restores the actual last pose. A `CreateTimer` then holds the frozen frame before returning to `idle` — **3 frames** (3/12 ≈ 0.25s) on parry, **4 frames** (4/12 ≈ 0.333s) on hit. The asymmetry is intentional: parry's animation (frames 2–5 of `_Attack2NoMovement.png`) already has visible follow-through that registers the action, so the post-hold needs to carry less of the beat. Hit is currently a 1-frame animation with no follow-through, so it leans harder on the hold.
+
 **Retreat (PlayBackwards):**
 1. Before retreat: `SpriteFrames.SetAnimationLoop("run", false)` so `AnimationFinished` fires at frame 0.
 2. `SpeedScale = 2f`, `PlayBackwards("run")` — snappy hop-back.
@@ -345,6 +348,8 @@ SafeDisconnectEnemyAnim(OnCastIntroFinished);
 _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 ```
 
+**Entry-site disconnect to prevent handler firing across state transitions:** `PlayParryCounter` calls `SafeDisconnectPlayerAnim(OnParryFinished)` at its first line. Without this, the parry animation's natural `AnimationFinished` signal fires mid-counter-sequence and invokes `OnParryFinished`, which schedules a `PlayPlayer("idle")` ~250ms later — producing a visible idle frame between the parry and the counter's wind-up. The entry-site disconnect cancels the handler before the transition so the counter's own animation takes over cleanly. The pattern generalises: when a handler is bound to one animation's completion but the code path is superseded by another, disconnect at the new path's entry.
+
 ### Enemy Animation System — Data-Driven
 
 `BuildEnemySpriteFrames()` is fully data-driven — no hardcoded enemy sprite layout remains. All animation row indices, frame counts, and spritesheet paths are read from `EnemyData.AnimationConfig` (an `EnemyAnimationConfig` resource).
@@ -365,6 +370,27 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 `BattleSystem._sequenceActive` — set `true` on `StartSequence()`, set `false` on first `SequenceCompleted` emission. Guards `RunStep` and `OnAnyCircleCompleted` from firing after a sequence completes, preventing negative `_totalPromptsRemaining` and double `SequenceCompleted` signals.
 
 `BeginEnemyAttack()` reentrancy guard — early-returns if `_state` is already `EnemyAttack`.
+
+### End-Screen Input Routing
+
+**Rule:** in `BattleTest._Input`, end-screen state routing happens **before** the `_inputLocked` early-return:
+
+```csharp
+public override void _Input(InputEvent @event)
+{
+    if (_state == BattleState.GameOver) { HandleGameOverInput(@event); return; }
+    if (_state == BattleState.Victory)  { HandleVictoryInput(@event);  return; }
+
+    if (_inputLocked) return;
+    // ... combat-phase routing ...
+}
+```
+
+**Why:** `_inputLocked` is a *combat-phase* signal — it blocks input during slash animations, retreats, and teardowns. End-screens (`GameOver`, `Victory`) are *post-combat* states whose entire purpose is to accept player input for option selection. Gating them on a combat-phase flag is a category error.
+
+**Historical context:** the Victory panel was silently non-responsive as initially wired. The killing-blow player attack leaves `_inputLocked = true` at the end of `OnFinalSlashFinished` and no subsequent code path clears it. With an `_inputLocked`-first ordering, every keypress on the Victory panel early-returned before reaching `HandleVictoryInput`. Game Over was coincidentally unaffected because `BeginEnemyAttack` clears `_inputLocked = false` at the start of every enemy turn, so by the time player death fires, the lock is already down — but the same class of bug was latent on any future Game Over trigger site where the lock happens to be up.
+
+**Rule for adding a new end-screen state:** route it above the `_inputLocked` guard, and do not rely on any combat-phase code path to clear the lock for you. End-screen handlers should assume the lock can be in any state on entry and ignore it.
 
 ### Player Attack Prompt Cleanup
 
@@ -413,6 +439,57 @@ Triggered automatically on Warrior (Phase 1) death when `BattleTest.Phase2EnemyD
 
 **Reveal-sprite missing-asset fallback:** if `8_sword_warrior__red_boss_reveal.png` fails to load, `SpawnBossReveal` logs an error and calls `SwapToPhase2()` directly. If the appended idle sheet is missing, the reveal plays with only the 12 reveal frames.
 
+### Victory Screen
+
+Two-panel structure: the unchanged fullscreen `"Victory!"` label (font 64, center, fades in over 0.5s — constructed by `ShowEndLabel` in `BattleAnimator.cs`) plus a lower Retry/Close options panel that fades in after a 1.5s beat. The beat lets the player experience the win before being offered the next action.
+
+**State:** `BattleState.Victory` (added to the enum alongside the existing `GameOver`). `_state` transitions to `Victory` at the moment the options panel's fade-in tween starts, inside `ShowVictoryOptionsPanel`. `_Input` routes to `HandleVictoryInput` while `_state == Victory` — see the End-Screen Input Routing section for the routing rule.
+
+**Panel scheduling** (in `ShowEndLabel`, Victory branch): after the wrapper's 0.5s fade-in tween is kicked off, a `GetTree().CreateTimer(2.0f).Timeout` (0.5s for the label fade-in + 1.5s beat) calls `ShowVictoryOptionsPanel`. Guarded by `IsInstanceValid(this)` to handle mid-timer scene reloads.
+
+**Options panel layout** (built in `ShowVictoryOptionsPanel` in `BattleTest.cs`):
+- Dedicated `CanvasLayer` named `"VictoryOptionsLayer"`.
+- Wrapper `Control` (FullRect, modulate alpha 0 → 1 over 0.5s).
+- `MakeLayeredPanel(minWidth: 400f)` (shared Kenney-border panel helper) anchored viewport-center (0.5/0.5 all axes, `GrowDirection.Both`) with `OffsetTop = OffsetBottom = 200f` — places the panel 200px below viewport center so the `"Victory!"` label at center stays legible above it on a 1080p viewport.
+- 8px top spacer, `AddVictoryOptions(content)`, 8px bottom spacer. **No divider** — the Victory! label outside the panel already serves as the headline, so a divider inside would be decorative without purpose.
+
+**Parallel field set** — kept independent from the Game Over panel's field set even though the two look similar:
+| Field | Purpose |
+|---|---|
+| `_victoryOptionIndex` | 0 = Retry, 1 = Close |
+| `_victoryTextLabels` | Centered option text; yellow when selected, white otherwise (same convention as Game Over) |
+| `_victoryArrows` | ▶ cursor labels; `Visible` toggled per selection |
+| `_victoryInputUnlockedAtMsec` | 150ms input buffer — input ignored while `Time.GetTicksMsec() < this value` |
+| `VictoryOptionLabels` | `{ "Retry", "Close" }` |
+
+The independence is deliberate. `AddVictoryOptions` / `RefreshVictoryOptions` / `HandleVictoryInput` are structurally parallel to `AddGameOverOptions` / `RefreshGameOverOptions` / `HandleGameOverInput` but operate on their own field set. Sharing state would couple the two end-screens — a future change to one (e.g. adding a third option) would need to consider its effect on the other. (This structural duplication is a candidate for extraction — see the Phase 1 code review plan at `docs/phase1-code-review-plan.md`.)
+
+**Input buffer (150ms):** `_victoryInputUnlockedAtMsec = Time.GetTicksMsec() + 150` is set at the top of `ShowVictoryOptionsPanel` (before the fade-in tween starts, not after). `HandleVictoryInput` early-returns while the current tick count is below this timestamp. The buffer prevents a held `battle_confirm` from the killing blow from immediately selecting an option the moment the panel appears.
+
+**Actions:**
+- Retry → `FadeToBlackAndReload()` — reuses the existing Game Over Retry handler (0.5s fade to black + 0.5s hold + `ReloadCurrentScene`).
+- Close → `GetTree().Quit()` — exits the game.
+
+### Test Flags
+
+Development scaffolding — `[Export] bool` flags on `BattleTest` that shortcut the battle into specific states for testing end-of-battle screens and phase behavior without playing through a full fight. All are forgiving dev scaffolding, not production config: should be left `false` in committed state.
+
+| Flag | Effect | Skips intro? |
+|---|---|---|
+| `TestVictoryScreen` | Swaps `EnemyData` to `Phase2EnemyData` before sprite build, sets `SkipHopIn = true`, sets `_enemyHP = 1`, sets `_phaseTransitionConsumed = true` so enemy death goes straight to Victory (not the Phase 1 → Phase 2 reveal), starts Phase 2 music. First player attack triggers Victory. | Yes |
+| `TestGameOverScreen` | Sets `_playerHP = 1`, starts Phase 1 music. First missed parry triggers Game Over. | Yes |
+| `TestPhaseTransition` | Sets `_enemyHP = 1` at battle start so the first player hit against the Warrior triggers the Phase 1 → Phase 2 reveal at full fidelity (reveal sprite, battle message, music swap all play normally). Documented in context in the Phase 1 → Phase 2 Transition section. | No |
+
+**Priority** (resolved at the top of `_Ready` before any state is applied): `TestVictoryScreen` > `TestGameOverScreen` > `TestPhaseTransition`. If multiple flags are `true`, the highest-priority one wins and the others are logged-and-ignored with a `[TEST]` warning rather than erroring out — the flags are forgiving rather than strict.
+
+**Startup log:** whichever flag is active emits a `[TEST] <FlagName> active — <what was changed>` line. Makes it obvious in the Godot output panel that a test flag is on, so "test output" isn't mistaken for "actual game behavior" later.
+
+**Intro-dialogue skip:** `TestVictoryScreen` and `TestGameOverScreen` both skip `PlayIntroDialogue` — sitting through 5 lines of dialogue every iteration defeats the purpose of the flag. `TestPhaseTransition` does not skip the intro (its purpose is to exercise the phase transition, not the end-screen flow, so the usual intro is part of the path being tested).
+
+**Phase2EnemyData fallback hoist:** the default `Phase2EnemyData` resource load (from `res://Resources/Enemies/8_sword_warrior_phase2.tres`) is hoisted to the top of `_Ready` — earlier than strictly needed for non-test paths — so `TestVictoryScreen` can reassign `EnemyData = Phase2EnemyData` before the enemy sprite is built downstream. Non-test flow is unchanged.
+
+**Note — `SkipPhaseTransition` is a separate flag, not a test flag.** Despite the parallel-looking name, `SkipPhaseTransition` (documented in the Phase 1 → Phase 2 Transition section) operates on the reveal sequence itself, not on battle init. It's a feature toggle for bypassing the reveal when testing downstream Phase 2 state. `TestPhaseTransition` accelerates *reaching* the transition; `SkipPhaseTransition` accelerates *through* it. Rename candidate flagged in Known Next Steps.
+
 ### SkipHopIn Flag and FloorY Constant
 
 `[Export] public bool SkipHopIn = true` — when set, the enemy stays at origin for the entire turn. Setup and teardown tweens are skipped (no hop-in, no camera zoom). `_attackerClosePos` is set to the enemy origin so `PlayTeardown` is a zero-distance no-op. Used for large/stationary enemies like the 8 Sword Warrior. Set to `false` for the Warrior Phase 1 which hops in for melee attacks.
@@ -447,6 +524,36 @@ Two distinct text-display components serve different UX purposes. They are **not
 **Dialogue node lifetime:** a `BattleDialogue` instance is constructed for each dialogue sequence and `QueueFree`'d after `DialogueCompleted`. Future dialogue (e.g. Phase 2 boss taunts) constructs a fresh instance. This keeps state clean and avoids hidden reuse bugs.
 
 **Shared infrastructure note:** both `BattleMessage` and `BattleDialogue` duplicate low-level patterns — a high-Layer `CanvasLayer`, a bottom-anchored `MakeLayeredPanel`, a `modulate:a` fade tween, inline panel-inset constants. Worth extracting a shared `BottomCenteredOverlayPanel` helper during the Phase 1 code review; the systems themselves stay separate.
+
+### Battle Start Flow and Intro Dialogue
+
+`BattleTest._Ready` does not start music or show the menu directly — both are gated on the intro dialogue completing. The critical path is `_Ready` → `PlayIntroDialogue` → signal chain → music + menu + turn flow.
+
+**`_Ready` sequencing:**
+1. Build UI (status panels, music player with no stream playing yet).
+2. Load resources, build sprites, connect `BattleSystem` signals.
+3. Resolve test flags. Priority: `TestVictoryScreen` > `TestGameOverScreen` > `TestPhaseTransition` (overridden flags log `[TEST]` warnings). If either `TestVictoryScreen` or `TestGameOverScreen` is active, the intro dialogue is skipped — music and menu start immediately.
+4. `BuildMenu` + `UpdateHPBars` (menu is built but `_menuLayer.Visible = false`).
+5. If intro was skipped: start phase-appropriate music (`StartPhase1Music` or `StartPhase2Music`) and call `ShowMenu` immediately. **Else:** set `_inputLocked = true` and call `PlayIntroDialogue`.
+
+**Intro dialogue signal chain:**
+- `PlayIntroDialogue` constructs a new `BattleDialogue`, hardcodes the 5 opening lines, connects `FadeOutStarted` → `OnIntroDialogueFadeOutStarted` and `DialogueCompleted` → `OnIntroDialogueCompleted`, then a `CreateTimer(0.3)` kicks off `PlayDialogue(lines)`.
+- `OnIntroDialogueFadeOutStarted` (fires when the final line's advance starts the panel fade-out tween) → `FadeInPhase1Music(1.5f)`. Music begins rising *during* the panel fade-out, not after, for a smoother audio-visual handoff than strict sequencing.
+- `OnIntroDialogueCompleted` (fires at the end of the fade-out tween's chained timeline: `TweenProperty(modulate:a, 0, PanelFadeOutSec)` → `TweenInterval(PostDialogueBufferSec ≈ 150ms)` → `EmitSignal(DialogueCompleted)`) → `ShowMenuWithFadeIn(0.5f)` then `QueueFree` the dialogue node. Future dialogue constructs a fresh instance.
+
+**Helpers added alongside the flow:**
+- `FadeInPhase1Music(durationSec)` in `BattleTest` — symmetric to the existing `FadeOutMusic`. Plays the Phase 1 stream at `-80 dB` and tweens `volume_db` to `0` over the duration.
+- `ShowMenuWithFadeIn(durationSec)` in `BattleMenu` — wraps `ShowMenu` with a pre-set `_mainMenuPanel.Modulate.a = 0` and a follow-up Modulate alpha tween, so the panel rises under the music rather than popping opaque.
+
+**`DialogueLine` struct (consumed by `BattleDialogue.PlayDialogue`):**
+| Field | Type | Purpose |
+|---|---|---|
+| `Speaker` | `string` | Displayed in the name-tag label; also the key for name-tag color selection (see below). |
+| `Text` | `string` | Body text, revealed character-by-character. |
+| `AutoAdvanceSeconds` | `float` | Seconds to wait after full reveal before auto-advancing. `battle_confirm` skips this wait. |
+| `RevealSpeed` | `float` | Characters per second. `0` = use the component's `DefaultRevealSpeed` (40 cps). |
+
+**Name-tag color dispatch** (in `BattleDialogue.StartNextLine`): `line.Speaker == "The Harbinger"` selects `HarbingerNameColor` (cold blue-grey); any other speaker string falls through to `ApprenticeNameColor` (parchment / off-white). The body-text color is `BodyColor` regardless of speaker — only the name tag carries the speaker's visual identity. The current in-game speaker label for the non-Harbinger voice is `"Knight"` (not `"Apprentice"`); the `ApprenticeNameColor` field name remains as the internal identifier for the non-Harbinger fallback color. The label-vs-identifier mismatch is intentional — see "Senior's fixed starting move set" in "Design Decisions — Pending Implementation" for the narrative rationale.
 
 ## Audio Trigger Reference
 
@@ -484,6 +591,7 @@ Two distinct text-display components serve different UX purposes. They are **not
 - **Taunt ability (post-prototype)** — player action that baits the enemy into using their signature/learnable move
 - **Self-targeting spell alignment** — Cure spell effect and target zone are not perfectly centered on the player's visual body due to the knight sprite having the character body left-of-center within its frame. Revisit when implementing the full character system — the correct fix is either adjusting the sprite frame composition or implementing a per-spell visual center offset.
 - **Refactor parry counter-attack to use `BattleSystem.StartSequence` with impact-frame sync** (post-prototype, not urgent) — the current hand-rolled timer cascade in `PlayParryCounter` (nested `CreateTimer` calls for wind-up → impact → follow-through → hold) is architecturally inconsistent with every other attack in the game, which routes through `BattleSystem` and uses `ImpactFrames`-anchored animation sync. The hand-rolled approach makes timing tweaks fragile — changing one delay can desync the slash spawn from the player pose — and duplicates logic that already exists in `SpawnEffectSprite`. Proper fix: author the counter as an `AttackData` resource with its own `AttackStep`s, then drive it through `BattleSystem.StartSequence` like any other attack. Would also make the counter tunable via the inspector without code changes.
+- **Rename `TestPhaseTransition` / `SkipPhaseTransition` to disambiguate** — the parallel names suggest symmetric flags, but they operate on different parts of the phase transition (pre-trigger vs. mid-sequence). Candidate renames: `TriggerPhase2Fast` for the HP-1 flag, `SkipPhase2Reveal` for the skip-reveal flag. Defer to Phase 1 code review.
 - **Phase 1 code review** — see docs/phase1-code-review-plan.md. Run before starting Phase 2 using /model opusplan in Claude Code.
 
 ## Design Decisions — Pending Implementation
