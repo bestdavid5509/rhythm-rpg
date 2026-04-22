@@ -71,11 +71,6 @@ public class Combatant
 
     // Enemy-only — null/unused on players
     public EnemyData        Data;                // reference to the EnemyData resource
-    // Tracks absorption of this enemy's single Data.LearnableAttack — consistent with the
-    // "one learnable per enemy" assumption in EnemyData.LearnableAttack. If future design
-    // calls for multiple learnable moves per enemy, this field changes to
-    // HashSet<AttackData> AbsorbedMoves or similar.
-    public bool             HasBeenAbsorbed;
     public ShaderMaterial   FlashMaterial;       // the white-flash material for signalling
 }
 ```
@@ -95,6 +90,15 @@ public class Combatant
 **Addendum — signal payload vehicle:** `Combatant` remains a plain C# class. However, Godot 4's C# `[Signal]` source generator rejects non-Variant-compatible types in delegate signatures (error `GD0202`), so `Combatant` references cannot be passed through signals directly. The marshalling vehicle is `SequenceContext : RefCounted` (see Q8) — a wrapper that holds Combatant references as fields.
 
 Surprising-but-good finding from the Phase 3.0 verification: **plain-C#-class references nested inside a RefCounted payload preserve identity through Variant marshalling.** `ctx.Attacker` on the subscriber side is the exact same `Combatant` instance that was set on the sender side — not a copy, not null. This is what makes the wrapper approach tenable without forcing `Combatant` itself to inherit from any Godot type. The Godot-type coupling is confined to `SequenceContext`; `Combatant` keeps its lifecycle independence, serialization friendliness, and scene-tree-nonresidence intact.
+
+**Addendum — absorb tracking lives on `BattleTest`, not `Combatant`.** A `HashSet<AttackData> _absorbedMoves` is added to `BattleTest` as a party-level field. Absorption semantics are **not** per-enemy-instance but per-move-type — once the Absorber learns a move, any enemy in the party with the same `LearnableAttack` offers no further absorption opportunity (re-absorbing the same move is pointless gameplay). The bool `HasBeenAbsorbed` that appeared in an earlier draft of this design was modelling the wrong granularity.
+
+This is a **deliberate prototype simplification**. The long-term correct home for absorbed-move tracking is on the Absorber character's skill data — to be designed when character-persistence and save systems land in Phase 2 / Phase 3. Party-level storage on `BattleTest` is correct for the prototype because:
+- 1v1 (and soon 4v5) scope makes "party-level" vs. "per-Absorber" structurally equivalent — the Absorber is unambiguously the single player character that knows absorbed moves.
+- The existing `_activeAbsorbedMove` field is already at `BattleTest` level, so party-level storage is structurally consistent with what's there.
+- The persistent character-skill system doesn't exist yet. Designing absorbed-move storage against a not-yet-existing API would be speculative.
+
+**Future migration path:** when the character-skill system lands, `_absorbedMoves` on `BattleTest` migrates to per-character skill storage (e.g., `absorber.Skills.AbsorbedMoves`). Call sites using `_absorbedMoves.Contains(attackData)` become `absorber.Skills.HasAbsorbed(attackData)` or equivalent — a mechanical pattern-substitute, not a re-architecture. Flagged in the Deferred Decisions section.
 
 ---
 
@@ -392,6 +396,7 @@ Questions whose answers are genuinely premature right now; resolve during the sc
 - **Combatant field initialization (constructor? factory method? builder?).** Write the ad-hoc construction during Phase 3; if a pattern emerges, extract then.
 - **Whether `Combatant` gains methods like `TakeDamage(int)` or stays data-only.** Start data-only to minimize scope. Methods can be added during a later cleanup if code repetition motivates them.
 - **D5 AttackStep schema resolution.** Audit flagged as a design decision; scaffolding exercise validates which option works at density.
+- **Absorb-tracking storage location.** Currently party-level on `BattleTest` (`_absorbedMoves`). Correct long-term home is per-Absorber-character skill data, pending Phase 2+ work on character persistence and save systems. Migration is a mechanical call-site rename (`_absorbedMoves.Contains(x)` → `absorber.Skills.HasAbsorbed(x)`), not an architectural change.
 
 ---
 
