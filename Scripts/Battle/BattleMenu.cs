@@ -161,6 +161,22 @@ public partial class BattleTest : Node2D
         GD.Print("[BattleTest] Player menu shown.");
     }
 
+    /// <summary>
+    /// Wraps <see cref="ShowMenu"/> with a Modulate-alpha fade-in on the main menu panel.
+    /// Used by the intro-dialogue handoff where instant reveal would pop against the
+    /// concurrent music fade-in. Pre-sets the panel's modulate alpha to 0 before ShowMenu
+    /// (so Visible = true doesn't snap it opaque), then tweens alpha to 1 over the duration.
+    /// </summary>
+    private void ShowMenuWithFadeIn(float durationSec)
+    {
+        if (_mainMenuPanel != null)
+            _mainMenuPanel.Modulate = new Color(1f, 1f, 1f, 0f);
+        ShowMenu();
+        if (_mainMenuPanel == null) return;
+        var tween = CreateTween();
+        tween.TweenProperty(_mainMenuPanel, "modulate:a", 1f, durationSec);
+    }
+
     private void ShowSubMenu()
     {
         _inSubMenu              = true;

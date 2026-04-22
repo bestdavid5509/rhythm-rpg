@@ -181,6 +181,7 @@ public partial class BattleTest : Node2D
     private AnimatedSprite2D _enemyAnimSprite;
     private AnimatedSprite2D _playerAnimSprite;
     private TargetZone       _targetZone;       // shared target ring — shown for the duration of any prompt sequence
+    private BattleDialogue   _introDialogue;    // owned narrative-dialogue component; QueueFree'd after DialogueCompleted
 
     // =========================================================================
     // Characters and animations
@@ -297,7 +298,8 @@ public partial class BattleTest : Node2D
         BuildStatusPanels();
         _battleMessage = new BattleMessage(this);
         BuildMusicPlayer();
-        StartPhase1Music();
+        // Phase 1 music is deferred — started silent and faded in when the intro dialogue
+        // begins its fade-out. See PlayIntroDialogue and OnIntroDialogueFadeOutStarted.
 
         // Grab character sprites and record their original positions for teardown restoration.
         _playerSprite = GetNode<ColorRect>("PlayerSprite");
@@ -412,7 +414,11 @@ public partial class BattleTest : Node2D
         BuildMenu();
         UpdateHPBars();
 
-        ShowMenu();
+        // Intro dialogue runs before any turn flow. Menu stays hidden and music stays silent
+        // until OnIntroDialogueFadeOutStarted (music fade-in) and OnIntroDialogueCompleted
+        // (ShowMenu fade-in) fire. Menu _menuLayer.Visible is already false from BuildMenu.
+        _inputLocked = true;
+        PlayIntroDialogue();
     }
 
     public override void _Input(InputEvent @event)
@@ -552,6 +558,81 @@ public partial class BattleTest : Node2D
             if (_musicPlayer != null) _musicPlayer.Stop();
         }));
         GD.Print($"[BattleTest] Music fading out over {durationSec}s.");
+    }
+
+    /// <summary>
+    /// Starts Phase 1 music silent and tweens VolumeDb to 0 dB over <paramref name="durationSec"/>
+    /// seconds — the fade-in counterpart to <see cref="FadeOutMusic"/>. Used for the post-intro
+    /// handoff where dialogue ends and battle music enters under the menu fade-in.
+    /// </summary>
+    private void FadeInPhase1Music(float durationSec)
+    {
+        if (_musicPlayer == null) return;
+        PlayMusicStream(Phase1MusicPath, volumeDb: -80f);
+        _musicFadeTween?.Kill();
+        _musicFadeTween = CreateTween();
+        _musicFadeTween.TweenProperty(_musicPlayer, "volume_db", 0f, durationSec);
+        GD.Print($"[BattleTest] Phase 1 music fading in over {durationSec}s.");
+    }
+
+    // =========================================================================
+    // Intro dialogue — plays once at scene load before any turn flow begins.
+    // =========================================================================
+
+    /// <summary>
+    /// Constructs the intro-dialogue component, hardcodes the opening lines, connects signals,
+    /// and kicks the sequence off after a 0.3s scene-settle beat. Called from _Ready with
+    /// _inputLocked already set so the player cannot trigger menu input before dialogue starts.
+    /// </summary>
+    private void PlayIntroDialogue()
+    {
+        _introDialogue = new BattleDialogue();
+        _introDialogue.Name = "BattleDialogue";
+        AddChild(_introDialogue);
+        _introDialogue.FadeOutStarted    += OnIntroDialogueFadeOutStarted;
+        _introDialogue.DialogueCompleted += OnIntroDialogueCompleted;
+
+        var lines = new BattleDialogue.DialogueLine[]
+        {
+            new BattleDialogue.DialogueLine { Speaker = "The Harbinger", Text = "...another one. and already, it squirms.", AutoAdvanceSeconds = 2.0f },
+            new BattleDialogue.DialogueLine { Speaker = "Knight",        Text = "Grip firm...",                               AutoAdvanceSeconds = 1.2f },
+            new BattleDialogue.DialogueLine { Speaker = "Knight",        Text = "...breathe out on the strike...",            AutoAdvanceSeconds = 1.2f },
+            new BattleDialogue.DialogueLine { Speaker = "The Harbinger", Text = "Stand, if you wish.",                        AutoAdvanceSeconds = 1.2f },
+            new BattleDialogue.DialogueLine { Speaker = "The Harbinger", Text = "It changes nothing.",                        AutoAdvanceSeconds = 2.0f },
+        };
+
+        var timer = GetTree().CreateTimer(0.3);
+        timer.Timeout += () =>
+        {
+            if (!GodotObject.IsInstanceValid(this) || !GodotObject.IsInstanceValid(_introDialogue)) return;
+            _introDialogue.PlayDialogue(lines);
+        };
+    }
+
+    /// <summary>
+    /// Fires when the intro dialogue begins its fade-out tween (final line advanced). Starts
+    /// the music fade-in at the same moment so audio rises during the visual handoff rather
+    /// than after it completes — a smoother transition than strict sequencing.
+    /// </summary>
+    private void OnIntroDialogueFadeOutStarted()
+    {
+        FadeInPhase1Music(1.5f);
+    }
+
+    /// <summary>
+    /// Fires after the intro dialogue's panel fade-out plus post-dialogue input buffer. Shows
+    /// the battle menu with a 0.5s fade-in, unlocks input via ShowMenu, and frees the dialogue
+    /// node (future dialogue — e.g. Phase 2 taunts — constructs a fresh BattleDialogue).
+    /// </summary>
+    private void OnIntroDialogueCompleted()
+    {
+        ShowMenuWithFadeIn(0.5f);
+
+        if (GodotObject.IsInstanceValid(_introDialogue))
+        {
+            _introDialogue.QueueFree();
+            _introDialogue = null;
+        }
     }
 
     // =========================================================================
