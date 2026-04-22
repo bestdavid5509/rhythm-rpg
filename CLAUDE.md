@@ -424,6 +424,30 @@ Triggered automatically on Warrior (Phase 1) death when `BattleTest.Phase2EnemyD
 
 `EnemyData.SpriteOffsetY` — per-enemy additional downward nudge on the enemy sprite, tuned visually. Warrior Phase 1 = 90f, 8 Sword Warrior = 130f.
 
+### Text UI Systems
+
+Two distinct text-display components serve different UX purposes. They are **not** candidates for unification — their UX roles genuinely differ. The rule for adding new text UI:
+
+- **Character speech during a narrative pause** → `BattleDialogue`
+- **System notification during a mechanical event** → `BattleMessage`
+
+| System | Use for | Skippable? | Speaker tag? | Multi-line? | Auto-dismiss |
+|---|---|---|---|---|---|
+| `BattleDialogue` | Intro dialogue, mid-battle boss taunts, cutscene-style narrative beats | Yes — player advances with `battle_confirm` | Yes — per-line speaker field drives name-tag color | Yes — sequence of `DialogueLine` entries | Per-line `AutoAdvanceSeconds`, or on input |
+| `BattleMessage` | Learnable-move signal, phase-transition flavor, absorb feedback, any system-level prompt | **No** — duration-based auto-dismiss only | No | No — single line | Fixed `holdDuration` |
+
+**Why `BattleMessage` is intentionally non-skippable:** the player's input channel is reserved for parry / combat during the moments `BattleMessage` is shown. Making it input-skippable would hijack that channel and make system feedback feel like it requires acknowledgment. Do not add skip-on-input to `BattleMessage`.
+
+**Why `BattleDialogue` is intentionally skippable:** during narrative pauses the player is explicitly not engaging with combat mechanics; the input channel is free and players have different reading speeds.
+
+**Signals emitted by `BattleDialogue`:**
+- `FadeOutStarted` — fires when the final line's advance kicks off the panel's fade-out tween. Callers use this to begin cross-fading other elements (e.g. music fade-in) concurrent with the visual handoff, rather than strict after-the-fact sequencing.
+- `DialogueCompleted` — fires after the fade-out tween plus `PostDialogueBufferSec` (default 150ms, prevents final input from bleeding into the next input-accepting state).
+
+**Dialogue node lifetime:** a `BattleDialogue` instance is constructed for each dialogue sequence and `QueueFree`'d after `DialogueCompleted`. Future dialogue (e.g. Phase 2 boss taunts) constructs a fresh instance. This keeps state clean and avoids hidden reuse bugs.
+
+**Shared infrastructure note:** both `BattleMessage` and `BattleDialogue` duplicate low-level patterns — a high-Layer `CanvasLayer`, a bottom-anchored `MakeLayeredPanel`, a `modulate:a` fade tween, inline panel-inset constants. Worth extracting a shared `BottomCenteredOverlayPanel` helper during the Phase 1 code review; the systems themselves stay separate.
+
 ## Audio Trigger Reference
 
 ### Event-Based Triggers (no frame sync needed)
@@ -527,3 +551,20 @@ This serves three simultaneous purposes depending on player state:
 **Cleanup task when implementing:** the senior's move set should be
 hardcoded/defined at character creation, not derived from the
 apprentice's tutorial playthrough state.
+
+### Intro dialogue skip-on-retry
+The Phase 1 intro dialogue (`BattleTest.PlayIntroDialogue`) replays on
+every battle scene reload, including Retry from Game Over. This is
+retained for the prototype because:
+
+- It verifies the dialogue system works correctly across scene reloads.
+- All 5 lines are skippable in under a second with rapid `battle_confirm`
+  presses, so the cost to a retrying player is low.
+
+**Cleanup task when implementing:** before any real release, track whether
+the intro has already been seen (session-scoped flag at minimum, ideally
+persisted across sessions once a save system exists) and skip
+`PlayIntroDialogue` on subsequent loads — proceed straight to the
+post-dialogue state (start music, show menu). Retry flows should land
+the player on the first input-accepting frame, not on a re-playing
+cutscene.
