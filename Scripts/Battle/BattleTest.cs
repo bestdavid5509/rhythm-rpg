@@ -41,15 +41,11 @@ public partial class BattleTest : Node2D
     private bool _inputLocked;
 
     // =========================================================================
-    // HP
+    // HP / MP defaults — used to seed Combatant fields at BuildInitialParties time.
+    // Per-unit state lives on the Combatant now; see _playerParty / _enemyParty below.
     // =========================================================================
 
-    private const int PlayerMaxHP      = 100;
-    private const int EnemyMaxHPDefault = 200;
-
-    private int _playerHP    = PlayerMaxHP;
-    private int _enemyHP     = EnemyMaxHPDefault;
-    private int _enemyMaxHP  = EnemyMaxHPDefault;  // overridden by EnemyData.MaxHp when set
+    private const int PlayerMaxHP = 100;
 
     // =========================================================================
     // MP
@@ -58,8 +54,6 @@ public partial class BattleTest : Node2D
     [Export] public int PlayerMaxMp = 50;
 
     [Export] public int EtherCount = 1;
-
-    private int _playerMp;  // initialized to PlayerMaxMp in _Ready
 
     // UI bar references — built in BuildStatusPanels(), updated by UpdateHPBars()/UpdateMpBar().
     // Type is Control (not ColorRect) because the fill uses 3-part TextureRect children
@@ -79,19 +73,23 @@ public partial class BattleTest : Node2D
 
     // Set true at the start of each enemy attack, cleared to false on any Miss result.
     // Checked when PromptCompleted fires to decide whether to trigger the auto counter.
+    // Per-sequence context — will move to SequenceContext in Phase 3.9 (J-category).
     private bool _parryClean;
 
-    // Set true when the player picks Defend from the main menu. While true, miss damage
-    // from enemy passes is halved. Cleared at the start of each player menu turn.
-    private bool _playerDefending;
+    // =========================================================================
+    // Absorb tracking — party-level, per-move-type
+    // =========================================================================
 
-    // True once the player has absorbed the enemy's learnable move via perfect parry.
-    // Prevents the absorption moment from triggering more than once per fight.
-    private bool _hasAbsorbedLearnableMove = false;
-
-    // Set true by the Beckon ability; consumed on the next SelectEnemyAttack call to
-    // force the enemy to use their LearnableAttack instead of a random pool selection.
-    private bool _beckoning;
+    // Set of AttackData references the Absorber has already learned. Absorption is
+    // per-move-type, not per-enemy-instance — once a move is in this set, any enemy
+    // with the same LearnableAttack offers no further absorption opportunity.
+    //
+    // Prototype simplification: lives on BattleTest as a party-level field. The
+    // long-term correct home is per-Absorber-character skill data, pending Phase 2+
+    // character persistence work. Migration is a mechanical call-site rename
+    // (_absorbedMoves.Contains(x) → absorber.Skills.HasAbsorbed(x)).
+    // See docs/combatant-abstraction-design.md Q1 addendum.
+    private HashSet<AttackData> _absorbedMoves = new();
 
     // =========================================================================
     // Damage numbers
@@ -194,12 +192,13 @@ public partial class BattleTest : Node2D
     private TargetZone       _targetZone;       // shared target ring — shown for the duration of any prompt sequence
     private BattleDialogue   _introDialogue;    // owned narrative-dialogue component; QueueFree'd after DialogueCompleted
 
-    // Phase 3.1 scaffolding — party lists owned by BattleTest. Single-entry for the
-    // 1v1 prototype; constructed at the end of _Ready from the already-settled
-    // singleton state. NOT yet the source of truth for anything — consumers still
-    // read from _playerHP, _enemyAnimSprite, _enemyFlashMaterial, etc. Subsequent
-    // phases (3.2 onward) migrate consumers category-by-category. When all consumers
-    // have migrated, the singleton fields can be retired.
+    // Party lists owned by BattleTest. Single-entry for the 1v1 prototype; the
+    // scaffolding exercise grows them to 4/5. Source of truth for combat-universal
+    // state (HP, MP, defending, dead flags, beckoning) and player/enemy-specific
+    // fields (MP on player, LearnableAttack Data on enemy, FlashMaterial on enemy).
+    //
+    // Sprite/material refs are held by the Combatant but the scene tree owns the
+    // node lifecycle — Combatant just points at the existing nodes.
     // See docs/combatant-abstraction-design.md.
     private List<Combatant> _playerParty = new();
     private List<Combatant> _enemyParty  = new();
@@ -220,8 +219,9 @@ public partial class BattleTest : Node2D
     private ColorRect _defender;
     private Vector2   _attackerClosePos;  // close-but-not-touching stance position for this turn
     private bool      _pendingGameOver;   // cached result of CheckGameOver(); read by OnFinalSlashFinished
-    private bool      _playerDead;        // true once player death animation begins; guards all subsequent sprite calls
-    private bool      _enemyDead;         // true once enemy death animation begins; guards all subsequent sprite calls
+    // Death flags live on Combatant.IsDead now (_playerParty[0].IsDead / _enemyParty[0].IsDead).
+    // Once set, no further animation calls can override the death pose — see the five
+    // dead-flag guard helpers in BattleAnimator.cs (PlayPlayer, StopPlayer, etc.).
     private bool      _endLabelShown;     // idempotent guard for ShowEndLabel — lets death-start sites trigger the
                                           // Game Over overlay + music fade immediately while OnPlayerDeathFinished's
                                           // own ShowEndLabel call (at death-anim completion) becomes a no-op.
@@ -324,7 +324,6 @@ public partial class BattleTest : Node2D
     {
         _timingPromptScene = GD.Load<PackedScene>("res://Scenes/Battle/TimingPrompt.tscn");
 
-        _playerMp = PlayerMaxMp;
         ApplyBackgroundGradient();
         BuildStatusPanels();
         _battleMessage = new BattleMessage(this);
@@ -449,39 +448,42 @@ public partial class BattleTest : Node2D
 
         _targetZone = GetNode<TargetZone>("TargetZone");
 
+        // Construct single-entry party lists before HP init / test-flag overrides.
+        // Combatant fields are now the source of truth; the HP init + test-flag blocks
+        // below write directly into playerCombatant / enemyCombatant, not into retired
+        // singleton fields.
+        BuildInitialParties();
+
+        var playerCombatant = _playerParty[0];
+        var enemyCombatant  = _enemyParty[0];
+
         // EnemyData overrides the default max HP when assigned in the inspector.
         if (EnemyData != null && EnemyData.MaxHp > 0)
         {
-            _enemyMaxHP = EnemyData.MaxHp;
-            _enemyHP    = EnemyData.MaxHp;
+            enemyCombatant.MaxHp     = EnemyData.MaxHp;
+            enemyCombatant.CurrentHp = EnemyData.MaxHp;
             GD.Print($"[BattleTest] EnemyData \"{EnemyData.EnemyName}\" loaded — " +
                      $"MaxHp={EnemyData.MaxHp}, AttackPool={EnemyData.AttackPool?.Length ?? 0} attack(s).");
         }
 
-        // Test hooks — applied AFTER EnemyData HP init so they aren't clobbered. MaxHP is
+        // Test hooks — applied AFTER EnemyData HP init so they aren't clobbered. MaxHp is
         // preserved so HP bars show the correct scale. Priority order resolved above.
         if (testVictory)
         {
-            _enemyHP = 1;
+            enemyCombatant.CurrentHp = 1;
             // Consume the phase-transition gate so enemy death goes straight to Victory
             // instead of retriggering the Phase 1 → Phase 2 reveal cutscene.
             _phaseTransitionConsumed = true;
         }
         else if (testPhaseTrans)
         {
-            _enemyHP = 1;
+            enemyCombatant.CurrentHp = 1;
             GD.Print("[BattleTest] TestPhaseTransition active — enemy HP forced to 1.");
         }
         if (testGameOver)
         {
-            _playerHP = 1;
+            playerCombatant.CurrentHp = 1;
         }
-
-        // Phase 3.1 scaffolding — construct single-entry party lists from the now-settled
-        // singleton state. Values mirror existing fields exactly; sprite/material refs point
-        // at the same node instances the singleton fields reference (no duplication).
-        // Consumers do not yet read from these lists — that migration happens in Phase 3.2+.
-        BuildInitialParties();
 
         BuildMenu();
         UpdateHPBars();
@@ -1108,9 +1110,11 @@ public partial class BattleTest : Node2D
         _battleSystem.SetAttack(selectedAttack);
 
         // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
-        if (!_hasAbsorbedLearnableMove
-            && EnemyData?.LearnableAttack != null
-            && selectedAttack == EnemyData.LearnableAttack)
+        // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
+        // is already in _absorbedMoves (not if any move has been absorbed).
+        if (EnemyData?.LearnableAttack != null
+            && selectedAttack == EnemyData.LearnableAttack
+            && !_absorbedMoves.Contains(EnemyData.LearnableAttack))
         {
             ShowLearnableSignal();
             FlashEnemyWhite();
@@ -1190,11 +1194,12 @@ public partial class BattleTest : Node2D
 
         if (r == TimingPrompt.InputResult.Miss)
         {
+            var player = _playerParty[0];  // enemy attack targets the single player in the current UI
             _parryClean   = false;
             int damage    = _battleSystem.GetStepBaseDamage(stepIndex);
-            if (_playerDefending) damage = Mathf.Max(1, damage / 2);
-            _playerHP     = Mathf.Max(0, _playerHP - damage);
-            GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {_playerHP}/{PlayerMaxHP}");
+            if (player.IsDefending) damage = Mathf.Max(1, damage / 2);
+            player.CurrentHp = Mathf.Max(0, player.CurrentHp - damage);
+            GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {player.CurrentHp}/{player.MaxHp}");
             PlaySound("player_hit.wav");
             SpawnDamageNumber(PlayerDamageOrigin, damage, DmgColorPlayer);
             UpdateHPBars();
@@ -1204,11 +1209,11 @@ public partial class BattleTest : Node2D
             // SuppressInput blocks all further manual input and auto-miss feedback on circles.
             // Game Over label is deferred to OnEnemySequenceCompleted so the player can watch
             // the full attack pattern for future attempts.
-            if (_playerHP <= 0 && !_playerDead)
+            if (player.CurrentHp <= 0 && !player.IsDead)
             {
                 GD.Print("[BattleTest] Player HP reached zero mid-sequence — death triggered immediately.");
-                _playerDead = true;
-                _state      = BattleState.GameOver;
+                player.IsDead = true;
+                _state        = BattleState.GameOver;
                 TimingPrompt.SuppressInput = true;
                 _playerAnimSprite.Play("death");
                 // Show Game Over overlay + fade music immediately; enemy sequence continues playing out.
@@ -1227,7 +1232,8 @@ public partial class BattleTest : Node2D
     private void OnBattleSystemStepStarted(int stepIndex)
     {
         if (!_battleSystem.CurrentAttackIsHopIn) return;
-        if (_enemyDead) return;
+        var enemy = _enemyParty[0];  // single attacker in the current UI
+        if (enemy.IsDead) return;
 
         var step = _battleSystem.GetCurrentAttack().Steps[stepIndex];
         if (string.IsNullOrEmpty(step.EnemyAnimation)) return;
@@ -1239,7 +1245,7 @@ public partial class BattleTest : Node2D
 
         void PlayStepAnimation()
         {
-            if (_enemyDead) return;
+            if (enemy.IsDead) return;
             SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
             PlayEnemy(step.EnemyAnimation);
             _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
@@ -1275,7 +1281,8 @@ public partial class BattleTest : Node2D
     private void OnBouncingHopInPassEvaluated(int result, int passIndex, int stepIndex)
     {
         if (_bouncingHopInStep == null) return;
-        if (_enemyDead) return;
+        var enemy = _enemyParty[0];  // single attacker in the current UI
+        if (enemy.IsDead) return;
 
         // Only replay if more inward passes follow.
         if (passIndex >= _bouncingHopInStep.BounceCount) return;
@@ -1287,7 +1294,7 @@ public partial class BattleTest : Node2D
 
         GetTree().CreateTimer(replayDelay).Timeout += () =>
         {
-            if (_enemyDead) return;
+            if (enemy.IsDead) return;
             SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
             PlayEnemy(step.EnemyAnimation);
             _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
@@ -1324,7 +1331,7 @@ public partial class BattleTest : Node2D
         }
 
         // After player death, skip damage and animation reactions — circles continue silently.
-        if (_playerDead) return;
+        if (_playerParty[0].IsDead) return;
 
         if (_battleSystem.CurrentAttackIsHopIn || !SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
@@ -1388,7 +1395,7 @@ public partial class BattleTest : Node2D
 
         // Player died mid-sequence — death animation is already playing.
         // Clean up the enemy and let the death flow finish (Game Over label).
-        if (_playerDead)
+        if (_playerParty[0].IsDead)
         {
             if (_battleSystem.CurrentAttackIsHopIn)
             {
@@ -1469,7 +1476,10 @@ public partial class BattleTest : Node2D
             // Game over — determine which side is dead and play the appropriate death animation.
             PlayTeardown(null);
 
-            if (_playerHP <= 0)
+            var player = _playerParty[0];
+            var enemy  = _enemyParty[0];
+
+            if (player.CurrentHp <= 0)
             {
                 if (!skipCastEnd)
                 {
@@ -1482,7 +1492,7 @@ public partial class BattleTest : Node2D
                     else
                         PlayEnemy("idle");
                 }
-                _playerDead = true;
+                player.IsDead = true;
                 SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
                 _playerAnimSprite.Play("death");
                 _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
@@ -1490,9 +1500,9 @@ public partial class BattleTest : Node2D
                 // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
                 ShowEndLabel("Game Over");
             }
-            else // _enemyHP <= 0 — perfect parry counter killed the enemy
+            else // enemy.CurrentHp <= 0 — perfect parry counter killed the enemy
             {
-                _enemyDead = true;
+                enemy.IsDead = true;
                 PlaySound("enemy_defeat.mp3");
                 SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
                 _enemyAnimSprite.Play("death");
@@ -1598,8 +1608,9 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);  // shake — perfect timing feedback
 
-        _enemyHP = Mathf.Max(0, _enemyHP - damage);
-        GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+        var enemy = _enemyParty[0];  // single target in the current UI
+        enemy.CurrentHp = Mathf.Max(0, enemy.CurrentHp - damage);
+        GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
@@ -1634,9 +1645,10 @@ public partial class BattleTest : Node2D
 
         if (_isPlayerHealAttack)
         {
+            var player = _playerParty[0];  // heal targets self in the current single-player UI
             GD.Print($"[BattleTest] Cure pass {passIndex + 1} resolved: {r}  ({amount} HP).");
-            _playerHP = Mathf.Min(PlayerMaxHP, _playerHP + amount);
-            GD.Print($"[BattleTest] Cure heals {amount} HP. Player HP: {_playerHP}/{PlayerMaxHP}");
+            player.CurrentHp = Mathf.Min(player.MaxHp, player.CurrentHp + amount);
+            GD.Print($"[BattleTest] Cure heals {amount} HP. Player HP: {player.CurrentHp}/{player.MaxHp}");
             SpawnDamageNumber(PlayerDamageOrigin, amount, DmgColorPerfect);  // green for healing
             UpdateHPBars();
             return;
@@ -1654,8 +1666,9 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);
 
-        _enemyHP = Mathf.Max(0, _enemyHP - amount);
-        GD.Print($"[BattleTest] Magic hit deals {amount} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+        var enemy = _enemyParty[0];  // single target in the current UI
+        enemy.CurrentHp = Mathf.Max(0, enemy.CurrentHp - amount);
+        GD.Print($"[BattleTest] Magic hit deals {amount} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(EnemyDamageOrigin, amount, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
@@ -1696,9 +1709,9 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        if (_enemyHP <= 0)
+        if (_enemyParty[0].CurrentHp <= 0)
         {
-            _enemyDead = true;
+            _enemyParty[0].IsDead = true;
             PlaySound("enemy_defeat.mp3");
             SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
             _enemyAnimSprite.Play("death");
@@ -1707,7 +1720,7 @@ public partial class BattleTest : Node2D
         }
         else
         {
-            _playerDead = true;
+            _playerParty[0].IsDead = true;
             SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
             _playerAnimSprite.Play("death");
             _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
@@ -1728,7 +1741,8 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void UseEtherItem()
     {
-        if (_playerDead) { BeginEnemyAttack(); return; }
+        var player = _playerParty[0];  // item user is the single player in the current UI
+        if (player.IsDead) { BeginEnemyAttack(); return; }
         _state       = BattleState.PlayerAttack;
         _inputLocked = true;  // block input during item use
 
@@ -1743,9 +1757,9 @@ public partial class BattleTest : Node2D
         float impactDelay = impactFrame / fps;
         GetTree().CreateTimer(impactDelay).Timeout += () =>
         {
-            if (_playerDead) return;
+            if (player.IsDead) return;
             PlaySound("cure_spell.wav");
-            RestoreMp(20);  // clamps to PlayerMaxMp and calls UpdateMpBar internally
+            RestoreMp(20);  // clamps to MaxMp and calls UpdateMpBar internally
             SpawnEtherEffect(_playerEtherEffect);
         };
     }
@@ -1753,7 +1767,7 @@ public partial class BattleTest : Node2D
     private void OnEtherAnimationFinished()
     {
         SafeDisconnectPlayerAnim(OnEtherAnimationFinished);
-        if (_playerDead) return;
+        if (_playerParty[0].IsDead) return;
         PlayPlayer("idle");
         GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
     }
@@ -1866,9 +1880,12 @@ public partial class BattleTest : Node2D
                 // Game over — retreat enemy without scheduling next turn, then handle death.
                 PlayTeardown(null);
 
-                if (_playerHP <= 0 && !_playerDead)
+                var player = _playerParty[0];
+                var enemy  = _enemyParty[0];
+
+                if (player.CurrentHp <= 0 && !player.IsDead)
                 {
-                    _playerDead = true;
+                    player.IsDead = true;
                     SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
                     _playerAnimSprite.Play("death");
                     _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
@@ -1876,14 +1893,14 @@ public partial class BattleTest : Node2D
                     // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
                     ShowEndLabel("Game Over");
                 }
-                else if (_playerHP <= 0 && _playerDead)
+                else if (player.CurrentHp <= 0 && player.IsDead)
                 {
                     // Death was triggered mid-sequence — animation already playing.
                     ShowEndLabel("Game Over");
                 }
-                else  // _enemyHP <= 0 — parry counter killed the enemy
+                else  // enemy.CurrentHp <= 0 — parry counter killed the enemy
                 {
-                    _enemyDead = true;
+                    enemy.IsDead = true;
                     PlaySound("enemy_defeat.mp3");
                     SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
                     _enemyAnimSprite.Play("death");
@@ -1930,9 +1947,10 @@ public partial class BattleTest : Node2D
 
         // Beckon forces the learnable move for one turn. Consume the flag whether or
         // not a learnable exists; LoopAttack above still wins in dev test mode.
-        if (_beckoning)
+        var player = _playerParty[0];  // single beckoner in the current UI
+        if (player.IsBeckoning)
         {
-            _beckoning = false;
+            player.IsBeckoning = false;
             if (EnemyData?.LearnableAttack != null)
                 return EnemyData.LearnableAttack;
         }
@@ -1977,9 +1995,9 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Beckon ability — if the enemy has an unabsorbed learnable move, sets _beckoning
-    /// so SelectEnemyAttack returns LearnableAttack this turn. Otherwise shows a brief
-    /// message. Always hands off to the enemy turn immediately (no animation).
+    /// Beckon ability — if the enemy has an unabsorbed learnable move, sets
+    /// playerCombatant.IsBeckoning so SelectEnemyAttack returns LearnableAttack this turn.
+    /// Otherwise shows a brief message. Always hands off to the enemy turn immediately (no animation).
     /// </summary>
     /// <summary>
     /// Beckon ability — forces the enemy to use their LearnableAttack next turn.
@@ -1989,28 +2007,30 @@ public partial class BattleTest : Node2D
     private void PerformBeckon()
     {
         const int beckonMpCost = 10;
-        _playerMp -= beckonMpCost;
+        var player = _playerParty[0];  // single beckoner in the current UI
+        player.CurrentMp -= beckonMpCost;
         UpdateMpBar();
-        _beckoning = true;
+        player.IsBeckoning = true;
         GD.Print($"[BattleTest] Player beckons (-{beckonMpCost} MP) — enemy will use learnable move next turn.");
         BeginEnemyAttack();
     }
 
     /// <summary>
     /// If the just-completed enemy attack was the learnable move and the player perfect-parried it,
-    /// triggers the absorption moment (message + flash). No-ops if already absorbed.
+    /// triggers the absorption moment (message + flash). No-ops if this move is already in
+    /// <see cref="_absorbedMoves"/> — absorption is per-move-type, not per-enemy-instance.
     /// Called immediately before PlayParryCounter in OnEnemySequenceCompleted.
     /// </summary>
     private void TryTriggerAbsorption()
     {
-        if (_hasAbsorbedLearnableMove) return;
-
         var currentAttack = _battleSystem.GetCurrentAttack();
         if (EnemyData?.LearnableAttack == null || currentAttack != EnemyData.LearnableAttack) return;
+        if (_absorbedMoves.Contains(EnemyData.LearnableAttack)) return;
 
-        _hasAbsorbedLearnableMove = true;
+        _absorbedMoves.Add(EnemyData.LearnableAttack);
         PlaySound("absorbed_ability_acquired.wav", volumeDb: 6f);
-        // TODO: when player state/character system is built, add absorbed move to player's persistent move list here
+        // TODO: when player state/character system is built, migrate _absorbedMoves to the
+        // Absorber character's persistent skill storage (see Combatant design doc).
 
         _absorbedMoveAttack = EnemyData.LearnableAttack;
         RebuildSubMenu();
@@ -2039,15 +2059,19 @@ public partial class BattleTest : Node2D
         }
     }
 
+    // Single-party prototype: reads party[0] because there's only one combatant per side.
+    // Party-wipe semantics (Any-alive / All-dead) are audit finding A6 — deferred to the
+    // scaffolding phase. For now this retains the 1v1 "either scalar zero → game over"
+    // rule.
     private bool CheckGameOver()
     {
-        if (_playerHP <= 0)
+        if (_playerParty[0].CurrentHp <= 0)
         {
             GD.Print("[BattleTest] Enemy wins.");
             _state = BattleState.GameOver;
             return true;
         }
-        if (_enemyHP <= 0)
+        if (_enemyParty[0].CurrentHp <= 0)
         {
             GD.Print("[BattleTest] Player wins.");
             _state = BattleState.GameOver;
@@ -2056,24 +2080,31 @@ public partial class BattleTest : Node2D
         return false;
     }
 
+    // Single-party prototype: the HP bars render the first (and only) combatant on each
+    // side. Multi-unit UI layout is the scaffolding exercise's concern (Phase 6).
     private void UpdateHPBars()
     {
-        _playerHPFill.Size  = new Vector2(BarWidth * ((float)_playerHP / PlayerMaxHP), _playerHPFill.Size.Y);
-        _playerHPLabel.Text = $"{_playerHP}/{PlayerMaxHP}";
-        _enemyHPFill.Size   = new Vector2(BarWidth * ((float)_enemyHP / _enemyMaxHP), _enemyHPFill.Size.Y);
-        _enemyHPLabel.Text  = $"{_enemyHP}/{_enemyMaxHP}";
+        var player = _playerParty[0];
+        var enemy  = _enemyParty[0];
+        _playerHPFill.Size  = new Vector2(BarWidth * ((float)player.CurrentHp / player.MaxHp), _playerHPFill.Size.Y);
+        _playerHPLabel.Text = $"{player.CurrentHp}/{player.MaxHp}";
+        _enemyHPFill.Size   = new Vector2(BarWidth * ((float)enemy.CurrentHp  / enemy.MaxHp),  _enemyHPFill.Size.Y);
+        _enemyHPLabel.Text  = $"{enemy.CurrentHp}/{enemy.MaxHp}";
         UpdateMpBar();
     }
 
+    // Single-party prototype: the MP bar renders the first (and only) player combatant.
     private void UpdateMpBar()
     {
-        _playerMPFill.Size  = new Vector2(BarWidth * ((float)_playerMp / PlayerMaxMp), _playerMPFill.Size.Y);
-        _playerMPLabel.Text = $"{_playerMp}/{PlayerMaxMp}";
+        var player = _playerParty[0];
+        _playerMPFill.Size  = new Vector2(BarWidth * ((float)player.CurrentMp / player.MaxMp), _playerMPFill.Size.Y);
+        _playerMPLabel.Text = $"{player.CurrentMp}/{player.MaxMp}";
     }
 
     private void RestoreMp(int amount)
     {
-        _playerMp = Mathf.Min(_playerMp + amount, PlayerMaxMp);
+        var player = _playerParty[0];  // single MP pool in the current UI
+        player.CurrentMp = Mathf.Min(player.CurrentMp + amount, player.MaxMp);
         UpdateMpBar();
     }
 
@@ -2318,60 +2349,61 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Phase 3.1 scaffolding — constructs single-entry party lists mirroring the existing
-    /// singleton combat state. Called once at the end of <see cref="_Ready"/> after all
-    /// singleton initialization (HP, sprites, EnemyData, test-flag overrides) has settled.
+    /// Constructs the single-entry party lists that back the Combatant abstraction.
+    /// Called from <see cref="_Ready"/> after sprites / BattleSystem / Phase2EnemyData
+    /// are all settled, but before the EnemyData HP init and test-flag overrides —
+    /// those blocks write directly into the Combatant fields produced here.
     ///
-    /// Every field is populated from an existing singleton. Sprite/material references
-    /// are shared (same node instance, two references). No state is invented — if
-    /// TestGameOverScreen has forced _playerHP to 1, the Combatant sees 1; if
-    /// TestVictoryScreen has swapped EnemyData to Phase 2, the enemy Combatant sees the
-    /// Phase 2 values.
+    /// Initial HP/MP values come from constants (<c>PlayerMaxHP</c>, <c>PlayerMaxMp</c>,
+    /// or <c>EnemyData.MaxHp</c> if the resource's MaxHp is set). The caller's
+    /// downstream blocks handle EnemyData-sourced overrides and test-flag overrides.
     ///
     /// Origin note: the Combatant's single <c>Origin</c> field maps to the ColorRect-based
     /// origin (<c>_playerOrigin</c> / <c>_enemyOrigin</c>) because that's what the existing
     /// positioning helpers use via <c>GetOrigin(ColorRect)</c>. The separate
     /// AnimatedSprite2D origin (<c>_playerAnimSpriteOrigin</c>, <c>_enemyAnimSpriteOrigin</c>)
-    /// is not yet modeled on Combatant — will be revisited during C-category refactor
-    /// (Phase 3.4), either as a second field or by deriving from sprite state on demand.
+    /// is not yet modeled on Combatant — revisited during C-category refactor (Phase 3.4).
     /// </summary>
     private void BuildInitialParties()
     {
+        int enemyInitialMaxHp = (EnemyData != null && EnemyData.MaxHp > 0) ? EnemyData.MaxHp : 200;
+
         var playerCombatant = new Combatant
         {
             Name         = "Knight",
             Side         = CombatantSide.Player,
-            CurrentHp    = _playerHP,
+            CurrentHp    = PlayerMaxHP,
             MaxHp        = PlayerMaxHP,
             IsDead       = false,
             Origin       = _playerOrigin,
             PositionRect = _playerSprite,
             AnimSprite   = _playerAnimSprite,
-            CurrentMp    = _playerMp,
+            CurrentMp    = PlayerMaxMp,
             MaxMp        = PlayerMaxMp,
             IsDefending  = false,
+            IsBeckoning  = false,
         };
         _playerParty.Add(playerCombatant);
 
         var enemyCombatant = new Combatant
         {
-            Name            = EnemyData?.EnemyName ?? "Enemy",
-            Side            = CombatantSide.Enemy,
-            CurrentHp       = _enemyHP,
-            MaxHp           = _enemyMaxHP,
-            IsDead          = false,
-            Origin          = _enemyOrigin,
-            PositionRect    = _enemySprite,
-            AnimSprite      = _enemyAnimSprite,
-            Data            = EnemyData,
-            HasBeenAbsorbed = _hasAbsorbedLearnableMove,
-            FlashMaterial   = _enemyFlashMaterial,
+            Name          = EnemyData?.EnemyName ?? "Enemy",
+            Side          = CombatantSide.Enemy,
+            CurrentHp     = enemyInitialMaxHp,
+            MaxHp         = enemyInitialMaxHp,
+            IsDead        = false,
+            Origin        = _enemyOrigin,
+            PositionRect  = _enemySprite,
+            AnimSprite    = _enemyAnimSprite,
+            Data          = EnemyData,
+            FlashMaterial = _enemyFlashMaterial,
         };
         _enemyParty.Add(enemyCombatant);
 
-        GD.Print($"[BattleTest] Combatant scaffolding built — " +
-                 $"playerParty: 1 ({playerCombatant.Name}, HP={playerCombatant.CurrentHp}/{playerCombatant.MaxHp}); " +
-                 $"enemyParty: 1 ({enemyCombatant.Name}, HP={enemyCombatant.CurrentHp}/{enemyCombatant.MaxHp}).");
+        GD.Print($"[BattleTest] Combatants built — " +
+                 $"player: {playerCombatant.Name} (HP={playerCombatant.CurrentHp}/{playerCombatant.MaxHp}, " +
+                 $"MP={playerCombatant.CurrentMp}/{playerCombatant.MaxMp}); " +
+                 $"enemy: {enemyCombatant.Name} (HP={enemyCombatant.CurrentHp}/{enemyCombatant.MaxHp}).");
     }
 
     private void BuildEnemyPanel(CanvasLayer layer)
@@ -2545,9 +2577,9 @@ public partial class BattleTest : Node2D
         }
 
         // Hop-in footstep sound for both player and enemy.
-        if (attacker == _playerSprite && !_playerDead)
+        if (attacker == _playerSprite && !_playerParty[0].IsDead)
             PlaySound("short_quick_steps.wav", volumeDb: 6f);
-        if (attacker == _enemySprite && !_enemyDead)
+        if (attacker == _enemySprite && !_enemyParty[0].IsDead)
             PlaySound("short_quick_steps.wav", volumeDb: 6f);
 
         // Play run at double speed while the player hops in — snappy charge feel.
@@ -2585,7 +2617,7 @@ public partial class BattleTest : Node2D
                  .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         }
         // When the enemy is the attacker, play run at double speed during hop-in (mirrors player pattern).
-        if (attacker == _enemySprite && !_enemyDead)
+        if (attacker == _enemySprite && !_enemyParty[0].IsDead)
         {
             _enemyAnimSprite.SpeedScale = 2f;
             PlayEnemy("run");
@@ -2609,7 +2641,7 @@ public partial class BattleTest : Node2D
         tween.Finished += () =>
         {
             // Reset enemy SpeedScale after hop-in and hold idle until melee_attack starts.
-            if (attacker == _enemySprite && !_enemyDead)
+            if (attacker == _enemySprite && !_enemyParty[0].IsDead)
             {
                 _enemyAnimSprite.SpeedScale = 1f;
                 PlayEnemy("idle");
@@ -2736,9 +2768,10 @@ public partial class BattleTest : Node2D
         };
         if (comboDmgResult == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);
-        _enemyHP = Mathf.Max(0, _enemyHP - comboDamage);
+        var comboTarget = _enemyParty[0];  // single target in the current UI
+        comboTarget.CurrentHp = Mathf.Max(0, comboTarget.CurrentHp - comboDamage);
         GD.Print($"[BattleTest] Combo pass {passIndex + 1} {comboDmgResult}: {comboDamage} damage. " +
-                 $"Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+                 $"Enemy HP: {comboTarget.CurrentHp}/{comboTarget.MaxHp}");
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(EnemyDamageOrigin, comboDamage, comboDmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
@@ -2770,7 +2803,7 @@ public partial class BattleTest : Node2D
         // Return the visible player sprite to its scene origin alongside the ColorRect.
         if (_attacker == _playerSprite)
         {
-            if (!_playerDead)
+            if (!_playerParty[0].IsDead)
                 PlaySound("short_quick_steps.wav", volumeDb: 0f);
             tween.TweenProperty(_playerAnimSprite, "position", _playerAnimSpriteOrigin, TeardownDuration)
                  .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
@@ -2784,7 +2817,7 @@ public partial class BattleTest : Node2D
             // actually moved from origin (hop-in melee). Cast attacks stay at origin
             // so _attackerClosePos == origin; skip the run animation in that case.
             bool enemyMoved = _attackerClosePos != GetOrigin(_enemySprite);
-            if (!_enemyDead && enemyMoved)
+            if (!_enemyParty[0].IsDead && enemyMoved)
             {
                 PlaySound("short_quick_steps.wav", volumeDb: 0f);
                 _enemyAnimSprite.SpeedScale = 2f;
@@ -2800,7 +2833,7 @@ public partial class BattleTest : Node2D
         tween.Finished += () =>
         {
             // Reset enemy SpeedScale and return to idle after hop-back (only if enemy moved).
-            if (enemyDidMove && !_enemyDead)
+            if (enemyDidMove && !_enemyParty[0].IsDead)
             {
                 _enemyAnimSprite.SpeedScale = 1f;
                 PlayEnemy("idle");
@@ -2810,7 +2843,7 @@ public partial class BattleTest : Node2D
             // its ZIndex alone — SpawnBossReveal bumped it up so the reveal stays
             // strictly behind, and SwapToPhase2 restores the original snapshot value.
             _playerAnimSprite.ZIndex = 0;
-            if (!_enemyDead)
+            if (!_enemyParty[0].IsDead)
                 _enemyAnimSprite.ZIndex = 0;
             onComplete?.Invoke();
         };

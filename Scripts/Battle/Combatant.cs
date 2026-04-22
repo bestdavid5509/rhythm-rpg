@@ -46,6 +46,7 @@ public class Combatant
     public int  CurrentMp;
     public int  MaxMp;
     public bool IsDefending;
+    public bool IsBeckoning;  // Beckon ability active — consumed on the next SelectEnemyAttack call.
 
     // ---- Enemy-only — null/unused/default on players ----
     public EnemyData Data;

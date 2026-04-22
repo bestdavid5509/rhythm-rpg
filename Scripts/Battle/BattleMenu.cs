@@ -147,16 +147,16 @@ public partial class BattleTest : Node2D
 
     private void ShowMenu()
     {
-        _state                  = BattleState.PlayerMenu;
-        _inputLocked            = false;  // Unlock input — player can interact with menu.
-        _playerDefending        = false;  // Defend only lasts one enemy turn.
-        _inSubMenu              = false;
-        _inItemMenu             = false;
-        _menuIndex              = 0;
-        _mainMenuPanel.Visible  = true;
-        _subMenuPanel.Visible   = false;
-        _itemMenuPanel.Visible  = false;
-        _menuLayer.Visible      = true;
+        _state                        = BattleState.PlayerMenu;
+        _inputLocked                  = false;  // Unlock input — player can interact with menu.
+        _playerParty[0].IsDefending   = false;  // Defend only lasts one enemy turn.
+        _inSubMenu                    = false;
+        _inItemMenu                   = false;
+        _menuIndex                    = 0;
+        _mainMenuPanel.Visible        = true;
+        _subMenuPanel.Visible         = false;
+        _itemMenuPanel.Visible        = false;
+        _menuLayer.Visible            = true;
         RefreshMenuLabels();
         GD.Print("[BattleTest] Player menu shown.");
     }
@@ -368,7 +368,7 @@ public partial class BattleTest : Node2D
             case 0: HideMenu(); _isComboAttack = false; BeginPlayerAttack(); break;
             case 1: ShowSubMenu(); break;   // Absorbed Moves
             case 2:                         // Defend — halve miss damage this enemy turn
-                _playerDefending = true;
+                _playerParty[0].IsDefending = true;  // single defender in the current UI
                 GD.Print("[BattleTest] Player defending — incoming miss damage halved this turn.");
                 HideMenu();
                 BeginEnemyAttack();
@@ -400,19 +400,20 @@ public partial class BattleTest : Node2D
 
         var attack   = GetSubMenuAttack(_subMenuIndex);
         var category = _subMenuCategoriesData[_subMenuIndex];
+        var player   = _playerParty[0];  // single MP spender in the current UI
 
         if (category == AttackCategory.Physical)
         {
             // Physical moves (Combo Strike) — combo attack flow.
             if (attack != null && attack.MpCost > 0)
-                _playerMp -= attack.MpCost;
+                player.CurrentMp -= attack.MpCost;
             HideMenu(); _isComboAttack = true; BeginPlayerAttack();
         }
         else if (category == AttackCategory.Magic)
         {
             // Magic moves (Comet, Comet Barrage, Cure, etc.) — magic attack flow.
             if (attack != null)
-                _playerMp -= attack.MpCost;
+                player.CurrentMp -= attack.MpCost;
             _activeMagicAttack  = attack;
             _isPlayerHealAttack = (attack == _playerCureAttack);
             HideMenu(); BeginPlayerMagicAttack();
@@ -459,19 +460,22 @@ public partial class BattleTest : Node2D
     /// </summary>
     private bool IsSubMenuOptionEnabled(int index)
     {
+        var player = _playerParty[0];  // single MP spender in the current UI
+
         // Beckon — utility ability with a fixed MP cost (no AttackData backing).
-        // Also disabled when there's nothing to draw out (no learnable move or already absorbed).
+        // Also disabled when there's nothing to draw out: no learnable move, or this
+        // specific learnable has already been absorbed (per-move-type gating).
         if (_subMenuLabelsData[index] == "Beckon")
         {
-            if (_playerMp < BeckonMpCost) return false;
+            if (player.CurrentMp < BeckonMpCost) return false;
             if (EnemyData?.LearnableAttack == null) return false;
-            if (_hasAbsorbedLearnableMove) return false;
+            if (_absorbedMoves.Contains(EnemyData.LearnableAttack)) return false;
             return true;
         }
 
         var attack = GetSubMenuAttack(index);
         if (attack == null) return true;  // Back
-        if (attack.MpCost > 0 && _playerMp < attack.MpCost) return false;
+        if (attack.MpCost > 0 && player.CurrentMp < attack.MpCost) return false;
         return true;
     }
 
