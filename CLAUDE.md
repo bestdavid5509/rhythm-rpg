@@ -378,11 +378,11 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 ```csharp
 public override void _Input(InputEvent @event)
 {
-    if (_state == BattleState.GameOver) { HandleGameOverInput(@event); return; }
-    if (_state == BattleState.Victory)  { HandleVictoryInput(@event);  return; }
+	if (_state == BattleState.GameOver) { HandleGameOverInput(@event); return; }
+	if (_state == BattleState.Victory)  { HandleVictoryInput(@event);  return; }
 
-    if (_inputLocked) return;
-    // ... combat-phase routing ...
+	if (_inputLocked) return;
+	// ... combat-phase routing ...
 }
 ```
 
