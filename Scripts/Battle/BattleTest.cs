@@ -135,6 +135,16 @@ public partial class BattleTest : Node2D
     // the whole Phase 1 fight.
     [Export] public bool TestPhaseTransition = false;
 
+    // Development scaffolding — skip straight to the Phase 2 enemy at 1 HP so the first
+    // player hit triggers Victory. Also skips the intro dialogue. Forgiving scaffolding;
+    // takes priority over TestGameOverScreen and TestPhaseTransition when multiple are set.
+    [Export] public bool TestVictoryScreen = false;
+
+    // Development scaffolding — start with the player at 1 HP so the first enemy-attack miss
+    // triggers Game Over. Also skips the intro dialogue. Takes priority over TestPhaseTransition
+    // but is overridden by TestVictoryScreen.
+    [Export] public bool TestGameOverScreen = false;
+
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
     private bool             _phase2Finalised;          // guards SwapToPhase2 state-finalisation from running twice
@@ -311,6 +321,42 @@ public partial class BattleTest : Node2D
         // Phase 1 music is deferred — started silent and faded in when the intro dialogue
         // begins its fade-out. See PlayIntroDialogue and OnIntroDialogueFadeOutStarted.
 
+        // Phase 2 fallback — hoisted up from its original position later in _Ready so
+        // TestVictoryScreen can swap EnemyData over before the enemy sprite is built.
+        if (Phase2EnemyData == null)
+        {
+            Phase2EnemyData = GD.Load<EnemyData>("res://Resources/Enemies/8_sword_warrior_phase2.tres");
+            if (Phase2EnemyData == null)
+                GD.PrintErr("[BattleTest] Failed to load default Phase2EnemyData (8_sword_warrior_phase2.tres).");
+            else
+                GD.Print("[BattleTest] Phase2EnemyData defaulted to 8_sword_warrior_phase2.tres.");
+        }
+
+        // Resolve end-of-battle test flags. Priority: Victory > GameOver > PhaseTransition.
+        // Test flags are forgiving scaffolding — if multiple are set, the higher-priority
+        // one wins and the others are logged-and-ignored rather than erroring out.
+        bool testVictory     = TestVictoryScreen;
+        bool testGameOver    = TestGameOverScreen && !testVictory;
+        bool testPhaseTrans  = TestPhaseTransition && !testVictory && !testGameOver;
+        if (TestVictoryScreen && (TestGameOverScreen || TestPhaseTransition))
+            GD.PrintErr("[TEST] TestVictoryScreen overrides TestGameOverScreen and TestPhaseTransition.");
+        else if (TestGameOverScreen && TestPhaseTransition)
+            GD.PrintErr("[TEST] TestGameOverScreen overrides TestPhaseTransition.");
+        bool skipIntro = testVictory || testGameOver;
+
+        // TestVictoryScreen: swap EnemyData to Phase 2 before sprite build so the
+        // scene renders the 8 Sword Warrior from the start.
+        if (testVictory && Phase2EnemyData != null)
+        {
+            EnemyData = Phase2EnemyData;
+            SkipHopIn = true;  // 8 Sword Warrior is stationary — hop-in would look wrong.
+            GD.Print("[TEST] TestVictoryScreen active — skipping intro, starting Phase 2 with enemy at 1 HP.");
+        }
+        else if (testGameOver)
+        {
+            GD.Print("[TEST] TestGameOverScreen active — skipping intro, player HP set to 1.");
+        }
+
         // Grab character sprites and record their original positions for teardown restoration.
         _playerSprite = GetNode<ColorRect>("PlayerSprite");
         _enemySprite  = GetNode<ColorRect>("EnemySprite");
@@ -392,17 +438,6 @@ public partial class BattleTest : Node2D
 
         _targetZone = GetNode<TargetZone>("TargetZone");
 
-        // Phase 2 fallback — if the scene didn't wire up Phase2EnemyData in the inspector,
-        // load the default Phase 2 resource from disk so the transition works out of the box.
-        if (Phase2EnemyData == null)
-        {
-            Phase2EnemyData = GD.Load<EnemyData>("res://Resources/Enemies/8_sword_warrior_phase2.tres");
-            if (Phase2EnemyData == null)
-                GD.PrintErr("[BattleTest] Failed to load default Phase2EnemyData (8_sword_warrior_phase2.tres).");
-            else
-                GD.Print("[BattleTest] Phase2EnemyData defaulted to 8_sword_warrior_phase2.tres.");
-        }
-
         // EnemyData overrides the default max HP when assigned in the inspector.
         if (EnemyData != null && EnemyData.MaxHp > 0)
         {
@@ -412,23 +447,46 @@ public partial class BattleTest : Node2D
                      $"MaxHp={EnemyData.MaxHp}, AttackPool={EnemyData.AttackPool?.Length ?? 0} attack(s).");
         }
 
-        // Test hook: drop enemy HP to 1 so the first player hit triggers the phase
-        // transition immediately. Applied AFTER EnemyData HP init so it isn't clobbered.
-        // MaxHP is preserved so the HP bar shows the (nearly empty) correct scale.
-        if (TestPhaseTransition)
+        // Test hooks — applied AFTER EnemyData HP init so they aren't clobbered. MaxHP is
+        // preserved so HP bars show the correct scale. Priority order resolved above.
+        if (testVictory)
+        {
+            _enemyHP = 1;
+            // Consume the phase-transition gate so enemy death goes straight to Victory
+            // instead of retriggering the Phase 1 → Phase 2 reveal cutscene.
+            _phaseTransitionConsumed = true;
+        }
+        else if (testPhaseTrans)
         {
             _enemyHP = 1;
             GD.Print("[BattleTest] TestPhaseTransition active — enemy HP forced to 1.");
+        }
+        if (testGameOver)
+        {
+            _playerHP = 1;
         }
 
         BuildMenu();
         UpdateHPBars();
 
-        // Intro dialogue runs before any turn flow. Menu stays hidden and music stays silent
-        // until OnIntroDialogueFadeOutStarted (music fade-in) and OnIntroDialogueCompleted
-        // (ShowMenu fade-in) fire. Menu _menuLayer.Visible is already false from BuildMenu.
-        _inputLocked = true;
-        PlayIntroDialogue();
+        if (skipIntro)
+        {
+            // Test-flag path — skip the intro dialogue entirely and go straight to the
+            // normal turn flow. Start the phase-appropriate music at full volume so the
+            // scene doesn't open silent.
+            if (testVictory) StartPhase2Music();
+            else             StartPhase1Music();
+            ShowMenu();
+        }
+        else
+        {
+            // Intro dialogue runs before any turn flow. Menu stays hidden and music stays
+            // silent until OnIntroDialogueFadeOutStarted (music fade-in) and
+            // OnIntroDialogueCompleted (ShowMenu fade-in) fire. Menu _menuLayer.Visible
+            // is already false from BuildMenu.
+            _inputLocked = true;
+            PlayIntroDialogue();
+        }
     }
 
     public override void _Input(InputEvent @event)
