@@ -40,7 +40,7 @@ If any of these become design requirements later, the abstraction gets revised t
 | 5 | Incremental vs. up-front | Combatant-first with single-entry party lists for 1v1; scaffolding grows the lists | **Medium-High** |
 | 6 | Target selection (player) | New `BattleState.SelectingTarget` | **High** |
 | 7 | Target selection (enemy) | Static helper returning first living ally; defer strategy enum | **High** |
-| 8 | Signal payloads | Every BattleSystem signal carries `Combatant attacker, Combatant target`; TimingPrompt stays target-free | **High** |
+| 8 | Signal payloads | BattleSystem signals carry a `SequenceContext : RefCounted` wrapper holding Attacker, Target, CurrentAttack, SequenceId; TimingPrompt stays target-free | **High** (verified) |
 
 ---
 
@@ -91,6 +91,10 @@ public class Combatant
 - **Mixing player and enemy fields on one class** feels untidy — a player combatant has a null `Data` reference, and an enemy combatant has an ignored `CurrentMp`. This is a deliberate trade for callsite simplicity. If the untidy feeling grows, splitting later is mechanical.
 
 **Implications:** Q2, Q3, Q8 downstream all assume this shape.
+
+**Addendum — signal payload vehicle:** `Combatant` remains a plain C# class. However, Godot 4's C# `[Signal]` source generator rejects non-Variant-compatible types in delegate signatures (error `GD0202`), so `Combatant` references cannot be passed through signals directly. The marshalling vehicle is `SequenceContext : RefCounted` (see Q8) — a wrapper that holds Combatant references as fields.
+
+Surprising-but-good finding from the Phase 3.0 verification: **plain-C#-class references nested inside a RefCounted payload preserve identity through Variant marshalling.** `ctx.Attacker` on the subscriber side is the exact same `Combatant` instance that was set on the sender side — not a copy, not null. This is what makes the wrapper approach tenable without forcing `Combatant` itself to inherit from any Godot type. The Godot-type coupling is confined to `SequenceContext`; `Combatant` keeps its lifecycle independence, serialization friendliness, and scene-tree-nonresidence intact.
 
 ---
 
@@ -252,34 +256,102 @@ public static class TargetSelector
 
 ## Q8 — Signal payload shape
 
-**Proposed answer:** Every BattleSystem signal carries `Combatant attacker, Combatant target` references directly (not indices). `TimingPrompt` signals stay target-free — confirmed correct per audit J2.
+**Proposed answer:** BattleSystem signals carry a single `SequenceContext : RefCounted` parameter — a wrapper holding references to the sequence's Attacker, Target, CurrentAttack, and a monotonic SequenceId. `TimingPrompt` signals stay target-free.
 
 ```csharp
+/// <summary>
+/// Signal payload wrapper carrying per-sequence context through BattleSystem signals.
+/// RefCounted so it marshals through Variant (plain C# class references cannot — see
+/// the "Why Option A was rejected" note below).
+///
+/// Lifetime: one instance per sequence. BattleSystem creates it when StartSequence is
+/// called, holds it for the sequence's duration, emits it unchanged with every signal.
+/// Subscribers can use reference equality to identify which sequence a signal belongs to.
+/// </summary>
+public partial class SequenceContext : RefCounted
+{
+    public Combatant  Attacker      { get; init; }
+    public Combatant  Target        { get; init; }
+    public AttackData CurrentAttack { get; init; }
+    public int        SequenceId    { get; init; }
+}
+
 [Signal] public delegate void StepPassEvaluatedEventHandler(
-    int result, int passIndex, int stepIndex,
-    Combatant attacker, Combatant target);
+    int result, int passIndex, int stepIndex, SequenceContext ctx);
 
 [Signal] public delegate void StepStartedEventHandler(
-    int stepIndex, Combatant attacker, Combatant target);
+    int stepIndex, SequenceContext ctx);
 
 [Signal] public delegate void SequenceCompletedEventHandler(
-    Combatant attacker, Combatant target);
+    SequenceContext ctx);
 ```
 
-**Reasoning:**
-- **Consistent payload shape across all BattleSystem signals.** Subscribers never wonder "does this signal have attacker? does it have target?" — every signal has both.
-- **Direct `Combatant` references, not indices.** Indices would require subscribers to know which list to index into (`_playerParty[2]` vs `_enemyParty[2]`) — adds ceremony without benefit. Direct references are unambiguous.
-- **Both attacker and target in every payload**, not just the relevant one. Over-provisioning is trivially cheap; it prevents subscriber code from having to maintain an implicit mapping between signal-type and what-info-it-carries.
-- **TimingPrompt stays target-free** because it's a UI widget that renders and resolves inputs. It has no business knowing about combat semantics. The attacker/target binding happens one level up, in BattleSystem, where the subscription is made.
+### Field-by-field purpose
 
-**Trade-offs:**
-- **Blocking verification before Phase 3 refactor work begins.** Godot signal marshalling of plain C# class references needs to be verified before Phase 3's broader refactor begins. If `Combatant` (a non-Godot plain class) doesn't marshal through `[Signal]` payloads, the design for Q8 changes (passing indices and resolving at subscribers) and the Phase 3 refactor order shifts accordingly.
+| Field | Purpose |
+|---|---|
+| `Combatant Attacker` | The unit executing the sequence. Subscribers read `ctx.Attacker.AnimSprite`, `ctx.Attacker.Side`, etc. to route animation, sound, and side-dependent logic without singleton state lookups. |
+| `Combatant Target` | The unit being targeted. Subscribers read `ctx.Target.CurrentHp -= damage`, derive effect positions from `ctx.Target.PositionRect`, etc. |
+| `AttackData CurrentAttack` | The attack being executed. Subscribers read `ctx.CurrentAttack.Category` to branch on Physical vs. Magic (miss-cancel rule, damage calc), and `ctx.CurrentAttack.IsHopIn` to branch on hop-in vs. cast paths. Eliminates the current indirection through `_battleSystem.GetCurrentAttack()`. |
+| `int SequenceId` | Monotonic counter assigned by BattleSystem at `StartSequence` entry. Three uses: (1) logging traceability (`seq#5 step 2/3 circle resolved` reads better than context-free logs); (2) stale-signal detection if the existing `_sequenceActive` guard ever fails; (3) future-proofing for concurrent-sequence work without re-designing the payload. |
 
-  **Phase 3 first action:** construct a minimal marshalling test — create a throwaway signal carrying a plain C# class reference, subscribe, fire it, verify the subscriber receives the reference with identity preserved. Only after this test passes do we proceed with the broader refactor. If the test fails, stop and revise Q8 before touching any other refactor work.
+### Subscriber pattern
 
-- **Signal subscribers that don't care about payload** ignore it — minor waste, acceptable.
+Subscribers dereference through the wrapper:
 
-**Implications for Phase 3:** When threading Combatant references through, the signal signatures expand simultaneously. Subscribers update in the same pass. This ties Phase 3's J-category work to the broader A-category refactor.
+```csharp
+private void OnStepPassEvaluated(int result, int passIndex, int stepIndex, SequenceContext ctx)
+{
+    if (ctx.Attacker.Side == CombatantSide.Player)
+    {
+        // player-attacker path — apply damage to enemy target
+        ctx.Target.CurrentHp = Mathf.Max(0, ctx.Target.CurrentHp - damage);
+        PlayEnemyHurtFlash(ctx.Target);
+    }
+    else
+    {
+        // enemy-attacker path — apply damage to player target
+        ctx.Target.CurrentHp = Mathf.Max(0, ctx.Target.CurrentHp - damage);
+        PlayPlayer("hit", ctx.Target);
+    }
+}
+```
+
+The one-extra-dereference cost (`ctx.Attacker.CurrentHp` vs. `attacker.CurrentHp`) is negligible and arguably improves readability — the `ctx.` prefix makes it obvious the field is coming from the sequence's payload, not a local or singleton.
+
+### Lifetime and identity
+
+**One SequenceContext per sequence.** BattleSystem constructs a `SequenceContext` at `StartSequence` entry, holds it as a field for the sequence's duration, and emits that same instance unchanged through every signal during the sequence. Attacker, Target, CurrentAttack, and SequenceId don't change mid-sequence, so the `init`-only properties are safe.
+
+**Reference equality identifies the sequence.** If a subscriber ever needs to verify "am I still handling the sequence I started tracking?", `ReferenceEquals(trackedCtx, ctx)` answers directly. Not needed at 1v1, but valuable if concurrent sequences are ever introduced.
+
+### Reasoning
+
+- **Consistent payload shape across all BattleSystem signals.** Every signal has a single `SequenceContext ctx` parameter plus any signal-specific primitives (result, passIndex, stepIndex). Subscribers never wonder "does this signal have attacker? does it have target?" — everything about the sequence is on `ctx`.
+- **Plain-C#-class references preserve identity inside the wrapper.** Verified in Phase 3.0 test: `ctx.Attacker`, `ctx.Target`, `ctx.CurrentAttack` all round-trip with identity preserved, even though `Combatant` and the nested classes aren't GodotObject-derived.
+- **TimingPrompt stays target-free** — UI widget, no business knowing combat semantics. The attacker/target binding happens one level up, in BattleSystem, where the subscription is made.
+
+### Trade-offs
+
+- One extra indirection on every payload access (`ctx.Attacker` vs. direct `attacker` parameter). Trivial and arguably improves readability.
+- One extra allocation per sequence (the `SequenceContext` instance). At the rate sequences start (one per turn), this is noise.
+- `RefCounted` base coupling is confined to `SequenceContext` itself. `Combatant`, `AttackData`, and other data classes are unaffected.
+
+**Implications for Phase 3:** BattleSystem constructs `SequenceContext` at `StartSequence` entry; every existing signal emission updates to include it. Subscribers in BattleTest update to take `SequenceContext ctx` and dereference accordingly. This ties Phase 3's J-category work to the broader A-category refactor.
+
+---
+
+## Why Option A was rejected
+
+During Phase 3.0 marshalling verification, the original Q8 design — "BattleSystem signals carry `Combatant attacker, Combatant target` references directly" — failed at compile time. Godot's C# source generator emits `GD0202` for any `[Signal]` delegate parameter whose type isn't Variant-compatible, and plain C# classes (not derived from `GodotObject`) aren't Variant-compatible.
+
+Three revision paths were considered. **Option A — make `Combatant` inherit from `RefCounted`** (or `GodotObject`) — would have preserved the "pass Combatant references directly in signal payloads" ergonomic. It was rejected because:
+
+Binding `Combatant` to Godot's type hierarchy for a concern that only exists at signal boundaries is too invasive. `Combatant`'s design calls for it to be a plain C# class specifically so it stays independent of Godot's object lifecycle (no `GodotObject`-style ref counting concerns in non-signal code paths), serialization-friendly if save systems ever need it, and scene-tree-nonresident. Making the whole class derive from `RefCounted` imports Godot's lifetime semantics everywhere `Combatant` is touched — damage routing, positioning, state mutation — to solve a problem that only manifests at the signal-emit boundary.
+
+**Option C (adopted) — confine the Godot-type coupling to a payload wrapper (`SequenceContext : RefCounted`) that holds plain `Combatant` references as fields** — isolates the Godot-hierarchy coupling to exactly the place it's needed (crossing the signal bus) without leaking it into the rest of the combat code. The Phase 3.0 verification confirmed this works: plain-C#-class references nested inside a RefCounted payload preserve identity through Variant marshalling.
+
+Option B (pass indices through signals; subscribers resolve to Combatant via party lists) was also considered and rejected — it reintroduces a global-state dependency on the party lists at every subscriber, undermining the design's self-sufficiency goal.
 
 ---
 
@@ -287,7 +359,7 @@ public static class TargetSelector
 
 The answers above reshape the Phase 3 refactor plan as follows:
 
-1. **Order changes:** Construct `Combatant` + party lists **first**, before any of the A/B/C/D/E/F findings. Subsequent categories' refactors are then mechanical. Phase 3's actual first action is the Q8 marshalling test — confirm signal compatibility before committing to the signature shape.
+1. **Order changes:** Construct `Combatant` + party lists **first**, before any of the A/B/C/D/E/F findings. Subsequent categories' refactors are then mechanical. The Q8 marshalling verification ran and passed during Phase 3.0 — the `SequenceContext : RefCounted` wrapper approach is confirmed implementable.
 
 2. **A category (HP/MP state):** every field becomes per-entry-on-Combatant. Lists have 1 entry for prototype; behavior identical.
 
@@ -295,15 +367,15 @@ The answers above reshape the Phase 3 refactor plan as follows:
 
 4. **C category (positioning):** pair-based helpers (`ComputeCameraMidpoint`, `ComputeSlamPosition`) take explicit `Combatant attacker, Combatant target` parameters instead of reading singleton fields. `GetOrigin(ColorRect sprite)` becomes `combatant.Origin`.
 
-5. **D category (BattleSystem signatures):** `StartSequence` takes `Combatant attacker, Combatant target` replacing `Vector2 defenderCenter, bool isPlayerAttack`. `_isPlayerAttack` becomes `_attacker.Side == CombatantSide.Player`.
+5. **D category (BattleSystem signatures):** `StartSequence` takes `Combatant attacker, Combatant target` (internally constructs the `SequenceContext` for the sequence's duration), replacing `Vector2 defenderCenter, bool isPlayerAttack`. `_isPlayerAttack` becomes `_attacker.Side == CombatantSide.Player` (or read from the `SequenceContext` inside the sequence).
 
-6. **E category (damage):** `_enemyHP = ... - damage` becomes `target.TakeDamage(damage)` (or `target.CurrentHp -= damage` inline if we skip method wrapping).
+6. **E category (damage):** `_enemyHP = ... - damage` becomes `target.CurrentHp -= damage` (direct mutation; `TakeDamage` method can be extracted later if repetition motivates).
 
 7. **F category (effects):** `SpawnCounterSlashEffect`, `SpawnEtherEffect`, `PlayEnemyHurtFlash`, `FlashEnemyWhite`, `ShakeEnemySprite` all take a `Combatant target` parameter.
 
 8. **I category (caches):** `_playerMagicDefenderCenter` / `_playerMagicPromptPos` become `_playerMagicTarget` (Combatant reference) — center derived on-demand.
 
-9. **J category (signals):** payload expansion happens as part of D — tied together, not separate pass.
+9. **J category (signals):** every BattleSystem signal adds a `SequenceContext ctx` parameter; subscribers update to dereference through `ctx.Attacker` / `ctx.Target` / `ctx.CurrentAttack`. BattleSystem constructs the `SequenceContext` at `StartSequence` entry and holds it through the sequence. `TimingPrompt` signals unchanged. Tied to D-category work — signature change and subscriber updates land in the same pass.
 
 10. **Not in Phase 3 scope:** D5 (AttackStep schema), G1 (target-selection feature — Phase 4), H1 (scene structure — Part 2), K (audio — Part 2), Q6 `SelectingTarget` state (Phase 4), Q7 `TargetSelector` integration (Phase 3 adds the helper; Phase 4 wires up player-side target-selection UI).
 
