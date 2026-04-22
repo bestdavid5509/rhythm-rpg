@@ -124,10 +124,6 @@ public partial class BattleTest : Node2D
     // to this EnemyData instead of ending the battle. Null disables the transition.
     [Export] public EnemyData Phase2EnemyData;
 
-    // When true, skip the reveal animation + dialogue entirely and swap directly to
-    // Phase 2 once the Phase 1 death animation completes. Test hook.
-    [Export] public bool SkipPhaseTransition = false;
-
     // When true, start the battle with the enemy at 1 HP so the first player hit
     // kills the warrior and triggers the Phase 1 → Phase 2 transition immediately.
     // Test hook — lets us exercise the full reveal sequence without playing through

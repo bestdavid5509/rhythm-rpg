@@ -431,12 +431,6 @@ public partial class BattleTest : Node2D
     {
         if (!GodotObject.IsInstanceValid(this)) return;
         SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
-        if (SkipPhaseTransition && IsPhaseTransitionPending())
-        {
-            GD.Print("[BattleTest] SkipPhaseTransition — swapping to Phase 2 immediately.");
-            SwapToPhase2();
-            return;
-        }
         if (IsPhaseTransitionPending())
         {
             // Warrior death finished on the main sprite. The reveal sprite has been
@@ -482,7 +476,6 @@ public partial class BattleTest : Node2D
         // holds through the boss reveal animation; Phase 2 music starts only when the
         // "You've only just begun to suffer." dialogue appears (below in OnEnemyDeathFinished).
         FadeOutMusic(2.5f);
-        if (SkipPhaseTransition) return;  // SwapToPhase2 runs directly in OnEnemyDeathFinished
         GetTree().CreateTimer(4f / 12f).Timeout += SpawnBossReveal;
     }
 
@@ -595,8 +588,8 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Visual-only half of the Phase 2 swap: frees the reveal sprite, reassigns EnemyData,
     /// rebuilds SpriteFrames, repositions, restores the warrior ZIndex, and starts idle.
-    /// Idempotent — guarded by _phase2SpriteApplied so SwapToPhase2 can safely call it
-    /// again on the SkipPhaseTransition path.
+    /// Idempotent — guarded by _phase2SpriteApplied so SwapToPhase2's defensive second
+    /// call is safely a no-op on the normal path.
     /// </summary>
     private void ApplyPhase2Sprite()
     {
@@ -658,8 +651,8 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// State-only half of the Phase 2 swap: clears per-fight flags, resets HP, updates
     /// the name label + HP bar, and returns control to the player. The sprite work
-    /// already happened earlier in ApplyPhase2Sprite (unless SkipPhaseTransition is set,
-    /// in which case it runs here as a fallback).
+    /// already happened earlier in ApplyPhase2Sprite (called from OnEnemyDeathFinished
+    /// via the IsPhaseTransitionPending branch).
     /// </summary>
     private void SwapToPhase2()
     {
@@ -671,10 +664,10 @@ public partial class BattleTest : Node2D
         _phase2Finalised = true;
         GD.Print($"[BattleTest] Finalising Phase 2 swap: {Phase2EnemyData.EnemyName}.");
 
-        // SkipPhaseTransition path: OnBossRevealFinished never ran, so do the sprite
-        // work now. No-op on the normal path (ApplyPhase2Sprite already ran).
-        // ApplyPhase2Sprite also sets _phaseTransitionConsumed as a belt-and-suspenders
-        // guarantee for the SkipPhaseTransition path.
+        // Defensive idempotent call — ApplyPhase2Sprite already ran in
+        // OnEnemyDeathFinished. The _phase2SpriteApplied guard makes this a no-op;
+        // retained so any future trigger path into SwapToPhase2 that bypasses
+        // OnEnemyDeathFinished still gets the sprite work done.
         ApplyPhase2Sprite();
 
         // Per-fight flags that must not carry over from Phase 1 into Phase 2.

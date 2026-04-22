@@ -402,7 +402,6 @@ Triggered automatically on Warrior (Phase 1) death when `BattleTest.Phase2EnemyD
 
 **Inspector exports:**
 - `Phase2EnemyData` — Phase 2 `EnemyData` resource. `null` disables the transition; default fallback loaded at boot.
-- `SkipPhaseTransition` — skip the reveal + dialogue and swap directly when the Phase 1 death animation completes. Test hook.
 - `TestPhaseTransition` — start the battle with Warrior HP = 1 so the first hit triggers the transition.
 
 **State flags** (in `BattleTest.cs`):
@@ -487,8 +486,6 @@ Development scaffolding — `[Export] bool` flags on `BattleTest` that shortcut 
 **Intro-dialogue skip:** `TestVictoryScreen` and `TestGameOverScreen` both skip `PlayIntroDialogue` — sitting through 5 lines of dialogue every iteration defeats the purpose of the flag. `TestPhaseTransition` does not skip the intro (its purpose is to exercise the phase transition, not the end-screen flow, so the usual intro is part of the path being tested).
 
 **Phase2EnemyData fallback hoist:** the default `Phase2EnemyData` resource load (from `res://Resources/Enemies/8_sword_warrior_phase2.tres`) is hoisted to the top of `_Ready` — earlier than strictly needed for non-test paths — so `TestVictoryScreen` can reassign `EnemyData = Phase2EnemyData` before the enemy sprite is built downstream. Non-test flow is unchanged.
-
-**Note — `SkipPhaseTransition` is a separate flag, not a test flag.** Despite the parallel-looking name, `SkipPhaseTransition` (documented in the Phase 1 → Phase 2 Transition section) operates on the reveal sequence itself, not on battle init. It's a feature toggle for bypassing the reveal when testing downstream Phase 2 state. `TestPhaseTransition` accelerates *reaching* the transition; `SkipPhaseTransition` accelerates *through* it. Rename candidate flagged in Known Next Steps.
 
 ### SkipHopIn Flag and FloorY Constant
 
@@ -591,7 +588,6 @@ Two distinct text-display components serve different UX purposes. They are **not
 - **Taunt ability (post-prototype)** — player action that baits the enemy into using their signature/learnable move
 - **Self-targeting spell alignment** — Cure spell effect and target zone are not perfectly centered on the player's visual body due to the knight sprite having the character body left-of-center within its frame. Revisit when implementing the full character system — the correct fix is either adjusting the sprite frame composition or implementing a per-spell visual center offset.
 - **Refactor parry counter-attack to use `BattleSystem.StartSequence` with impact-frame sync** (post-prototype, not urgent) — the current hand-rolled timer cascade in `PlayParryCounter` (nested `CreateTimer` calls for wind-up → impact → follow-through → hold) is architecturally inconsistent with every other attack in the game, which routes through `BattleSystem` and uses `ImpactFrames`-anchored animation sync. The hand-rolled approach makes timing tweaks fragile — changing one delay can desync the slash spawn from the player pose — and duplicates logic that already exists in `SpawnEffectSprite`. Proper fix: author the counter as an `AttackData` resource with its own `AttackStep`s, then drive it through `BattleSystem.StartSequence` like any other attack. Would also make the counter tunable via the inspector without code changes.
-- **Rename `TestPhaseTransition` / `SkipPhaseTransition` to disambiguate** — the parallel names suggest symmetric flags, but they operate on different parts of the phase transition (pre-trigger vs. mid-sequence). Candidate renames: `TriggerPhase2Fast` for the HP-1 flag, `SkipPhase2Reveal` for the skip-reveal flag. Defer to Phase 1 code review.
 - **Target selection + multi-character scaffolding** — see docs/target-selection-and-scaffolding-plan.md. Prerequisite to the Phase 1 code review. Multi-session scope. Consider /model opusplan in Claude Code.
 - **Target selection audit** — see docs/target-selection-audit.md. Reference for the in-progress multi-character refactor on branch target-selection-and-scaffolding.
 - **Phase 1 code review** — see docs/phase1-code-review-plan.md. Run before starting Phase 2 using /model opusplan in Claude Code.
