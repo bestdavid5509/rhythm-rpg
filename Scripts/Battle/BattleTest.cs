@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Godot;
 
 /// <summary>
@@ -192,6 +193,16 @@ public partial class BattleTest : Node2D
     private AnimatedSprite2D _playerAnimSprite;
     private TargetZone       _targetZone;       // shared target ring — shown for the duration of any prompt sequence
     private BattleDialogue   _introDialogue;    // owned narrative-dialogue component; QueueFree'd after DialogueCompleted
+
+    // Phase 3.1 scaffolding — party lists owned by BattleTest. Single-entry for the
+    // 1v1 prototype; constructed at the end of _Ready from the already-settled
+    // singleton state. NOT yet the source of truth for anything — consumers still
+    // read from _playerHP, _enemyAnimSprite, _enemyFlashMaterial, etc. Subsequent
+    // phases (3.2 onward) migrate consumers category-by-category. When all consumers
+    // have migrated, the singleton fields can be retired.
+    // See docs/combatant-abstraction-design.md.
+    private List<Combatant> _playerParty = new();
+    private List<Combatant> _enemyParty  = new();
 
     // =========================================================================
     // Characters and animations
@@ -465,6 +476,12 @@ public partial class BattleTest : Node2D
         {
             _playerHP = 1;
         }
+
+        // Phase 3.1 scaffolding — construct single-entry party lists from the now-settled
+        // singleton state. Values mirror existing fields exactly; sprite/material refs point
+        // at the same node instances the singleton fields reference (no duplication).
+        // Consumers do not yet read from these lists — that migration happens in Phase 3.2+.
+        BuildInitialParties();
 
         BuildMenu();
         UpdateHPBars();
@@ -2298,6 +2315,63 @@ public partial class BattleTest : Node2D
 
         BuildEnemyPanel(layer);
         BuildPlayerPanel(layer);
+    }
+
+    /// <summary>
+    /// Phase 3.1 scaffolding — constructs single-entry party lists mirroring the existing
+    /// singleton combat state. Called once at the end of <see cref="_Ready"/> after all
+    /// singleton initialization (HP, sprites, EnemyData, test-flag overrides) has settled.
+    ///
+    /// Every field is populated from an existing singleton. Sprite/material references
+    /// are shared (same node instance, two references). No state is invented — if
+    /// TestGameOverScreen has forced _playerHP to 1, the Combatant sees 1; if
+    /// TestVictoryScreen has swapped EnemyData to Phase 2, the enemy Combatant sees the
+    /// Phase 2 values.
+    ///
+    /// Origin note: the Combatant's single <c>Origin</c> field maps to the ColorRect-based
+    /// origin (<c>_playerOrigin</c> / <c>_enemyOrigin</c>) because that's what the existing
+    /// positioning helpers use via <c>GetOrigin(ColorRect)</c>. The separate
+    /// AnimatedSprite2D origin (<c>_playerAnimSpriteOrigin</c>, <c>_enemyAnimSpriteOrigin</c>)
+    /// is not yet modeled on Combatant — will be revisited during C-category refactor
+    /// (Phase 3.4), either as a second field or by deriving from sprite state on demand.
+    /// </summary>
+    private void BuildInitialParties()
+    {
+        var playerCombatant = new Combatant
+        {
+            Name         = "Knight",
+            Side         = CombatantSide.Player,
+            CurrentHp    = _playerHP,
+            MaxHp        = PlayerMaxHP,
+            IsDead       = false,
+            Origin       = _playerOrigin,
+            PositionRect = _playerSprite,
+            AnimSprite   = _playerAnimSprite,
+            CurrentMp    = _playerMp,
+            MaxMp        = PlayerMaxMp,
+            IsDefending  = false,
+        };
+        _playerParty.Add(playerCombatant);
+
+        var enemyCombatant = new Combatant
+        {
+            Name            = EnemyData?.EnemyName ?? "Enemy",
+            Side            = CombatantSide.Enemy,
+            CurrentHp       = _enemyHP,
+            MaxHp           = _enemyMaxHP,
+            IsDead          = false,
+            Origin          = _enemyOrigin,
+            PositionRect    = _enemySprite,
+            AnimSprite      = _enemyAnimSprite,
+            Data            = EnemyData,
+            HasBeenAbsorbed = _hasAbsorbedLearnableMove,
+            FlashMaterial   = _enemyFlashMaterial,
+        };
+        _enemyParty.Add(enemyCombatant);
+
+        GD.Print($"[BattleTest] Combatant scaffolding built — " +
+                 $"playerParty: 1 ({playerCombatant.Name}, HP={playerCombatant.CurrentHp}/{playerCombatant.MaxHp}); " +
+                 $"enemyParty: 1 ({enemyCombatant.Name}, HP={enemyCombatant.CurrentHp}/{enemyCombatant.MaxHp}).");
     }
 
     private void BuildEnemyPanel(CanvasLayer layer)

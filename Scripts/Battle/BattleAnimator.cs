@@ -697,6 +697,23 @@ public partial class BattleTest : Node2D
         if (_enemyNameLabel != null) _enemyNameLabel.Text = EnemyData.EnemyName;
         UpdateHPBars();
 
+        // Phase 3.1 scaffolding — keep the enemy Combatant in sync with the updated
+        // singleton state through the phase transition. When consumers migrate off the
+        // singletons in later phases, this becomes the primary state update (and the
+        // singleton writes above can retire). AnimSprite, PositionRect, and FlashMaterial
+        // references stay valid — same node instances, just new SpriteFrames via
+        // ApplyPhase2Sprite. Origin (ColorRect-based) is unchanged by phase transition.
+        if (_enemyParty.Count > 0)
+        {
+            var enemyCombatant              = _enemyParty[0];
+            enemyCombatant.Data             = EnemyData;
+            enemyCombatant.Name             = EnemyData.EnemyName;
+            enemyCombatant.CurrentHp        = EnemyData.MaxHp;
+            enemyCombatant.MaxHp            = EnemyData.MaxHp;
+            enemyCombatant.IsDead           = false;
+            enemyCombatant.HasBeenAbsorbed  = false;
+        }
+
         // Reset attack-pool rotation so the new pool starts fresh.
         _lastAttackIndex = -1;
 

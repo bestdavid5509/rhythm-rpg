@@ -1,0 +1,60 @@
+using Godot;
+
+/// <summary>
+/// Faction / side a combatant belongs to. Replaces binary `_isPlayerAttack` /
+/// `attacker == _playerSprite` comparisons throughout the combat pipeline
+/// once the Phase 3 refactor migrates consumers off singleton fields.
+/// </summary>
+public enum CombatantSide
+{
+    Player,
+    Enemy,
+}
+
+/// <summary>
+/// A single combatant in the battle system — one per unit, regardless of side.
+///
+/// Plain C# class (not a Godot <c>Node</c> or <c>Resource</c>): lifecycle is
+/// independent of the scene tree, references to scene nodes point at existing
+/// nodes rather than owning them, and the class is safe to pass around as a
+/// shared reference.
+///
+/// Signal-marshalling note: <c>Combatant</c> cannot be passed directly through
+/// Godot <c>[Signal]</c> payloads (plain C# classes aren't Variant-compatible —
+/// the source generator emits GD0202). The marshalling vehicle is
+/// <see cref="SequenceContext"/>, a <c>RefCounted</c>-derived wrapper that
+/// holds <c>Combatant</c> references as fields. Plain-C#-class refs nested
+/// inside a RefCounted payload preserve identity through Variant marshalling;
+/// verified in Phase 3.0 of the target-selection refactor.
+///
+/// See <c>docs/combatant-abstraction-design.md</c> (Q1, Q8) for the full rationale.
+/// </summary>
+public class Combatant
+{
+    public string        Name;
+    public CombatantSide Side;
+
+    // ---- Combat-universal state (both sides use these) ----
+    public int              CurrentHp;
+    public int              MaxHp;
+    public bool             IsDead;
+    public Vector2          Origin;        // world-space origin for positioning
+    public ColorRect        PositionRect;  // existing anchor node (formerly _playerSprite / _enemySprite)
+    public AnimatedSprite2D AnimSprite;    // existing animated sprite node (formerly _playerAnimSprite / _enemyAnimSprite)
+
+    // ---- Player-only — null/unused/default on enemies ----
+    public int  CurrentMp;
+    public int  MaxMp;
+    public bool IsDefending;
+
+    // ---- Enemy-only — null/unused/default on players ----
+    public EnemyData Data;
+
+    // Tracks absorption of this enemy's single Data.LearnableAttack — consistent with the
+    // "one learnable per enemy" assumption in EnemyData.LearnableAttack. If future design
+    // calls for multiple learnable moves per enemy, this field changes to
+    // HashSet<AttackData> AbsorbedMoves or similar.
+    public bool HasBeenAbsorbed;
+
+    public ShaderMaterial FlashMaterial;
+}
