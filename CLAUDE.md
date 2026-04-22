@@ -461,3 +461,69 @@ Triggered automatically on Warrior (Phase 1) death when `BattleTest.Phase2EnemyD
 - **Self-targeting spell alignment** — Cure spell effect and target zone are not perfectly centered on the player's visual body due to the knight sprite having the character body left-of-center within its frame. Revisit when implementing the full character system — the correct fix is either adjusting the sprite frame composition or implementing a per-spell visual center offset.
 - **Refactor parry counter-attack to use `BattleSystem.StartSequence` with impact-frame sync** (post-prototype, not urgent) — the current hand-rolled timer cascade in `PlayParryCounter` (nested `CreateTimer` calls for wind-up → impact → follow-through → hold) is architecturally inconsistent with every other attack in the game, which routes through `BattleSystem` and uses `ImpactFrames`-anchored animation sync. The hand-rolled approach makes timing tweaks fragile — changing one delay can desync the slash spawn from the player pose — and duplicates logic that already exists in `SpawnEffectSprite`. Proper fix: author the counter as an `AttackData` resource with its own `AttackStep`s, then drive it through `BattleSystem.StartSequence` like any other attack. Would also make the counter tunable via the inspector without code changes.
 - **Phase 1 code review** — see docs/phase1-code-review-plan.md. Run before starting Phase 2 using /model opusplan in Claude Code.
+
+## Design Decisions — Pending Implementation
+
+These are resolved design decisions whose implementation is deferred to
+future phases. They aren't tasks; they're constraints that future work
+must honor.
+
+### Prototype vs. full-game: Harbinger absorption
+In the current prototype, the apprentice CAN absorb The Harbinger's
+learnable move and use it mid-fight. This is retained for the
+prototype because it's the only place in the prototype scope where
+the full absorb loop (parry → learn → use) can be demonstrated to
+the player.
+
+In the full game (once the tutorial forest, cutscenes, and item
+system exist), The Harbinger's move will NOT be absorbable in the
+fight. Instead, winning (or surviving with good performance) drops
+an item containing the move. The player cannot use the item during
+the fight because the post-fight cutscenes (apprentice dies, senior
+survives, time skip) run immediately. When the senior is playable
+in the present, the item appears in his inventory and can be used
+to learn the move at a cost.
+
+This reinforces The Harbinger's otherworldliness — his moves are not
+something you can simply witness and replicate; they require a
+hard-won vessel to carry them out of the fight.
+
+**Cleanup task when implementing:** remove the apprentice's ability
+to absorb The Harbinger's learnable move; wire an item drop on fight
+resolution; ensure the move is learnable from the item post-cutscene.
+
+### Item-taught moves
+Items represent a second progression axis distinct from absorption:
+
+- **Absorption** — skill-based, in-the-moment, rewards perfect parrying
+  against any enemy willing to show a learnable move. Covers the
+  common enemy pool.
+- **Items** — scarce, narrative-bound. Used for two categories:
+  (1) exclusive moves that cannot be learned any other way, and
+  (2) missable moves (e.g. unique boss moves) that would otherwise be
+  permanently lost. Item-taught moves may be expensive to learn,
+  particularly for missable-boss-move items, creating a real decision
+  about when to spend resources.
+
+The two systems don't overlap, so neither makes the other obsolete.
+
+### Senior's fixed starting move set
+When the senior knight becomes playable in the present day, his
+starting move set is FIXED and includes the tutorial forest moves
+regardless of what the apprentice absorbed during the tutorial.
+
+This serves three simultaneous purposes depending on player state:
+- **First-time player who absorbed normally:** no dissonance; the
+  mechanical continuity reinforces their (false) belief that they are
+  still the apprentice, strengthening the eventual identity twist.
+- **First-time player who skipped tutorial absorptions:** a small
+  moment of dissonance — "why do I have moves I didn't learn?" —
+  which later resolves as "the senior taught those techniques; of
+  course he knows them" once the twist lands.
+- **Replay player who knows the twist:** can deliberately skip
+  absorptions to confirm the senior has the moves regardless,
+  verifying the game's design intent.
+
+**Cleanup task when implementing:** the senior's move set should be
+hardcoded/defined at character creation, not derived from the
+apprentice's tutorial playthrough state.
