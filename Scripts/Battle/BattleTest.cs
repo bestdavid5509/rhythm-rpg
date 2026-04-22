@@ -31,7 +31,7 @@ public partial class BattleTest : Node2D
     // State machine
     // =========================================================================
 
-    private enum BattleState { EnemyAttack, PlayerMenu, PlayerAttack, GameOver }
+    private enum BattleState { EnemyAttack, PlayerMenu, PlayerAttack, GameOver, Victory }
     private BattleState _state = BattleState.EnemyAttack;
 
     // True during attack resolution phases (slash animations, retreat, teardown) when all
@@ -214,6 +214,16 @@ public partial class BattleTest : Node2D
     private Label[]   _gameOverTextLabels;     // centered option text; yellow when selected, white otherwise
     private Label[]   _gameOverArrows;         // ► cursor absolutely anchored left; Visible toggled per selection
     private static readonly string[] GameOverOptionLabels = { "Retry", "Quit" };
+
+    // Victory options panel — parallel to the Game Over panel. Populated by AddVictoryOptions
+    // from ShowEndLabel's Victory branch after the 1.5s post-label beat. Navigation handled by
+    // HandleVictoryInput when _state == BattleState.Victory. Separate fields from the Game Over
+    // panel keep the two screens independent even though they look similar.
+    private int       _victoryOptionIndex;        // 0 = Retry, 1 = Close
+    private Label[]   _victoryTextLabels;
+    private Label[]   _victoryArrows;
+    private ulong     _victoryInputUnlockedAtMsec; // 150ms input buffer; input rejected while ticks_msec < this value
+    private static readonly string[] VictoryOptionLabels = { "Retry", "Close" };
     private bool      _isComboAttack;       // true when the current player turn uses Combo Strike (Bouncing prompt)
     private bool      _isPlayerMagicAttack; // true when the current player turn uses a magic attack via BattleSystem
     private bool      _isPlayerHealAttack;  // true when the current player turn uses Cure (heal self instead of damage enemy)
@@ -423,16 +433,29 @@ public partial class BattleTest : Node2D
 
     public override void _Input(InputEvent @event)
     {
-        // Hard lock — active during attack resolution, retreat, and teardown.
-        // No input of any kind is processed until the next input-accepting state begins.
-        if (_inputLocked) return;
-
-        // GameOver — route to the Retry/Quit options handler. No other input is accepted.
+        // End-screen states (GameOver, Victory) route BEFORE the _inputLocked guard.
+        // _inputLocked is a combat-phase signal that blocks input during slash animations,
+        // retreats, and teardowns. End-screens are post-combat and exist precisely to
+        // accept player input for option selection — gating them on a combat-phase flag
+        // is a category error. This caused a silent non-responsive Victory panel when
+        // the killing-blow attack left _inputLocked = true and no code path cleared it
+        // before the Victory panel faded in. Do not move these below the _inputLocked
+        // check; the same bug is latent on the Game Over path under any future trigger
+        // site where _inputLocked happens to be true at state transition.
         if (_state == BattleState.GameOver)
         {
             HandleGameOverInput(@event);
             return;
         }
+        if (_state == BattleState.Victory)
+        {
+            HandleVictoryInput(@event);
+            return;
+        }
+
+        // Combat-phase hard lock — active during attack resolution, retreat, and teardown.
+        // No combat input is processed until the next input-accepting state begins.
+        if (_inputLocked) return;
 
         switch (_state)
         {
@@ -768,6 +791,176 @@ public partial class BattleTest : Node2D
                 case 1: GetTree().Quit();       break;  // Quit
             }
         }
+    }
+
+    // =========================================================================
+    // Victory options panel — Retry / Close shown below the "Victory!" text
+    // =========================================================================
+
+    /// <summary>
+    /// Mirrors <see cref="AddGameOverOptions"/> — builds identically-styled Retry/Close rows
+    /// in the host VBox. Separate field set (<see cref="_victoryTextLabels"/>, <see cref="_victoryArrows"/>,
+    /// <see cref="_victoryOptionIndex"/>) keeps the two end-screen panels independent even
+    /// though they share a visual vocabulary.
+    /// </summary>
+    private void AddVictoryOptions(VBoxContainer host)
+    {
+        _victoryOptionIndex  = 0;
+        _victoryTextLabels   = new Label[VictoryOptionLabels.Length];
+        _victoryArrows       = new Label[VictoryOptionLabels.Length];
+
+        const float RowWidth         = 320f;
+        const float RowHeight        = 56f;
+        const int   OptionFontSize   = 44;
+        const int   ArrowFontSize    = 24;
+        const float ArrowOffsetLeft  = 72f;
+        const float ArrowWidth       = 24f;
+        const float ArrowBoxHeight   = 32f;
+
+        var stack = new VBoxContainer();
+        stack.AddThemeConstantOverride("separation", 12);
+        stack.MouseFilter = Control.MouseFilterEnum.Ignore;
+        host.AddChild(stack);
+
+        for (int i = 0; i < VictoryOptionLabels.Length; i++)
+        {
+            var row = new Control();
+            row.CustomMinimumSize = new Vector2(RowWidth, RowHeight);
+            row.MouseFilter       = Control.MouseFilterEnum.Ignore;
+            stack.AddChild(row);
+
+            var textLabel = new Label();
+            textLabel.Text                = VictoryOptionLabels[i];
+            textLabel.HorizontalAlignment = HorizontalAlignment.Center;
+            textLabel.VerticalAlignment   = VerticalAlignment.Center;
+            textLabel.AnchorLeft          = 0f;
+            textLabel.AnchorRight         = 1f;
+            textLabel.AnchorTop           = 0f;
+            textLabel.AnchorBottom        = 1f;
+            textLabel.MouseFilter         = Control.MouseFilterEnum.Ignore;
+            StyleLabel(textLabel, fontSize: OptionFontSize);
+            row.AddChild(textLabel);
+            _victoryTextLabels[i] = textLabel;
+
+            var arrow = new Label();
+            arrow.Text                = "▶";
+            arrow.HorizontalAlignment = HorizontalAlignment.Center;
+            arrow.VerticalAlignment   = VerticalAlignment.Center;
+            arrow.AnchorLeft          = 0f;
+            arrow.AnchorRight         = 0f;
+            arrow.AnchorTop           = 0.5f;
+            arrow.AnchorBottom        = 0.5f;
+            arrow.OffsetLeft          = ArrowOffsetLeft;
+            arrow.OffsetRight         = ArrowOffsetLeft + ArrowWidth;
+            arrow.OffsetTop           = -ArrowBoxHeight * 0.5f;
+            arrow.OffsetBottom        =  ArrowBoxHeight * 0.5f;
+            arrow.MouseFilter         = Control.MouseFilterEnum.Ignore;
+            StyleLabel(arrow, fontSize: ArrowFontSize);
+            arrow.Modulate            = ColorMenuSelected;
+            row.AddChild(arrow);
+            _victoryArrows[i] = arrow;
+        }
+
+        RefreshVictoryOptions();
+    }
+
+    /// <summary>
+    /// Repaints the Retry/Close options based on <see cref="_victoryOptionIndex"/>.
+    /// Mirrors <see cref="RefreshGameOverOptions"/> with the victory-specific field set.
+    /// </summary>
+    private void RefreshVictoryOptions()
+    {
+        if (_victoryTextLabels == null) return;
+        for (int i = 0; i < _victoryTextLabels.Length; i++)
+        {
+            bool selected = (i == _victoryOptionIndex);
+            _victoryTextLabels[i].Modulate = selected ? ColorMenuSelected : ColorMenuNormal;
+            _victoryArrows[i].Visible      = selected;
+        }
+    }
+
+    /// <summary>
+    /// Handles input while the Victory overlay is active. 150ms input buffer from panel
+    /// fade-in start prevents a held final-strike input from immediately selecting an option.
+    /// Retry mirrors Game Over's Retry (FadeToBlackAndReload); Close mirrors Game Over's Quit
+    /// (GetTree().Quit()).
+    /// </summary>
+    private void HandleVictoryInput(InputEvent @event)
+    {
+        if (_victoryTextLabels == null) return;
+        if (Time.GetTicksMsec() < _victoryInputUnlockedAtMsec) return;
+
+        if (@event.IsActionPressed("ui_up") || @event.IsActionPressed("ui_down"))
+        {
+            int direction = @event.IsActionPressed("ui_up") ? -1 : 1;
+            int count     = VictoryOptionLabels.Length;
+            _victoryOptionIndex = (_victoryOptionIndex + direction + count) % count;
+            RefreshVictoryOptions();
+            GetViewport().SetInputAsHandled();
+        }
+        else if (@event.IsActionPressed("battle_confirm"))
+        {
+            GetViewport().SetInputAsHandled();
+            GD.Print($"[BattleTest] Victory → {VictoryOptionLabels[_victoryOptionIndex]}");
+            switch (_victoryOptionIndex)
+            {
+                case 0: FadeToBlackAndReload(); break;  // Retry
+                case 1: GetTree().Quit();       break;  // Close
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds the Victory Close/Retry panel and fades it in, then transitions state to
+    /// BattleState.Victory so HandleVictoryInput takes over. Called from ShowEndLabel's
+    /// Victory branch via a 1.5s timer after the "Victory!" fullscreen label appears.
+    /// Positioned below viewport center (+200px) so the Victory! label at center stays legible.
+    /// 150ms input buffer set at fade-in start prevents final-strike input bleed.
+    /// </summary>
+    private void ShowVictoryOptionsPanel()
+    {
+        if (!GodotObject.IsInstanceValid(this)) return;
+
+        var layer = new CanvasLayer();
+        layer.Name = "VictoryOptionsLayer";
+        AddChild(layer);
+
+        var wrapper = new Control();
+        wrapper.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        wrapper.MouseFilter = Control.MouseFilterEnum.Ignore;
+        wrapper.Modulate    = new Color(1f, 1f, 1f, 0f);
+        layer.AddChild(wrapper);
+
+        var panel = MakeLayeredPanel(minWidth: 400f, out var content);
+        panel.AnchorLeft     = 0.5f;
+        panel.AnchorRight    = 0.5f;
+        panel.AnchorTop      = 0.5f;
+        panel.AnchorBottom   = 0.5f;
+        panel.GrowHorizontal = Control.GrowDirection.Both;
+        panel.GrowVertical   = Control.GrowDirection.Both;
+        // Offset the panel down 200px from viewport center so it sits clearly below the
+        // "Victory!" fullscreen label (which is centered on the viewport at y=540 on 1080p).
+        panel.OffsetTop      = 200f;
+        panel.OffsetBottom   = 200f;
+        wrapper.AddChild(panel);
+
+        content.AddThemeConstantOverride("separation", 24);
+
+        var topSpacer = new Control();
+        topSpacer.CustomMinimumSize = new Vector2(0, 8);
+        content.AddChild(topSpacer);
+
+        AddVictoryOptions(content);
+
+        var bottomSpacer = new Control();
+        bottomSpacer.CustomMinimumSize = new Vector2(0, 8);
+        content.AddChild(bottomSpacer);
+
+        _state                      = BattleState.Victory;
+        _victoryInputUnlockedAtMsec = Time.GetTicksMsec() + 150;
+
+        var tween = CreateTween();
+        tween.TweenProperty(wrapper, "modulate:a", 1.0f, 0.5f);
     }
 
     /// <summary>

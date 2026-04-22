@@ -1289,5 +1289,17 @@ public partial class BattleTest : Node2D
 
         var tween = CreateTween();
         tween.TweenProperty(wrapper, "modulate:a", 1.0f, 0.5f);
+
+        // Victory — after the label's 0.5s fade-in plus a 1.5s beat, fade in the
+        // Close/Retry options panel and transition state so the player has an exit path.
+        // Game Over does not schedule this — its panel already contains the options.
+        if (text.Contains("Victory"))
+        {
+            GetTree().CreateTimer(2.0f).Timeout += () =>
+            {
+                if (!GodotObject.IsInstanceValid(this)) return;
+                ShowVictoryOptionsPanel();
+            };
+        }
     }
 }
