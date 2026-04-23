@@ -1120,6 +1120,9 @@ public partial class BattleTest : Node2D
 
         var selectedAttack = SelectEnemyAttack();
 
+        var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
+        var playerDefender = _playerParty[0];
+
         // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
         // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
         // is already in _absorbedMoves (not if any move has been absorbed).
@@ -1128,11 +1131,8 @@ public partial class BattleTest : Node2D
             && !_absorbedMoves.Contains(EnemyData.LearnableAttack))
         {
             ShowLearnableSignal();
-            FlashEnemyWhite();
+            FlashCombatantWhite(enemyAttacker);
         }
-
-        var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
-        var playerDefender = _playerParty[0];
 
         // Build the sequence context once — the same reference threads through every
         // StepStarted / StepPassEvaluated / SequenceCompleted signal for this sequence.
@@ -1625,7 +1625,7 @@ public partial class BattleTest : Node2D
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(ComputeDamageOrigin(enemy), damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
-        PlayEnemyHurtFlash();
+        PlayCombatantHurtFlash(enemy);
 
         UpdateHPBars();
         _pendingGameOver = CheckGameOver();
@@ -1687,7 +1687,7 @@ public partial class BattleTest : Node2D
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(ComputeDamageOrigin(enemy), amount, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
-        PlayEnemyHurtFlash();
+        PlayCombatantHurtFlash(enemy);
         UpdateHPBars();
     }
 
@@ -1776,7 +1776,7 @@ public partial class BattleTest : Node2D
             if (player.IsDead) return;
             PlaySound("cure_spell.wav");
             RestoreMp(20);  // clamps to MaxMp and calls UpdateMpBar internally
-            SpawnEtherEffect(_playerEtherEffect);
+            SpawnEtherEffect(player, _playerEtherEffect);
         };
     }
 
@@ -1789,10 +1789,13 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Spawns a one-shot visual effect sprite centered on the player using the first step
-    /// of the given AttackData as the data source. Does not use BattleSystem — no circles.
+    /// Spawns a one-shot visual effect sprite centered on <paramref name="user"/> using
+    /// the first step of the given AttackData as the data source. Does not use
+    /// BattleSystem — no circles. Target-agnostic — works for any Combatant that
+    /// should be the visual anchor for the effect (item user today, any ally/self
+    /// with an Ether-style buff in the future).
     /// </summary>
-    private void SpawnEtherEffect(AttackData data)
+    private void SpawnEtherEffect(Combatant user, AttackData data)
     {
         if (data == null || data.Steps.Count == 0) return;
         var step = data.Steps[0];
@@ -1822,9 +1825,10 @@ public partial class BattleTest : Node2D
             frames.AddFrame("default", atlas);
         }
 
-        // Ether spawns on the item user. Single player in current UI; takes a Combatant
-        // target parameter when F-category widens this call's contract at density.
-        var user = _playerParty[0];
+        // Ether spawns on the supplied user. Frame anchor is the combatant's visual
+        // center (Origin + PositionRect/2 — the same geometric-center formula used
+        // across the refactor; carries the pre-existing ColorRect-vs-character-body
+        // quirk noted elsewhere).
         Vector2 playerCenter = user.Origin + user.PositionRect.Size / 2f;
         var sprite          = new AnimatedSprite2D();
         sprite.SpriteFrames = frames;
@@ -2059,24 +2063,24 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Flashes the enemy sprite white 3 times over ~0.6s using the WhiteFlash shader.
-    /// Reads / writes the flash material and tween on the Combatant so per-enemy flashes
-    /// remain independently trackable at multi-combat density.
+    /// Flashes <paramref name="target"/>'s sprite white 3 times over ~0.6s using the
+    /// WhiteFlash shader. Reads / writes the flash material and tween on the Combatant
+    /// so per-target flashes remain independently trackable at multi-combat density.
+    /// Target-agnostic — works for any Combatant with a populated FlashMaterial.
     /// </summary>
-    private void FlashEnemyWhite()
+    private void FlashCombatantWhite(Combatant target)
     {
-        var enemy = _enemyParty[0];  // single enemy in current UI; per-target at density
-        enemy.FlashTween?.Kill();
-        enemy.FlashMaterial.SetShaderParameter("flash_amount", 0.0f);
+        target.FlashTween?.Kill();
+        target.FlashMaterial.SetShaderParameter("flash_amount", 0.0f);
 
-        enemy.FlashTween = CreateTween();
-        var material = enemy.FlashMaterial;
+        target.FlashTween = CreateTween();
+        var material = target.FlashMaterial;
         for (int i = 0; i < 3; i++)
         {
-            enemy.FlashTween.TweenMethod(
+            target.FlashTween.TweenMethod(
                 Callable.From((float v) => material.SetShaderParameter("flash_amount", v)),
                 0.0f, 1.0f, 0.1f);
-            enemy.FlashTween.TweenMethod(
+            target.FlashTween.TweenMethod(
                 Callable.From((float v) => material.SetShaderParameter("flash_amount", v)),
                 1.0f, 0.0f, 0.1f);
         }
@@ -2794,7 +2798,7 @@ public partial class BattleTest : Node2D
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(ComputeDamageOrigin(comboTarget), comboDamage, comboDmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
-        PlayEnemyHurtFlash();
+        PlayCombatantHurtFlash(comboTarget);
         UpdateHPBars();
 
         if (comboDmgResult == TimingPrompt.InputResult.Miss)

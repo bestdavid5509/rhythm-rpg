@@ -989,16 +989,20 @@ public partial class BattleTest : Node2D
                     _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
                 }
 
+                // Counter lands on the attacker-who-was-parried (single enemy in the
+                // current UI). Hoisted above SpawnCounterSlashEffect + ShakeCombatantSprite
+                // so both use the same semantic local.
+                var counterTarget = _enemyParty[0];
+
                 // Spawn anime slash effect centered on the enemy.
                 // Damage is deferred until the slash animation completes.
                 PlaySound("counter_slash_multi.wav");
-                SpawnCounterSlashEffect(() =>
+                SpawnCounterSlashEffect(counterTarget, () =>
                 {
                     // Break the hurt loop and apply counter damage.
                     SafeDisconnectEnemyAnim(onHurtFullFinished);
                     SafeDisconnectEnemyAnim(OnCastEndFinished);
                     PlayEnemy("idle");
-                    var counterTarget = _enemyParty[0];  // counter lands on the attacker-who-was-parried (single enemy in current UI)
                     counterTarget.TakeDamage(CounterDamage);
                     GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {counterTarget.CurrentHp}/{counterTarget.MaxHp}");
                     PlaySound("enemy_hit.wav");
@@ -1022,7 +1026,7 @@ public partial class BattleTest : Node2D
                 });
 
                 // Shake the enemy sprite for the full duration of the slash (~1.25s).
-                ShakeEnemySprite(passes: 12, duration: 1.25f, intensity: 6f);
+                ShakeCombatantSprite(counterTarget, passes: 12, duration: 1.25f, intensity: 6f);
 
                 // Follow-through: after a short beat, play frames 2-3 then return to idle.
                 GetTree().CreateTimer(0.2f).Timeout += () =>
@@ -1048,11 +1052,11 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Spawns the anime_slash_grey_Sheet.png effect centered on the enemy AnimatedSprite2D.
-    /// The effect plays its full 15 frames at 12fps (~1.25s) then frees itself.
+    /// Spawns the anime_slash_grey_Sheet.png effect centered on <paramref name="target"/>'s
+    /// AnimatedSprite2D. The effect plays its full 15 frames at 12fps (~1.25s) then frees itself.
     /// <paramref name="onComplete"/> fires after the animation finishes and the sprite is freed.
     /// </summary>
-    private void SpawnCounterSlashEffect(Action onComplete = null)
+    private void SpawnCounterSlashEffect(Combatant target, Action onComplete = null)
     {
         const string SheetPath = "res://Assets/Effects/Sword_Effects/Anime_Slash_Grey_Sheet.png";
         const int    Fw        = 128;
@@ -1081,10 +1085,6 @@ public partial class BattleTest : Node2D
             frames.AddFrame("slash", atlas);
         }
 
-        // Target is the enemy who was just parried — the single enemy in the current UI.
-        // Position read migrated to Combatant.AnimSprite (B-category). When F-category
-        // widens the API, this function will take a Combatant target parameter.
-        var target = _enemyParty[0];
         var sprite = new AnimatedSprite2D();
         sprite.SpriteFrames = frames;
         sprite.Centered     = true;
@@ -1105,15 +1105,14 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Rapidly oscillates the target enemy's sprite horizontally to convey impact during
-    /// the counter slash. Single enemy in current UI; will take a Combatant parameter
-    /// when F-category widens effect-function contracts at density.
+    /// Rapidly oscillates <paramref name="target"/>'s sprite horizontally to convey
+    /// impact. Used for the parry-counter shake today; attacker-agnostic — works for
+    /// any Combatant whose AnimSprite should shake.
     /// </summary>
-    private void ShakeEnemySprite(int passes, float duration, float intensity)
+    private void ShakeCombatantSprite(Combatant target, int passes, float duration, float intensity)
     {
-        var enemy = _enemyParty[0];
-        if (enemy.IsDead) return;
-        var sprite = enemy.AnimSprite;
+        if (target.IsDead) return;
+        var sprite = target.AnimSprite;
         Vector2 origin = sprite.Position;
         float passTime = duration / passes;
 
@@ -1131,16 +1130,33 @@ public partial class BattleTest : Node2D
     // =========================================================================
 
     /// <summary>
-    /// Plays the enemy's short hurt reaction animation then returns to idle.
-    /// Enemies with a separate hurt sheet use "hurt_flash"; others use "hurt".
+    /// Plays <paramref name="target"/>'s short hurt reaction animation then returns to
+    /// idle. Enemies with a separate hurt sheet use "hurt_flash"; others use "hurt".
+    ///
+    /// <para>
+    /// Body inlines target-aware disconnect/play rather than routing through the
+    /// singleton <c>SafeDisconnectEnemyAnim</c> / <c>PlayEnemy</c> guard helpers —
+    /// those helpers still address the hardcoded <c>_enemyAnimSprite</c> and are
+    /// deferred to the guard-helper chunk (Phase 3.7b). The <c>HasSeparateHurtSheet()</c>
+    /// check today keys off the singleton <c>EnemyData</c>; when multi-enemy support
+    /// arrives it becomes per-target. The <c>OnEnemyHurtFlashFinished</c> callback
+    /// itself still uses the singleton guard helpers (playing "idle" on
+    /// <c>_enemyAnimSprite</c>), so passing a non-enemy <c>target</c> here would
+    /// currently split the sprite between Play and Finished. Safe today — all callers
+    /// pass the single enemy — but this is the load-bearing constraint that lifts
+    /// once the guard helpers migrate.
+    /// </para>
     /// </summary>
-    private void PlayEnemyHurtFlash()
+    private void PlayCombatantHurtFlash(Combatant target)
     {
-        if (_enemyParty[0].IsDead) return;
-        SafeDisconnectEnemyAnim(OnEnemyHurtFlashFinished);
+        if (target.IsDead) return;
+        var sprite = target.AnimSprite;
+        var callable = Callable.From((Action)OnEnemyHurtFlashFinished);
+        if (sprite.IsConnected(AnimatedSprite2D.SignalName.AnimationFinished, callable))
+            sprite.Disconnect(AnimatedSprite2D.SignalName.AnimationFinished, callable);
         string hurtAnim = HasSeparateHurtSheet() ? "hurt_flash" : "hurt";
-        PlayEnemy(hurtAnim);
-        _enemyAnimSprite.AnimationFinished += OnEnemyHurtFlashFinished;
+        sprite.Play(hurtAnim);
+        sprite.AnimationFinished += OnEnemyHurtFlashFinished;
     }
 
     /// <summary>True when the enemy uses a separate spritesheet for hurt animations (hurt_flash + hurt_full).</summary>
@@ -1165,10 +1181,29 @@ public partial class BattleTest : Node2D
     // route through these helpers. Once a dead flag is set the sprite holds its
     // final death frame — no subsequent animation call can override it.
     //
-    // Single-player / single-enemy helpers, pre-scaffolding. The IsDead guard reads
-    // the first (and only) party entry in the current UI. Multi-character
-    // generalization is deferred to the scaffolding phase — these helpers will
-    // accept a Combatant parameter once sprite references are per-unit.
+    // Deferral note (Phase 3.7b, scheduled separately):
+    // These five helpers (PlayPlayer, PlayPlayerBackwards, StopPlayer,
+    // SetPlayerFrame, PlayEnemy) plus the two SafeDisconnect* variants below are
+    // intentionally left singleton-bound to _playerAnimSprite / _enemyAnimSprite.
+    // Migrating them to take Combatant target requires simultaneous migration of:
+    //   • Every caller (~77 sites across Play/PlayBackwards/Stop/Frame/PlayEnemy).
+    //   • Every paired AnimationFinished += subscription (~17 sites) that targets
+    //     the same singleton sprite by identity — those must become
+    //     target.AnimSprite.AnimationFinished += handler, or the helper call and
+    //     the subscription end up referencing different sprites.
+    //   • Every SafeDisconnectPlayerAnim / SafeDisconnectEnemyAnim call (~51 sites)
+    //     which today uses the same singleton sprite.
+    //   • Possibly the named handler signatures (OnParryFinished etc.) if they
+    //     need to know which sprite they fired on so their own SafeDisconnect
+    //     re-entry still pairs correctly.
+    // Total touch: well over 100 sites + signature changes on bound handlers.
+    // Out-of-scope for F-category (effect spawning); claimed by a dedicated chunk.
+    //
+    // F-category effect helpers (SpawnCounterSlashEffect, SpawnEtherEffect,
+    // FlashCombatantWhite, ShakeCombatantSprite, PlayCombatantHurtFlash) already
+    // take Combatant target parameters (Phase 3.7). PlayCombatantHurtFlash inlines
+    // target-aware disconnect/play precisely to avoid the singleton coupling
+    // documented here — see its doc comment for the load-bearing constraint.
 
     /// <summary>Calls _playerAnimSprite.Play(anim) only if the player is not dead.</summary>
     private void PlayPlayer(string anim)          { if (!_playerParty[0].IsDead) _playerAnimSprite.Play(anim); }
