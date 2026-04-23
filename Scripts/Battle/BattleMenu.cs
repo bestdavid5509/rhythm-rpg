@@ -306,6 +306,18 @@ public partial class BattleTest : Node2D
             else ConfirmMenuSelection();
             GetViewport().SetInputAsHandled();
         }
+        else if (@event.IsActionPressed("battle_cancel"))
+        {
+            // Quick back-out from either submenu. Main menu has no parent to
+            // return to, so battle_cancel is a no-op there. Identical effect
+            // to selecting the "Back" entry + confirm; kept as a parallel path
+            // so controller users don't need to navigate to Back every time.
+            if (_inItemMenu || _inSubMenu)
+            {
+                ShowMenu();
+                GetViewport().SetInputAsHandled();
+            }
+        }
     }
 
     private void NavigateMenu(int direction)

@@ -265,6 +265,9 @@ public partial class BattleTest : Node2D
     private int       _gameOverOptionIndex;    // 0 = Retry, 1 = Quit
     private Label[]   _gameOverTextLabels;     // centered option text; yellow when selected, white otherwise
     private Label[]   _gameOverArrows;         // ► cursor absolutely anchored left; Visible toggled per selection
+    private ulong     _gameOverInputUnlockedAtMsec;  // Game Over input buffer — 2150ms after ShowEndLabel
+                                                     // (matches Victory's 2s beat + 150ms held-input drain).
+                                                     // Input rejected while Time.GetTicksMsec() < this value.
     private static readonly string[] GameOverOptionLabels = { "Retry", "Quit" };
 
     // Victory options panel — parallel to the Game Over panel. Populated by AddVictoryOptions
@@ -887,6 +890,12 @@ public partial class BattleTest : Node2D
     private void HandleGameOverInput(InputEvent @event)
     {
         if (_gameOverTextLabels == null) return;
+
+        // Input buffer (set at ShowEndLabel entry for Game Over) — lets the emotional
+        // beat land and drains held battle_confirm presses from the killing blow
+        // before Retry/Quit become interactive. Matches the Victory screen's combined
+        // 2.0s beat + 150ms held-input buffer (total 2150ms from end-label dispatch).
+        if (Time.GetTicksMsec() < _gameOverInputUnlockedAtMsec) return;
 
         if (@event.IsActionPressed("ui_up") || @event.IsActionPressed("ui_down"))
         {

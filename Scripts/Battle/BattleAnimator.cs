@@ -1279,6 +1279,14 @@ public partial class BattleTest : Node2D
 
         if (text.Contains("Game Over"))
         {
+            // Input buffer for the Game Over panel. Matches Victory's combined
+            // 2.0s beat + 150ms held-input drain (ShowVictoryOptionsPanel fires
+            // 2.0s after ShowEndLabel and sets a further 150ms buffer on entry).
+            // HandleGameOverInput early-returns while Time.GetTicksMsec() is below
+            // this timestamp, so queued battle_confirm presses from the killing blow
+            // don't immediately select Retry the moment the options panel appears.
+            _gameOverInputUnlockedAtMsec = Time.GetTicksMsec() + 2150;
+
             // Game Over uses a layered panel (dark navy fill + fantasy border) so the UI
             // stays readable even if battle effects (circles, sprites, damage numbers) are
             // still animating behind it. Panel anchors to viewport center and auto-sizes
