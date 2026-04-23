@@ -221,10 +221,17 @@ public partial class BattleTest : Node2D
     private Vector2   _playerAnimSpriteOrigin; // AnimatedSprite2D position after floor-anchoring in _Ready
     private Vector2   _enemyAnimSpriteOrigin;  // AnimatedSprite2D position after floor-anchoring in _Ready
 
-    // Set at the start of each attack turn; used by the shared animation helpers.
-    private ColorRect _attacker;
-    private ColorRect _defender;
-    private Vector2   _attackerClosePos;  // close-but-not-touching stance position for this turn
+    // Per-sequence combat context — set at the start of each attack turn, read by
+    // positioning helpers and animation-callback continuations throughout the sequence.
+    // These are Option Y from the Phase 3.4 migration: sequence-scoped fields rather
+    // than parameter-threaded values. Parameter threading would require lambdas at every
+    // AnimationFinished subscription site (`+= () => OnFinalSlashFinished(attacker, ...)`),
+    // breaking the SafeDisconnectPlayerAnim(methodName) reference-equality pattern used
+    // throughout. Option Y keeps the existing per-sequence storage pattern; the refactor
+    // is the type change (ColorRect → Combatant) and the rename.
+    private Combatant _sequenceAttacker;
+    private Combatant _sequenceDefender;
+    private Vector2   _sequenceAttackerClosePos;  // close-but-not-touching stance position for this sequence
     private bool      _pendingGameOver;   // cached result of CheckGameOver(); read by OnFinalSlashFinished
     // Death flags live on Combatant.IsDead now (_playerParty[0].IsDead / _enemyParty[0].IsDead).
     // Once set, no further animation calls can override the death pose — see the five
@@ -1129,6 +1136,9 @@ public partial class BattleTest : Node2D
             FlashEnemyWhite();
         }
 
+        var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
+        var playerDefender = _playerParty[0];
+
         if (_battleSystem.CurrentAttackIsHopIn)
         {
             // Reset rendezvous flags for this turn — both must be true before teardown runs.
@@ -1143,10 +1153,10 @@ public partial class BattleTest : Node2D
             // Enemy animation is now driven per-step by OnBattleSystemStepStarted.
             // StartSequence triggers StepStarted for step 0 which plays the first animation.
             Vector2 hopInOffset = _battleSystem.GetFirstStep()?.Offset ?? Vector2.Zero;
-            PlayHopIn(_enemySprite, _playerSprite, () =>
+            PlayHopIn(enemyAttacker, playerDefender, () =>
             {
-                Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
-                Vector2 promptPos      = ComputeCameraMidpoint();
+                Vector2 defenderCenter = playerDefender.Origin + playerDefender.PositionRect.Size / 2f;
+                Vector2 promptPos      = ComputeCameraMidpoint(enemyAttacker, playerDefender);
                 _targetZone.Position   = promptPos;
                 _targetZone.Visible    = true;
                 _battleSystem.StartSequence(this, defenderCenter, promptPos);
@@ -1158,10 +1168,11 @@ public partial class BattleTest : Node2D
         {
             // Enemy stays at origin — set combat context without any setup animation.
             // Camera stays at its default position and zoom; no hop-in, no zoom-in.
-            // _attackerClosePos = origin so PlayTeardown is a zero-distance no-op on the attacker.
-            _attacker         = _enemySprite;
-            _defender         = _playerSprite;
-            _attackerClosePos = GetOrigin(_enemySprite);
+            // _sequenceAttackerClosePos = origin so PlayTeardown is a zero-distance no-op
+            // on the attacker.
+            _sequenceAttacker         = enemyAttacker;
+            _sequenceDefender         = playerDefender;
+            _sequenceAttackerClosePos = enemyAttacker.Origin;
 
             // Start the cast animation and kick off the sequence immediately.
             // SafeDisconnect first — prevents stacking if BeginEnemyAttack fires more than once
@@ -1170,8 +1181,8 @@ public partial class BattleTest : Node2D
             PlayEnemy("cast_intro");
             _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
-            Vector2 defenderCenter  = GetOrigin(_defender) + _defender.Size / 2f;
-            Vector2 promptPos        = ComputeCameraMidpoint();
+            Vector2 defenderCenter  = playerDefender.Origin + playerDefender.PositionRect.Size / 2f;
+            Vector2 promptPos        = ComputeCameraMidpoint(enemyAttacker, playerDefender);
             _targetZone.Position     = promptPos;
             _targetZone.Visible      = true;
             _battleSystem.StartSequence(this, defenderCenter, promptPos);
@@ -1180,16 +1191,16 @@ public partial class BattleTest : Node2D
         {
             // SkipHopIn=false, non-hop-in attack — same as SkipHopIn path:
             // enemy stays at origin, plays cast arc. Hop-in only occurs for melee attacks.
-            _attacker         = _enemySprite;
-            _defender         = _playerSprite;
-            _attackerClosePos = GetOrigin(_enemySprite);
+            _sequenceAttacker         = enemyAttacker;
+            _sequenceDefender         = playerDefender;
+            _sequenceAttackerClosePos = enemyAttacker.Origin;
 
             SafeDisconnectEnemyAnim(OnCastIntroFinished);
             PlayEnemy("cast_intro");
             _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
-            Vector2 defenderCenter  = GetOrigin(_defender) + _defender.Size / 2f;
-            Vector2 promptPos        = ComputeCameraMidpoint();
+            Vector2 defenderCenter  = playerDefender.Origin + playerDefender.PositionRect.Size / 2f;
+            Vector2 promptPos        = ComputeCameraMidpoint(enemyAttacker, playerDefender);
             _targetZone.Position     = promptPos;
             _targetZone.Visible      = true;
             _battleSystem.StartSequence(this, defenderCenter, promptPos);
@@ -1542,7 +1553,7 @@ public partial class BattleTest : Node2D
         GD.Print(_isComboAttack ? "[BattleTest] Player uses Combo Strike." : "[BattleTest] Player attacks.");
         _comboPassIndex = 0;
         var promptType = _isComboAttack ? TimingPrompt.PromptType.Bouncing : TimingPrompt.PromptType.Standard;
-        BeginAttack(_playerSprite, _enemySprite, promptType, OnPlayerPromptCompleted);
+        BeginAttack(_playerParty[0], _enemyParty[0], promptType, OnPlayerPromptCompleted);
     }
 
     /// <summary>
@@ -1559,19 +1570,19 @@ public partial class BattleTest : Node2D
             ? "[BattleTest] Player uses Cure."
             : "[BattleTest] Player uses magic attack.");
 
-        // Set combat context so ComputeCameraMidpoint() returns a sensible midpoint.
-        // No hop-in — attackerClosePos = player origin so the camera midpoint is the
-        // natural center between the two combatants.
-        _attacker         = _playerSprite;
-        _defender         = _isPlayerHealAttack ? _playerSprite : _enemySprite;
-        _attackerClosePos = GetOrigin(_playerSprite);
+        // Set sequence context so ComputeCameraMidpoint returns a sensible midpoint.
+        // No hop-in — _sequenceAttackerClosePos = attacker origin so PlayTeardown is a
+        // zero-distance no-op on the attacker. The _isPlayerHealAttack ternary resolves
+        // target selection: Cure targets self (same combatant on both sides of the
+        // sequence), other magic targets the single enemy in the current UI.
+        var playerAttacker = _playerParty[0];
+        var magicDefender  = _isPlayerHealAttack ? playerAttacker : _enemyParty[0];
+        _sequenceAttacker         = playerAttacker;
+        _sequenceDefender         = magicDefender;
+        _sequenceAttackerClosePos = playerAttacker.Origin;
 
-        // .Size reads migrated to Combatant.PositionRect.Size (B-category). GetOrigin(ColorRect)
-        // and the _isPlayerHealAttack binary target dispatch stay for C-category work.
-        Vector2 defenderCenter = _isPlayerHealAttack
-            ? GetOrigin(_playerSprite) + _playerParty[0].PositionRect.Size / 2f
-            : GetOrigin(_enemySprite)  + _enemyParty[0].PositionRect.Size  / 2f;
-        Vector2 promptPos      = ComputeCameraMidpoint();
+        Vector2 defenderCenter = magicDefender.Origin + magicDefender.PositionRect.Size / 2f;
+        Vector2 promptPos      = ComputeCameraMidpoint(playerAttacker, magicDefender);
 
         // Play cast animation; defer StartSequence until it finishes so the wind-up
         // completes before the timing circle appears and the effect fires.
@@ -1820,7 +1831,7 @@ public partial class BattleTest : Node2D
         // Ether spawns on the item user. Single player in current UI; takes a Combatant
         // target parameter when F-category widens this call's contract at density.
         var user = _playerParty[0];
-        Vector2 playerCenter = GetOrigin(_playerSprite) + user.PositionRect.Size / 2f;
+        Vector2 playerCenter = user.Origin + user.PositionRect.Size / 2f;
         var sprite          = new AnimatedSprite2D();
         sprite.SpriteFrames = frames;
         sprite.Centered     = true;
@@ -2377,10 +2388,13 @@ public partial class BattleTest : Node2D
     /// downstream blocks handle EnemyData-sourced overrides and test-flag overrides.
     ///
     /// Origin note: the Combatant's single <c>Origin</c> field maps to the ColorRect-based
-    /// origin (<c>_playerOrigin</c> / <c>_enemyOrigin</c>) because that's what the existing
-    /// positioning helpers use via <c>GetOrigin(ColorRect)</c>. The separate
-    /// AnimatedSprite2D origin (<c>_playerAnimSpriteOrigin</c>, <c>_enemyAnimSpriteOrigin</c>)
-    /// is not yet modeled on Combatant — revisited during C-category refactor (Phase 3.4).
+    /// origin (<c>_playerOrigin</c> / <c>_enemyOrigin</c>). That is what the positioning
+    /// helpers (<c>ComputeClosePosition</c>, <c>ComputeSlamPosition</c>,
+    /// <c>ComputeCameraMidpoint</c>) read as of Phase 3.4. The separate AnimatedSprite2D
+    /// origin (<c>_playerAnimSpriteOrigin</c>, <c>_enemyAnimSpriteOrigin</c>) is not yet
+    /// modeled on Combatant — PlayHopIn / PlayTeardown still reach into the scene-level
+    /// snapshots via a Side switch. Candidate for a later cleanup (add a second Combatant
+    /// field for the AnimatedSprite2D origin).
     /// </summary>
     private void BuildInitialParties()
     {
@@ -2561,55 +2575,46 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Plays the hop-in animation: attacker lunges to close stance, camera zooms in.
-    /// Sets <see cref="_attacker"/>, <see cref="_defender"/>, and
-    /// <see cref="_attackerClosePos"/> before starting the tween, so
+    /// Sets <see cref="_sequenceAttacker"/>, <see cref="_sequenceDefender"/>, and
+    /// <see cref="_sequenceAttackerClosePos"/> before starting the tween, so
     /// <see cref="ComputeCameraMidpoint"/> and <see cref="ComputeSlamPosition"/> are
     /// usable immediately after this call returns. <paramref name="onComplete"/> fires
     /// when the tween finishes; safe to pass null.
     /// </summary>
     /// <param name="attackerOffset">
     /// Optional offset for hop-in melee attacks. Only the X component is added to
-    /// <see cref="_attackerClosePos"/> — this keeps the camera midpoint and slam
+    /// <see cref="_sequenceAttackerClosePos"/> — this keeps the camera midpoint and slam
     /// positions unaffected by vertical adjustment. The Y component is applied solely
-    /// to the enemy AnimatedSprite2D tween destination so the sprite moves vertically
-    /// without shifting the camera or target zone.
+    /// to the enemy-side attacker's AnimatedSprite2D tween destination so the sprite
+    /// moves vertically without shifting the camera or target zone. No Y-offset applies
+    /// when the attacker is player-side.
     /// </param>
-    private void PlayHopIn(ColorRect attacker, ColorRect defender, Action onComplete,
+    private void PlayHopIn(Combatant attacker, Combatant defender, Action onComplete,
                            Vector2 attackerOffset = default)
     {
-        _attacker         = attacker;
-        _defender         = defender;
-        _attackerClosePos = ComputeClosePosition() + new Vector2(attackerOffset.X, 0f);
+        _sequenceAttacker         = attacker;
+        _sequenceDefender         = defender;
+        _sequenceAttackerClosePos = ComputeClosePosition(attacker, defender) + new Vector2(attackerOffset.X, 0f);
 
         // Raise the attacker's sprite ZIndex so it renders in front of the defender
         // during the hop-in overlap. Restored to 0 in PlayTeardown.
-        if (attacker == _playerSprite)
-        {
-            _playerAnimSprite.ZIndex = 1;
-            _enemyAnimSprite.ZIndex  = 0;
-        }
-        else if (attacker == _enemySprite)
-        {
-            _enemyAnimSprite.ZIndex  = 1;
-            _playerAnimSprite.ZIndex = 0;
-        }
+        attacker.AnimSprite.ZIndex = 1;
+        defender.AnimSprite.ZIndex = 0;
 
-        // Hop-in footstep sound for both player and enemy.
-        if (attacker == _playerSprite && !_playerParty[0].IsDead)
-            PlaySound("short_quick_steps.wav", volumeDb: 6f);
-        if (attacker == _enemySprite && !_enemyParty[0].IsDead)
+        // Hop-in footstep sound.
+        if (!attacker.IsDead)
             PlaySound("short_quick_steps.wav", volumeDb: 6f);
 
-        // Play run at double speed while the player hops in — snappy charge feel.
-        // Guard: only call Play("run") if the animation has frames. A 0-frame animation
-        // (caused by a missing .import file for _Run.png) hides the sprite entirely.
-        if (attacker == _playerSprite)
+        // Player-side attacker: play run at double speed on the player sprite via the guard
+        // helper. Guard helper operates on the single-player sprite in the current UI; at
+        // multi-character density the run-animation call routes through a per-unit helper.
+        if (attacker.Side == CombatantSide.Player)
         {
             // OWNER: PlayHopIn (player turn, charge begins).
-            int runFrames = _playerAnimSprite.SpriteFrames?.GetFrameCount("run") ?? 0;
+            int runFrames = attacker.AnimSprite.SpriteFrames?.GetFrameCount("run") ?? 0;
             if (runFrames > 0)
             {
-                _playerAnimSprite.SpeedScale = 2f;
+                attacker.AnimSprite.SpeedScale = 2f;
                 PlayPlayer("run");   // OWNER: player turn, hop-in charge
             }
             else
@@ -2622,50 +2627,47 @@ public partial class BattleTest : Node2D
         var tween = CreateTween();
         tween.SetParallel(true);
         // Hop in — ease-out (fast start, decelerates on arrival = lunge).
-        tween.TweenProperty(attacker, "position", _attackerClosePos, SetupDuration)
+        tween.TweenProperty(attacker.PositionRect, "position", _sequenceAttackerClosePos, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        // When the player is the attacker, the visible AnimatedSprite2D must move with the
-        // ColorRect. Compute the same X delta and apply it to the sprite's floor-anchored origin.
-        if (attacker == _playerSprite)
+
+        // Move the attacker's AnimatedSprite2D by the same X delta as the ColorRect hop.
+        // The AnimatedSprite2D origin differs from Combatant.Origin (the C-category
+        // deferred note on the two-origin gap still applies — _playerAnimSpriteOrigin /
+        // _enemyAnimSpriteOrigin are separate scene-setup snapshots).
+        float   hopDeltaX        = _sequenceAttackerClosePos.X - attacker.Origin.X;
+        Vector2 animSpriteOrigin = attacker.Side == CombatantSide.Player
+            ? _playerAnimSpriteOrigin
+            : _enemyAnimSpriteOrigin;
+        // Y-offset applies only to enemy-side attackers (see parameter doc). Preserves
+        // the pre-refactor asymmetric behavior.
+        float   animTargetY      = attacker.Side == CombatantSide.Player
+            ? animSpriteOrigin.Y
+            : animSpriteOrigin.Y + attackerOffset.Y;
+        Vector2 animTarget       = new Vector2(animSpriteOrigin.X + hopDeltaX, animTargetY);
+        tween.TweenProperty(attacker.AnimSprite, "position", animTarget, SetupDuration)
+             .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+
+        // Enemy-side attacker: play run at double speed if alive (mirrors player pattern
+        // above, but routed through the PlayEnemy guard helper on the enemy sprite).
+        if (attacker.Side == CombatantSide.Enemy && !attacker.IsDead)
         {
-            // Origin read migrated to Combatant (B-category). The outer `attacker == _playerSprite`
-            // branch is a C-category binary-side check — stays for Phase 3.4.
-            float   hopDeltaX  = _attackerClosePos.X - _playerParty[0].Origin.X;
-            Vector2 animTarget = new Vector2(_playerAnimSpriteOrigin.X + hopDeltaX,
-                                             _playerAnimSpriteOrigin.Y);
-            tween.TweenProperty(_playerAnimSprite, "position", animTarget, SetupDuration)
-                 .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        }
-        // When the enemy is the attacker, play run at double speed during hop-in (mirrors player pattern).
-        if (attacker == _enemySprite && !_enemyParty[0].IsDead)
-        {
-            _enemyAnimSprite.SpeedScale = 2f;
+            attacker.AnimSprite.SpeedScale = 2f;
             PlayEnemy("run");
         }
-        // Move the enemy AnimatedSprite2D by the same X delta plus the full attackerOffset
-        // (X already in _attackerClosePos; Y applied here only so the sprite moves vertically
-        // without affecting the camera or target zone).
-        if (attacker == _enemySprite)
-        {
-            // Origin read migrated to Combatant (B-category). The outer `attacker == _enemySprite`
-            // branch is a C-category binary-side check — stays for Phase 3.4.
-            float   hopDeltaX  = _attackerClosePos.X - _enemyParty[0].Origin.X;
-            Vector2 animTarget = new Vector2(_enemyAnimSpriteOrigin.X + hopDeltaX,
-                                             _enemyAnimSpriteOrigin.Y + attackerOffset.Y);
-            tween.TweenProperty(_enemyAnimSprite, "position", animTarget, SetupDuration)
-                 .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        }
+
         // Camera zooms in centered between the two combatants.
-        tween.TweenProperty(_camera, "position", ComputeCameraMidpoint(), SetupDuration)
+        tween.TweenProperty(_camera, "position", ComputeCameraMidpoint(attacker, defender), SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         tween.TweenProperty(_camera, "zoom", CameraZoomIn, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         tween.Finished += () =>
         {
-            // Reset enemy SpeedScale after hop-in and hold idle until melee_attack starts.
-            if (attacker == _enemySprite && !_enemyParty[0].IsDead)
+            // Reset enemy-side attacker SpeedScale after hop-in and hold idle until
+            // melee_attack starts. Player-side doesn't need this reset because the
+            // player's wind-up pose is set explicitly in BeginAttack's hop-in callback.
+            if (attacker.Side == CombatantSide.Enemy && !attacker.IsDead)
             {
-                _enemyAnimSprite.SpeedScale = 1f;
+                attacker.AnimSprite.SpeedScale = 1f;
                 PlayEnemy("idle");
             }
             onComplete?.Invoke();
@@ -2678,8 +2680,8 @@ public partial class BattleTest : Node2D
     /// the animation completes (so the first input is only possible after the hop-in).
     /// </summary>
     private void BeginAttack(
-        ColorRect attacker,
-        ColorRect defender,
+        Combatant attacker,
+        Combatant defender,
         TimingPrompt.PromptType promptType,
         TimingPrompt.PromptCompletedEventHandler onComplete)
     {
@@ -2695,7 +2697,7 @@ public partial class BattleTest : Node2D
         // Player hop-in overlaps the enemy similarly to how the enemy overlaps the player
         // via warrior_melee_combo.tres's Offset = Vector2(-200, 0). Positive X pushes the
         // left-side attacker (player) further right toward the enemy's body.
-        Vector2 playerHopInOffset = (attacker == _playerSprite)
+        Vector2 playerHopInOffset = attacker.Side == CombatantSide.Player
             ? new Vector2(200f, 0f)
             : Vector2.Zero;
         PlayHopIn(attacker, defender, () =>
@@ -2703,17 +2705,17 @@ public partial class BattleTest : Node2D
             // Hop-in finished — freeze on frame 0 (wind-up pose) without playing.
             // The slash fires from frame 1 only after the timing circle resolves,
             // so the pose reads as intent-to-strike while the player waits for input.
-            if (attacker == _playerSprite)
+            if (attacker.Side == CombatantSide.Player)
             {
                 // OWNER: BeginAttack hop-in callback (player turn, awaiting input).
                 // "combo" frame 0 = first wind-up pose for both single and combo attacks.
-                _playerAnimSprite.SpeedScale = 1f;
-                _playerAnimSprite.Animation  = "combo";
+                attacker.AnimSprite.SpeedScale = 1f;
+                attacker.AnimSprite.Animation  = "combo";
                 SetPlayerFrame(0);  // OWNER: player turn, wind-up pose (sheet frame 0)
                 StopPlayer();
             }
-            // Position is set here so ComputeCameraMidpoint() reflects the final close stance.
-            prompt.Position      = ComputeCameraMidpoint();
+            // Position is set here so ComputeCameraMidpoint reflects the final close stance.
+            prompt.Position      = ComputeCameraMidpoint(attacker, defender);
             _targetZone.Position = prompt.Position;
             _targetZone.Visible  = true;
             prompt.ZIndex = 20;
@@ -2729,11 +2731,12 @@ public partial class BattleTest : Node2D
     private void OnAttackPassEvaluated(int result, int passIndex)
     {
         // Slam tween on every pass — attacker lunges forward then snaps back to close stance.
-        Vector2 slamPos = ComputeSlamPosition();
+        var attacker = _sequenceAttacker;
+        Vector2 slamPos = ComputeSlamPosition(attacker, _sequenceDefender);
         var tween = CreateTween();
-        tween.TweenProperty(_attacker, "position", slamPos, SlamInDuration)
+        tween.TweenProperty(attacker.PositionRect, "position", slamPos, SlamInDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        tween.TweenProperty(_attacker, "position", _attackerClosePos, SlamOutDuration)
+        tween.TweenProperty(attacker.PositionRect, "position", _sequenceAttackerClosePos, SlamOutDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
 
         if (!_isComboAttack) return;  // single: animation driven entirely in OnPlayerPromptCompleted
@@ -2817,56 +2820,70 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void PlayTeardown(Action onComplete)
     {
+        // Read the sequence-scoped attacker set in PlayHopIn (or by the non-hop-in /
+        // magic-attack paths that write it directly in BeginEnemyAttack /
+        // BeginPlayerMagicAttack). PlayTeardown is called from animation-callback
+        // continuations that can't naturally receive the attacker as a parameter, so
+        // the field is the right plumbing here.
+        var attacker = _sequenceAttacker;
+        bool attackerMoved = _sequenceAttackerClosePos != attacker.Origin;
+
         var tween = CreateTween();
         tween.SetParallel(true);
         // Hop out — ease-in (slow start, accelerates = snapping away).
-        tween.TweenProperty(_attacker, "position", GetOrigin(_attacker), TeardownDuration)
+        tween.TweenProperty(attacker.PositionRect, "position", attacker.Origin, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
-        // Return the visible player sprite to its scene origin alongside the ColorRect.
-        if (_attacker == _playerSprite)
+
+        // Return the attacker's AnimatedSprite2D to its scene origin alongside the ColorRect.
+        // The AnimatedSprite2D origin is still tracked in the singleton snapshots
+        // _playerAnimSpriteOrigin / _enemyAnimSpriteOrigin — see the C-category-deferred
+        // note on the two-origin gap in BuildInitialParties.
+        Vector2 animSpriteOrigin = attacker.Side == CombatantSide.Player
+            ? _playerAnimSpriteOrigin
+            : _enemyAnimSpriteOrigin;
+        // Player-side footstep + position tween play unconditionally on teardown —
+        // attackerMoved below gates only the enemy-side run-backwards animation (and its
+        // paired footstep), not the position tween. Preserved asymmetry from pre-refactor:
+        // player retreat animation (PlayPlayerBackwards) is driven by animation handlers
+        // elsewhere (OnFinalSlashFinished, etc.), not by PlayTeardown.
+        if (attacker.Side == CombatantSide.Player && !attacker.IsDead)
+            PlaySound("short_quick_steps.wav", volumeDb: 0f);
+        tween.TweenProperty(attacker.AnimSprite, "position", animSpriteOrigin, TeardownDuration)
+             .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
+
+        // Enemy-side attacker: play run backwards at double speed during hop-back, only
+        // if the attacker actually moved from origin (hop-in melee). Cast attacks stay at
+        // origin so _sequenceAttackerClosePos == attacker.Origin; skip the run animation then.
+        if (attacker.Side == CombatantSide.Enemy && !attacker.IsDead && attackerMoved)
         {
-            if (!_playerParty[0].IsDead)
-                PlaySound("short_quick_steps.wav", volumeDb: 0f);
-            tween.TweenProperty(_playerAnimSprite, "position", _playerAnimSpriteOrigin, TeardownDuration)
-                 .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
+            PlaySound("short_quick_steps.wav", volumeDb: 0f);
+            attacker.AnimSprite.SpeedScale = 2f;
+            attacker.AnimSprite.PlayBackwards("run");
         }
-        // Return the visible enemy sprite to its scene origin alongside the ColorRect.
-        if (_attacker == _enemySprite)
-        {
-            tween.TweenProperty(_enemyAnimSprite, "position", _enemyAnimSpriteOrigin, TeardownDuration)
-                 .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
-            // Play run backwards at double speed during hop-back — only if the enemy
-            // actually moved from origin (hop-in melee). Cast attacks stay at origin
-            // so _attackerClosePos == origin; skip the run animation in that case.
-            bool enemyMoved = _attackerClosePos != GetOrigin(_enemySprite);
-            if (!_enemyParty[0].IsDead && enemyMoved)
-            {
-                PlaySound("short_quick_steps.wav", volumeDb: 0f);
-                _enemyAnimSprite.SpeedScale = 2f;
-                _enemyAnimSprite.PlayBackwards("run");
-            }
-        }
+
         // Camera zooms back out to default.
         tween.TweenProperty(_camera, "position", CameraDefaultPos, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
         tween.TweenProperty(_camera, "zoom", CameraDefaultZoom, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
-        bool enemyDidMove = _attacker == _enemySprite && _attackerClosePos != GetOrigin(_enemySprite);
         tween.Finished += () =>
         {
-            // Reset enemy SpeedScale and return to idle after hop-back (only if enemy moved).
-            if (enemyDidMove && !_enemyParty[0].IsDead)
+            // Enemy-side attacker that moved: reset SpeedScale and return to idle after hop-back.
+            if (attacker.Side == CombatantSide.Enemy && attackerMoved && !attacker.IsDead)
             {
-                _enemyAnimSprite.SpeedScale = 1f;
+                attacker.AnimSprite.SpeedScale = 1f;
                 PlayEnemy("idle");
             }
             // Restore default ZIndex on both sprites now that the attack is over.
             // Exception: if the enemy is dying (phase transition in progress), leave
             // its ZIndex alone — SpawnBossReveal bumped it up so the reveal stays
             // strictly behind, and SwapToPhase2 restores the original snapshot value.
-            _playerAnimSprite.ZIndex = 0;
+            // Single-player prototype: these ZIndex resets reach into _playerParty[0] /
+            // _enemyParty[0] directly; at multi-character density the reset iterates both
+            // parties.
+            _playerParty[0].AnimSprite.ZIndex = 0;
             if (!_enemyParty[0].IsDead)
-                _enemyAnimSprite.ZIndex = 0;
+                _enemyParty[0].AnimSprite.ZIndex = 0;
             onComplete?.Invoke();
         };
     }
@@ -2875,54 +2892,54 @@ public partial class BattleTest : Node2D
     // Animation position helpers
     // =========================================================================
 
-    /// <summary>Returns the stored world-space origin for the given sprite.</summary>
-    private Vector2 GetOrigin(ColorRect sprite) =>
-        sprite == _playerSprite ? _playerOrigin : _enemyOrigin;
-
     /// <summary>
     /// Returns the position where the attacker stands in the close stance —
     /// <see cref="AttackGap"/> pixels from the defender's near edge, same Y as origin.
-    /// Calculated from stored origins so it is independent of any animation in progress.
+    /// Calculated from the combatants' stored origins so it is independent of any
+    /// animation in progress.
     /// </summary>
-    private Vector2 ComputeClosePosition()
+    private Vector2 ComputeClosePosition(Combatant attacker, Combatant defender)
     {
-        Vector2 attackerOrigin = GetOrigin(_attacker);
-        Vector2 defenderOrigin = GetOrigin(_defender);
+        Vector2 attackerOrigin = attacker.Origin;
+        Vector2 defenderOrigin = defender.Origin;
         bool    onLeft         = attackerOrigin.X < defenderOrigin.X;
 
         float closeX = onLeft
-            ? defenderOrigin.X - _attacker.Size.X - AttackGap   // attacker right edge = defender left - gap
-            : defenderOrigin.X + _defender.Size.X + AttackGap;  // attacker left edge  = defender right + gap
+            ? defenderOrigin.X - attacker.PositionRect.Size.X - AttackGap   // attacker right edge = defender left - gap
+            : defenderOrigin.X + defender.PositionRect.Size.X + AttackGap;  // attacker left edge  = defender right + gap
 
         return new Vector2(closeX, attackerOrigin.Y);
     }
 
     /// <summary>
     /// Returns the slam position — attacker overlaps the defender by <see cref="SlamOverlap"/> pixels.
-    /// Also calculated from stored origins so slam depth is always the same regardless of
-    /// where the attacker currently is.
+    /// Reads <see cref="_sequenceAttackerClosePos"/> for the slam's Y (so slam stays on the
+    /// close-stance horizontal line regardless of any Y-offset applied during hop-in).
     /// </summary>
-    private Vector2 ComputeSlamPosition()
+    private Vector2 ComputeSlamPosition(Combatant attacker, Combatant defender)
     {
-        Vector2 attackerOrigin = GetOrigin(_attacker);
-        Vector2 defenderOrigin = GetOrigin(_defender);
+        Vector2 attackerOrigin = attacker.Origin;
+        Vector2 defenderOrigin = defender.Origin;
         bool    onLeft         = attackerOrigin.X < defenderOrigin.X;
 
         float slamX = onLeft
-            ? defenderOrigin.X - _attacker.Size.X + SlamOverlap   // right edge overlaps defender by SlamOverlap
-            : defenderOrigin.X + _defender.Size.X - SlamOverlap;  // left edge overlaps defender by SlamOverlap
+            ? defenderOrigin.X - attacker.PositionRect.Size.X + SlamOverlap   // right edge overlaps defender by SlamOverlap
+            : defenderOrigin.X + defender.PositionRect.Size.X - SlamOverlap;  // left edge overlaps defender by SlamOverlap
 
-        return new Vector2(slamX, _attackerClosePos.Y);
+        return new Vector2(slamX, _sequenceAttackerClosePos.Y);
     }
 
     /// <summary>
     /// Returns the world-space midpoint between the attacker's close stance center
     /// and the defender's center — the point the camera zooms in on.
+    /// Reads <see cref="_sequenceAttackerClosePos"/> for the attacker's current
+    /// close-stance position (which differs from its rest origin when the attacker
+    /// has hopped in).
     /// </summary>
-    private Vector2 ComputeCameraMidpoint()
+    private Vector2 ComputeCameraMidpoint(Combatant attacker, Combatant defender)
     {
-        Vector2 attackerCenter = _attackerClosePos    + _attacker.Size / 2f;
-        Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
+        Vector2 attackerCenter = _sequenceAttackerClosePos + attacker.PositionRect.Size / 2f;
+        Vector2 defenderCenter = defender.Origin           + defender.PositionRect.Size / 2f;
         return (attackerCenter + defenderCenter) / 2f;
     }
 }
