@@ -32,7 +32,7 @@ public partial class BattleTest : Node2D
     // State machine
     // =========================================================================
 
-    private enum BattleState { EnemyAttack, PlayerMenu, PlayerAttack, GameOver, Victory }
+    private enum BattleState { EnemyAttack, PlayerMenu, SelectingTarget, PlayerAttack, GameOver, Victory }
     private BattleState _state = BattleState.EnemyAttack;
 
     // True during attack resolution phases (slash animations, retreat, teardown) when all
@@ -199,7 +199,17 @@ public partial class BattleTest : Node2D
     private AnimatedSprite2D _enemyAnimSprite;
     private AnimatedSprite2D _playerAnimSprite;
     private TargetZone       _targetZone;       // shared target ring — shown for the duration of any prompt sequence
+    private TargetPointer    _targetPointer;    // selection-phase pointer; shown during SelectingTarget state only (Phase 4)
     private BattleDialogue   _introDialogue;    // owned narrative-dialogue component; QueueFree'd after DialogueCompleted
+
+    // Phase 4 — target selection. Between a menu pick and the Begin* that launches
+    // the attack, the player confirms (or cancels) the target via the pointer.
+    // _selectedTarget is the currently-highlighted combatant (read by Begin* once
+    // the player confirms); _pendingActionLauncher is the closure that fires the
+    // attack (including MP deduction) when the player presses battle_confirm.
+    // Both are cleared on confirm (after launcher invocation) and on cancel.
+    private Combatant  _selectedTarget;
+    private System.Action _pendingActionLauncher;
 
     // Party lists owned by BattleTest. Single-entry for the 1v1 prototype; the
     // scaffolding exercise grows them to 4/5. Source of truth for combat-universal
@@ -461,6 +471,12 @@ public partial class BattleTest : Node2D
 
         _targetZone = GetNode<TargetZone>("TargetZone");
 
+        // TargetPointer is code-instantiated (no .tscn). Added as a child of BattleTest so
+        // it inherits scene-tree lifecycle; world-space Node2D so its position tracks
+        // combatant sprites without manual world-to-screen conversion.
+        _targetPointer = new TargetPointer();
+        AddChild(_targetPointer);
+
         // Construct single-entry party lists before HP init / test-flag overrides.
         // Combatant fields are now the source of truth; the HP init + test-flag blocks
         // below write directly into playerCombatant / enemyCombatant, not into retired
@@ -551,6 +567,10 @@ public partial class BattleTest : Node2D
         {
             case BattleState.PlayerMenu:
                 HandleMenuInput(@event);
+                break;
+
+            case BattleState.SelectingTarget:
+                HandleSelectingTargetInput(@event);
                 break;
 
             case BattleState.EnemyAttack:
@@ -1523,6 +1543,69 @@ public partial class BattleTest : Node2D
     }
 
     // =========================================================================
+    // Target selection (Phase 4)
+    // =========================================================================
+    // State machine glue between a menu pick and the attack launch. Menu handlers
+    // in BattleMenu.cs build a launcher closure (captures attack-identity state +
+    // MP deduction + the Begin* call) and hand off to EnterSelectingTarget with a
+    // default target. The player confirms with battle_confirm (invokes the
+    // launcher) or cancels with ui_cancel (restores the menu, no MP spent).
+    //
+    // Target cycling is stubbed — single-target today; scaffolding phase will
+    // wire ui_left / ui_right to iterate valid targets once multi-enemy / party
+    // selection density exists.
+
+    private void EnterSelectingTarget(Combatant defaultTarget)
+    {
+        _state          = BattleState.SelectingTarget;
+        _selectedTarget = defaultTarget;
+        _targetPointer.SnapTo(defaultTarget);
+        _targetPointer.Visible = true;
+        GD.Print($"[BattleTest] Selecting target — default: {defaultTarget.Name}.");
+    }
+
+    private void ConfirmTargetSelection()
+    {
+        _targetPointer.Visible = false;
+        var launcher = _pendingActionLauncher;
+        _pendingActionLauncher = null;
+        launcher?.Invoke();
+    }
+
+    private void CancelTargetSelection()
+    {
+        _targetPointer.Visible = false;
+        _selectedTarget         = null;
+        _pendingActionLauncher  = null;
+        // Defensive flag reset — stale attack-identity state shouldn't linger
+        // between cancel and the next menu pick. Next pick will set these anyway,
+        // but an explicit clear prevents future regression if a new code path
+        // reads them in the interval.
+        _isComboAttack          = false;
+        _activeMagicAttack      = null;
+        ShowMenu();  // resets _state = PlayerMenu and re-displays the main menu
+    }
+
+    private void HandleSelectingTargetInput(InputEvent @event)
+    {
+        if (@event.IsActionPressed("battle_confirm"))
+        {
+            ConfirmTargetSelection();
+            return;
+        }
+        if (@event.IsActionPressed("battle_cancel"))
+        {
+            CancelTargetSelection();
+            return;
+        }
+        if (@event.IsActionPressed("ui_left") || @event.IsActionPressed("ui_right"))
+        {
+            // Stub: target cycling lands with the scaffolding phase once multiple
+            // enemies/allies exist. Single-target today; no-op.
+        }
+    }
+
+    // =========================================================================
     // Player attack phase
     // =========================================================================
 
@@ -1534,7 +1617,11 @@ public partial class BattleTest : Node2D
         GD.Print(_isComboAttack ? "[BattleTest] Player uses Combo Strike." : "[BattleTest] Player attacks.");
         _comboPassIndex = 0;
         var promptType = _isComboAttack ? TimingPrompt.PromptType.Bouncing : TimingPrompt.PromptType.Standard;
-        BeginAttack(_playerParty[0], _enemyParty[0], promptType, OnPlayerPromptCompleted);
+        // Defender comes from SelectingTarget (Phase 4). Single-target today so the
+        // fallback to _enemyParty[0] is equivalent; the fallback also covers any call
+        // path that skips SelectingTarget (none today, but defensive).
+        var defender = _selectedTarget ?? _enemyParty[0];
+        BeginAttack(_playerParty[0], defender, promptType, OnPlayerPromptCompleted);
     }
 
     /// <summary>
@@ -1560,11 +1647,12 @@ public partial class BattleTest : Node2D
 
         // Set sequence context so ComputeCameraMidpoint returns a sensible midpoint.
         // No hop-in — _sequenceAttackerClosePos = attacker origin so PlayTeardown is a
-        // zero-distance no-op on the attacker. The isHealAttack ternary resolves target
-        // selection: Cure targets self (same combatant on both sides of the sequence),
-        // other magic targets the single enemy in the current UI.
+        // zero-distance no-op on the attacker. Target comes from SelectingTarget
+        // (Phase 4); the ?? fallback uses the attack-identity check to keep behaviour
+        // correct if any caller skips SelectingTarget (defensive — all current paths
+        // route through the target-selection pipeline).
         var playerAttacker = _playerParty[0];
-        var magicDefender  = isHealAttack ? playerAttacker : _enemyParty[0];
+        var magicDefender  = _selectedTarget ?? (isHealAttack ? playerAttacker : _enemyParty[0]);
         _sequenceAttacker         = playerAttacker;
         _sequenceDefender         = magicDefender;
         _sequenceAttackerClosePos = playerAttacker.Origin;

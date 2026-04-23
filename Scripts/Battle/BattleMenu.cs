@@ -365,7 +365,12 @@ public partial class BattleTest : Node2D
         GD.Print($"[BattleTest] Player selects: {MenuOptionLabels[_menuIndex]}.");
         switch (_menuIndex)
         {
-            case 0: HideMenu(); _isComboAttack = false; BeginPlayerAttack(); break;
+            case 0:  // Basic Attack — single-hit enemy attack, no MP cost.
+                _isComboAttack = false;
+                _pendingActionLauncher = () => BeginPlayerAttack();
+                HideMenu();
+                EnterSelectingTarget(_enemyParty[0]);
+                break;
             case 1: ShowSubMenu(); break;   // Absorbed Moves
             case 2:                         // Defend — halve miss damage this enemy turn
                 _playerParty[0].IsDefending = true;  // single defender in the current UI
@@ -400,22 +405,39 @@ public partial class BattleTest : Node2D
 
         var attack   = GetSubMenuAttack(_subMenuIndex);
         var category = _subMenuCategoriesData[_subMenuIndex];
-        var player   = _playerParty[0];  // single MP spender in the current UI
 
         if (category == AttackCategory.Physical)
         {
-            // Physical moves (Combo Strike) — combo attack flow.
-            if (attack != null && attack.MpCost > 0)
-                player.CurrentMp -= attack.MpCost;
-            HideMenu(); _isComboAttack = true; BeginPlayerAttack();
+            // Physical moves (Combo Strike) — combo attack flow. MP deduction moves
+            // into the launcher so cancel from SelectingTarget is a no-cost back-out.
+            _isComboAttack = true;
+            int mpCost = attack?.MpCost ?? 0;
+            _pendingActionLauncher = () =>
+            {
+                if (mpCost > 0) _playerParty[0].CurrentMp -= mpCost;
+                BeginPlayerAttack();
+            };
+            HideMenu();
+            EnterSelectingTarget(_enemyParty[0]);
         }
         else if (category == AttackCategory.Magic)
         {
             // Magic moves (Comet, Comet Barrage, Cure, etc.) — magic attack flow.
-            if (attack != null)
-                player.CurrentMp -= attack.MpCost;
+            // Default-target resolution via the attack-identity dispatch predicate
+            // (same split as Phase 3.6): Cure targets self, other magic targets enemy.
+            // MP deduction moves into the launcher — deducted on confirm, not on menu
+            // pick, so cancel from SelectingTarget is a clean no-cost back-out.
             _activeMagicAttack = attack;
-            HideMenu(); BeginPlayerMagicAttack();
+            bool isHealAttack = attack == _playerCureAttack;
+            Combatant defaultTarget = isHealAttack ? _playerParty[0] : _enemyParty[0];
+            int mpCost = attack?.MpCost ?? 0;
+            _pendingActionLauncher = () =>
+            {
+                if (mpCost > 0) _playerParty[0].CurrentMp -= mpCost;
+                BeginPlayerMagicAttack();
+            };
+            HideMenu();
+            EnterSelectingTarget(defaultTarget);
         }
     }
 
