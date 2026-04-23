@@ -40,33 +40,30 @@ public partial class BattleSystem : Node
     /// <summary>
     /// Re-emitted from the active step's TimingPrompt.PassEvaluated.
     /// Fires once per inward pass: once for Standard/Slow, multiple times for Bouncing.
+    /// The ctx payload carries attacker/target/attack identity for the owning sequence.
     /// </summary>
-    [Signal] public delegate void StepPassEvaluatedEventHandler(int result, int passIndex, int stepIndex);
+    [Signal] public delegate void StepPassEvaluatedEventHandler(
+        int result, int passIndex, int stepIndex, SequenceContext ctx);
 
     /// <summary>Emitted at the start of each step, before circles spawn or timers fire.</summary>
-    [Signal] public delegate void StepStartedEventHandler(int stepIndex);
+    [Signal] public delegate void StepStartedEventHandler(int stepIndex, SequenceContext ctx);
 
     /// <summary>Emitted when every step in the current sequence has resolved.</summary>
-    [Signal] public delegate void SequenceCompletedEventHandler();
+    [Signal] public delegate void SequenceCompletedEventHandler(SequenceContext ctx);
 
     // =========================================================================
     // Sequence runner state
     // =========================================================================
 
-    // Test attack: hardcoded for visual verification in BattleTest.
-    // Replace with dynamic assignment when the full battle system drives attack selection.
-    private const string TestAttackPath = "res://Resources/Attacks/fire_and_ice_sword_combo.tres";
-
     private PackedScene              _promptScene;
-    private AttackData               _currentAttack;          // the attack currently being executed
+    private SequenceContext          _sequenceContext;        // per-sequence payload — attacker/target/attack/id
     private Node2D                   _spawnParent;            // node that owns spawned prompts and sprites
-    private Vector2                  _defenderCenter;         // world-space center of the defender — effect origin
     private Vector2                  _promptPosition;         // world-space position for circle prompts
     private int                      _totalPromptsRemaining;  // total circles across all steps; 0 → SequenceCompleted
-    private bool                     _isPlayerAttack;         // true when player is the attacker — uses step.PlayerOffset
     private bool                     _sequenceCancelled;      // set on Physical miss — prevents new steps from spawning
     private bool                     _sequenceActive;         // true while a sequence is running; prevents multi-emit of SequenceCompleted
     private int                      _lastStepRun = -1;       // index of the most recently started step
+    private int                      _nextSequenceId;         // monotonic counter — assigned by NextSequenceId()
 
     // =========================================================================
     // Legacy battle state — used by stub methods below
@@ -84,14 +81,7 @@ public partial class BattleSystem : Node
 
     public override void _Ready()
     {
-        _promptScene   = GD.Load<PackedScene>("res://Scenes/Battle/TimingPrompt.tscn");
-        _currentAttack = GD.Load<AttackData>(TestAttackPath);
-
-        if (_currentAttack == null)
-            GD.PrintErr($"[BattleSystem] Failed to load test attack: {TestAttackPath}");
-        else
-            GD.Print($"[BattleSystem] Loaded \"{TestAttackPath}\" — " +
-                     $"{_currentAttack.Steps.Count} step(s), {_currentAttack.BaseDamage} base damage.");
+        _promptScene = GD.Load<PackedScene>("res://Scenes/Battle/TimingPrompt.tscn");
     }
 
     // =========================================================================
@@ -99,10 +89,10 @@ public partial class BattleSystem : Node
     // =========================================================================
 
     /// <summary>
-    /// True when the currently loaded attack uses the hop-in melee path.
-    /// BattleTest reads this to branch BeginEnemyAttack and OnEnemySequenceCompleted.
+    /// True when the active sequence's attack uses the hop-in melee path.
+    /// Returns false outside of a running sequence.
     /// </summary>
-    public bool CurrentAttackIsHopIn => _currentAttack?.IsHopIn ?? false;
+    public bool CurrentAttackIsHopIn => _sequenceContext?.CurrentAttack?.IsHopIn ?? false;
 
     /// <summary>
     /// Returns the animation start delay for step 0 — the time between StartSequence and
@@ -111,105 +101,111 @@ public partial class BattleSystem : Node
     ///
     ///   animStartDelay = max(0, circleCloseDuration - ImpactFrames[0] / Fps)
     ///
-    /// Returns 0 if no attack is loaded or the attack has no steps.
+    /// Returns 0 if no sequence is active or the attack has no steps.
     /// </summary>
     public float ComputeFirstStepAnimDelay()
     {
-        if (_currentAttack == null || _currentAttack.Steps.Count == 0) return 0f;
-        var   step                = _currentAttack.Steps[0];
+        var attack = _sequenceContext?.CurrentAttack;
+        if (attack == null || attack.Steps.Count == 0) return 0f;
+        var   step                = attack.Steps[0];
         float circleCloseDuration = TimingPrompt.DefaultDurationForType(step.CircleType);
         float rawDelay            = circleCloseDuration - step.ImpactFrames[0] / step.Fps;
         return Mathf.Max(0f, rawDelay);
     }
 
     /// <summary>
-    /// Returns step 0 of the currently loaded attack, or null if no attack is loaded
-    /// or the attack has no steps. Used by BattleTest to read per-step fields (Offset,
-    /// PostAnimationDelayMs, etc.) without BattleTest coupling to AttackData internals.
+    /// Returns step 0 of the active sequence's attack, or null if no sequence is active
+    /// or the attack has no steps.
     /// </summary>
-    public AttackStep GetFirstStep() =>
-        (_currentAttack != null && _currentAttack.Steps.Count > 0)
-        ? _currentAttack.Steps[0]
-        : null;
+    public AttackStep GetFirstStep()
+    {
+        var attack = _sequenceContext?.CurrentAttack;
+        return (attack != null && attack.Steps.Count > 0) ? attack.Steps[0] : null;
+    }
 
     /// <summary>
-    /// Returns the currently loaded attack. Called by BattleTest after AddChild so it can
-    /// cache the enemy attack reference and restore it before each enemy turn.
+    /// Returns the active sequence's attack, or null if no sequence is active.
+    /// Kept alive so animation callbacks (OnEnemyAttackAnimFinished) can inspect the
+    /// in-flight attack without needing the SequenceContext threaded through.
     /// </summary>
-    public AttackData GetCurrentAttack() => _currentAttack;
-
-    /// <summary>
-    /// Overrides the current attack. Call before StartSequence to select a different
-    /// attack (e.g. a player-chosen absorbed move) without reloading from disk.
-    /// </summary>
-    public void SetAttack(AttackData attack) => _currentAttack = attack;
+    public AttackData GetCurrentAttack() => _sequenceContext?.CurrentAttack;
 
     /// <summary>
     /// Returns the PostAnimationDelayMs for step 0 — used by BattleTest to hold the
     /// melee impact pose before calling PlayTeardown.
-    /// Returns 0 if no attack is loaded or the attack has no steps.
+    /// Returns 0 if no sequence is active or the attack has no steps.
     /// </summary>
     public int GetFirstStepPostAnimDelayMs() =>
         GetFirstStep()?.PostAnimationDelayMs ?? 0;
 
     /// <summary>
-    /// Returns the PostAnimationDelayMs for the last step in the current attack.
+    /// Returns the PostAnimationDelayMs for the last step in the active sequence's attack.
     /// Used for multi-step hop-in attacks where the final step controls the hold before retreat.
-    /// Returns 0 if no attack is loaded or the attack has no steps.
+    /// Returns 0 if no sequence is active or the attack has no steps.
     /// </summary>
     public int GetLastStepPostAnimDelayMs()
     {
-        if (_currentAttack == null || _currentAttack.Steps.Count == 0) return 0;
-        return _currentAttack.Steps[_currentAttack.Steps.Count - 1].PostAnimationDelayMs;
+        var attack = _sequenceContext?.CurrentAttack;
+        if (attack == null || attack.Steps.Count == 0) return 0;
+        return attack.Steps[attack.Steps.Count - 1].PostAnimationDelayMs;
     }
 
     /// <summary>Returns the index of the most recently started step, or -1 if none.</summary>
     public int GetLastStepRun() => _lastStepRun;
 
     /// <summary>
-    /// Returns the effective base damage for a given step. Uses the step's
-    /// BaseDamageOverride when set (> 0), otherwise falls back to AttackData.BaseDamage.
+    /// Returns the effective base damage for a given step of the active sequence's attack.
+    /// Uses the step's BaseDamageOverride when set (> 0), otherwise falls back to AttackData.BaseDamage.
     /// </summary>
     public int GetStepBaseDamage(int stepIndex)
     {
-        if (_currentAttack == null) return 0;
-        if (stepIndex < 0 || stepIndex >= _currentAttack.Steps.Count) return _currentAttack.BaseDamage;
-        int over = _currentAttack.Steps[stepIndex].BaseDamageOverride;
-        return over > 0 ? over : _currentAttack.BaseDamage;
+        var attack = _sequenceContext?.CurrentAttack;
+        if (attack == null) return 0;
+        if (stepIndex < 0 || stepIndex >= attack.Steps.Count) return attack.BaseDamage;
+        int over = attack.Steps[stepIndex].BaseDamageOverride;
+        return over > 0 ? over : attack.BaseDamage;
     }
+
+    /// <summary>
+    /// Returns a fresh monotonic sequence ID. Callers assign this to
+    /// <see cref="SequenceContext.SequenceId"/> when constructing a context so
+    /// subscribers can use reference equality OR ID equality to identify a sequence.
+    /// </summary>
+    public int NextSequenceId() => _nextSequenceId++;
 
     // =========================================================================
     // Sequence runner — public entry point
     // =========================================================================
 
     /// <summary>
-    /// Executes the test attack sequence.
+    /// Executes an attack sequence described by the supplied <see cref="SequenceContext"/>.
     /// All step scheduling is timer-driven from RunStep — steps may overlap when
     /// StartOffsetMs is negative. SequenceCompleted fires when every circle across
     /// all steps has resolved.
+    ///
+    /// <para>
+    /// The defender center used for effect-sprite spawn is derived inside the runner
+    /// from <c>ctx.Target</c>. Attacker side (for offset selection, FlipH, and
+    /// cancel-on-miss) is derived from <c>ctx.Attacker.Side</c>. Subscribers receive
+    /// the same <paramref name="ctx"/> instance on every signal emitted during this
+    /// sequence so they can identify which sequence a signal belongs to.
+    /// </para>
     /// </summary>
     /// <param name="parent">Node to add prompts and AnimatedSprite2Ds to.</param>
-    /// <param name="defenderCenter">World-space center of the defender — effect spawn origin.</param>
+    /// <param name="ctx">Sequence context — attacker, target, attack data, monotonic ID.</param>
     /// <param name="promptPosition">World-space position for circle prompts (combat midpoint).</param>
-    /// <param name="isPlayerAttack">
-    /// When true, effect sprites use <see cref="AttackStep.PlayerOffset"/> for positioning
-    /// (target is the enemy). When false, <see cref="AttackStep.Offset"/> is used (target
-    /// is the player). Default false.
-    /// </param>
-    public void StartSequence(Node2D parent, Vector2 defenderCenter, Vector2 promptPosition,
-                              bool isPlayerAttack = false)
+    public void StartSequence(Node2D parent, SequenceContext ctx, Vector2 promptPosition)
     {
-        if (_currentAttack == null || _currentAttack.Steps.Count == 0)
+        if (ctx == null || ctx.CurrentAttack == null || ctx.CurrentAttack.Steps.Count == 0)
         {
-            GD.PrintErr("[BattleSystem] StartSequence called but no valid attack data is loaded.");
-            EmitSignal(SignalName.SequenceCompleted);
+            GD.PrintErr("[BattleSystem] StartSequence called with null or empty SequenceContext.");
+            EmitSignal(SignalName.SequenceCompleted, ctx);
             return;
         }
 
         _spawnParent       = parent;
-        _defenderCenter    = defenderCenter;
+        _sequenceContext   = ctx;
         _promptPosition    = promptPosition;
-        _isPlayerAttack    = isPlayerAttack;
         _sequenceCancelled = false;
         _sequenceActive    = true;
         _lastStepRun       = -1;
@@ -217,7 +213,7 @@ public partial class BattleSystem : Node
         // Count every circle across all steps so SequenceCompleted fires only after
         // the last circle of the last concurrent step resolves.
         _totalPromptsRemaining = 0;
-        foreach (var s in _currentAttack.Steps)
+        foreach (var s in ctx.CurrentAttack.Steps)
             _totalPromptsRemaining += s.ImpactFrames.Length;
 
         RunStep(0);
@@ -254,14 +250,15 @@ public partial class BattleSystem : Node
         }
 
         _lastStepRun = stepIndex;
-        EmitSignal(SignalName.StepStarted, stepIndex);
+        EmitSignal(SignalName.StepStarted, stepIndex, _sequenceContext);
 
-        var step        = _currentAttack.Steps[stepIndex];
+        var attack      = _sequenceContext.CurrentAttack;
+        var step        = attack.Steps[stepIndex];
         int circleCount = step.ImpactFrames.Length;
         int firstImpact = step.ImpactFrames[0];
         int lastImpact  = step.ImpactFrames[circleCount - 1];
 
-        GD.Print($"[BattleSystem] Step {stepIndex + 1}/{_currentAttack.Steps.Count}: " +
+        GD.Print($"[BattleSystem] Step {stepIndex + 1}/{attack.Steps.Count}: " +
                  $"CircleType={step.CircleType}  ImpactFrames=[{string.Join(", ", step.ImpactFrames)}]  " +
                  $"Fps={step.Fps}  Circles={circleCount}");
 
@@ -315,9 +312,9 @@ public partial class BattleSystem : Node
         //     > 0 → gap after last circle (positive StartOffsetMs)
         //     = 0 → next step starts exactly when last circle closes (zero StartOffsetMs)
         //     < 0 → next step starts before last circle closes (negative StartOffsetMs, clamped to 0)
-        if (stepIndex + 1 < _currentAttack.Steps.Count)
+        if (stepIndex + 1 < attack.Steps.Count)
         {
-            var   nextStep              = _currentAttack.Steps[stepIndex + 1];
+            var   nextStep              = attack.Steps[stepIndex + 1];
             float lastCircleResolveTime = (lastImpact - firstImpact) / step.Fps + circleCloseDuration;
             float nextStepDelay         = Mathf.Max(0f, lastCircleResolveTime + nextStep.StartOffsetMs / 1000f);
             int   nextStepIndex         = stepIndex + 1;
@@ -353,7 +350,7 @@ public partial class BattleSystem : Node
                 prompt.Position   = _promptPosition;
 
                 prompt.PassEvaluated += (result, passIndex) =>
-                    EmitSignal(SignalName.StepPassEvaluated, result, passIndex, stepIndex);
+                    EmitSignal(SignalName.StepPassEvaluated, result, passIndex, stepIndex, _sequenceContext);
 
                 var capturedPrompt = prompt;
                 prompt.PromptCompleted += result =>
@@ -436,8 +433,8 @@ public partial class BattleSystem : Node
         // Enemy attacks always play their full sequence regardless of parry outcome.
         // TODO: dismiss already-spawned circles with a grey flash when cancelling (stop-on-miss visual).
         if (!_sequenceCancelled &&
-            _isPlayerAttack &&
-            _currentAttack?.Category == AttackCategory.Physical &&
+            _sequenceContext?.Attacker?.Side == CombatantSide.Player &&
+            _sequenceContext?.CurrentAttack?.Category == AttackCategory.Physical &&
             (TimingPrompt.InputResult)result == TimingPrompt.InputResult.Miss)
         {
             GD.Print("[BattleSystem] Player Physical miss — cancelling remaining steps.");
@@ -448,10 +445,15 @@ public partial class BattleSystem : Node
         if (_totalPromptsRemaining > 0) return;
 
         // Emit exactly once per sequence — _sequenceActive prevents re-emission from
-        // late-resolving circles or stacked callbacks.
+        // late-resolving circles or stacked callbacks. _sequenceContext is intentionally
+        // NOT cleared here: animation callbacks like OnEnemyAttackAnimFinished and the
+        // teardown path (GetLastStepPostAnimDelayMs) may run AFTER SequenceCompleted and
+        // still need to inspect the most recent attack. The context is overwritten by the
+        // next StartSequence, matching the old "last attack stays resident" semantics of
+        // the retired _currentAttack field.
         _sequenceActive = false;
         GD.Print("[BattleSystem] All circles resolved — emitting SequenceCompleted.");
-        EmitSignal(SignalName.SequenceCompleted);
+        EmitSignal(SignalName.SequenceCompleted, _sequenceContext);
     }
 
     /// <summary>
@@ -504,22 +506,36 @@ public partial class BattleSystem : Node
             spriteFrames.AddFrame("default", atlas);
         }
 
-        // Baseline position is the floor line. The active offset is step.Offset for enemy
-        // attacks (targeting the player) or step.PlayerOffset for player attacks (targeting
-        // the enemy). Offset.Y < 0 moves the effect up, Offset.Y > 0 moves it down.
+        // Baseline position is the floor line. The active offset is step.Offset for
+        // attackers on the right (canonical enemy side) or step.PlayerOffset for attackers
+        // on the left (canonical player side) — the flip is derived from attacker-vs-target
+        // X coordinates rather than a per-sequence flag. Offset.Y < 0 moves the effect up,
+        // Offset.Y > 0 moves it down.
         const float FloorY = 750f;
-        Vector2 activeOffset = _isPlayerAttack ? step.PlayerOffset : step.Offset;
+        var     attacker         = _sequenceContext.Attacker;
+        var     target           = _sequenceContext.Target;
+        Vector2 targetCenter     = target.Origin + target.PositionRect.Size / 2f;
+        // Self-targeting (e.g., Cure heal) has attacker == target with identical Origin.X.
+        // The strict > returns false in that case, routing self-target to the left-side
+        // branch (PlayerOffset + !step.FlipH). That matches pre-refactor behaviour where
+        // _isPlayerAttack=true (player casting heal on self) took the effectively-equivalent
+        // branch. Note: there is a pre-existing Cure target-circle positioning quirk —
+        // the circle appears slightly right of the knight because target.Origin +
+        // PositionRect.Size/2f centers on the 80-wide ColorRect rather than the
+        // character's body (same root cause as the damage-number quirk flagged in
+        // Phase 3.3 testing). Preserved as-is; proper fix is deferred to B5 / scaffolding work.
+        bool    attackerOnRight  = attacker.Origin.X > target.Origin.X;
+        Vector2 activeOffset     = attackerOnRight ? step.Offset : step.PlayerOffset;
 
         var sprite          = new AnimatedSprite2D();
         sprite.SpriteFrames = spriteFrames;
         sprite.Centered     = true;
-        // Player-used attacks fire right-to-left against the enemy, whereas the same
-        // attack used by an enemy fires left-to-right against the player. Invert FlipH
-        // when _isPlayerAttack so .tres files authored for the enemy version auto-flip
-        // without needing a separate PlayerFlipH field.
-        sprite.FlipH        = _isPlayerAttack ? !step.FlipH : step.FlipH;
+        // step.FlipH is authored for a right-side attacker firing left toward the target
+        // (canonical enemy-attacks-player case). Invert for left-side attackers so the
+        // same .tres file works in both directions without a separate PlayerFlipH field.
+        sprite.FlipH        = attackerOnRight ? step.FlipH : !step.FlipH;
         sprite.Scale        = step.Scale;
-        sprite.Position     = new Vector2(_defenderCenter.X, FloorY) + activeOffset;
+        sprite.Position     = new Vector2(targetCenter.X, FloorY) + activeOffset;
         // Effect sprites (explosions, slashes, smoke, comet trails, etc.) must render
         // on top of the combatants they hit. During the Phase 1 → Phase 2 transition
         // the reveal sprite is at ZIndex 1 and the bumped warrior is at ZIndex 2, so

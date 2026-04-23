@@ -284,7 +284,6 @@ public partial class BattleTest : Node2D
 
     // Cached in BeginPlayerMagicAttack; consumed by OnPlayerCastFinished once the
     // cast animation completes and it is safe to start the sequence.
-    private Vector2    _playerMagicDefenderCenter;
     private Vector2    _playerMagicPromptPos;
 
     // Hop-in coordination — two-flag rendezvous so ProceedAfterHopInAnim fires only after
@@ -431,13 +430,14 @@ public partial class BattleTest : Node2D
         _enemyAnimSprite.Material = flashMaterial;
 
         _battleSystem = new BattleSystem();
-        AddChild(_battleSystem);  // triggers BattleSystem._Ready, which loads _currentAttack
+        AddChild(_battleSystem);
 
-        // Inspector-assigned attack overrides BattleSystem's built-in TestAttackPath.
-        if (TestEnemyAttack != null)
-            _battleSystem.SetAttack(TestEnemyAttack);
-
-        _enemyAttackData  = _battleSystem.GetCurrentAttack();  // cache for restoration after player turns
+        // Fallback attack used as a last-resort in SelectEnemyAttack when no EnemyData
+        // attack pool is configured. Inspector-assigned TestEnemyAttack wins when set.
+        _enemyAttackData = TestEnemyAttack
+                           ?? GD.Load<AttackData>("res://Resources/Attacks/fire_and_ice_sword_combo.tres");
+        if (_enemyAttackData == null)
+            GD.PrintErr("[BattleTest] Failed to load fallback enemy attack.");
         _playerMagicAttack = GD.Load<AttackData>("res://Resources/Attacks/player_magic_attack.tres");
         if (_playerMagicAttack == null)
             GD.PrintErr("[BattleTest] Failed to load player_magic_attack.tres");
@@ -1120,10 +1120,7 @@ public partial class BattleTest : Node2D
         FreeActivePrompt();
         GD.Print("[BattleTest] Enemy attacks.");
 
-        // SetAttack is always called because a preceding player magic turn may have
-        // overridden _currentAttack with _playerMagicAttack.
         var selectedAttack = SelectEnemyAttack();
-        _battleSystem.SetAttack(selectedAttack);
 
         // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
         // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
@@ -1139,7 +1136,17 @@ public partial class BattleTest : Node2D
         var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
         var playerDefender = _playerParty[0];
 
-        if (_battleSystem.CurrentAttackIsHopIn)
+        // Build the sequence context once — the same reference threads through every
+        // StepStarted / StepPassEvaluated / SequenceCompleted signal for this sequence.
+        var ctx = new SequenceContext
+        {
+            Attacker      = enemyAttacker,
+            Target        = playerDefender,
+            CurrentAttack = selectedAttack,
+            SequenceId    = _battleSystem.NextSequenceId(),
+        };
+
+        if (selectedAttack.IsHopIn)
         {
             // Reset rendezvous flags for this turn — both must be true before teardown runs.
             _hopInSequenceCompleted = false;
@@ -1152,59 +1159,35 @@ public partial class BattleTest : Node2D
             // where the enemy stands during the zoom-in (e.g. push further left to overlap the player).
             // Enemy animation is now driven per-step by OnBattleSystemStepStarted.
             // StartSequence triggers StepStarted for step 0 which plays the first animation.
-            Vector2 hopInOffset = _battleSystem.GetFirstStep()?.Offset ?? Vector2.Zero;
+            Vector2 hopInOffset = selectedAttack.Steps.Count > 0 ? selectedAttack.Steps[0].Offset : Vector2.Zero;
             PlayHopIn(enemyAttacker, playerDefender, () =>
             {
-                Vector2 defenderCenter = playerDefender.Origin + playerDefender.PositionRect.Size / 2f;
-                Vector2 promptPos      = ComputeCameraMidpoint(enemyAttacker, playerDefender);
-                _targetZone.Position   = promptPos;
-                _targetZone.Visible    = true;
-                _battleSystem.StartSequence(this, defenderCenter, promptPos);
+                Vector2 promptPos    = ComputeCameraMidpoint(enemyAttacker, playerDefender);
+                _targetZone.Position = promptPos;
+                _targetZone.Visible  = true;
+                _battleSystem.StartSequence(this, ctx, promptPos);
             }, hopInOffset);
             return;
         }
 
-        if (SkipHopIn)
-        {
-            // Enemy stays at origin — set combat context without any setup animation.
-            // Camera stays at its default position and zoom; no hop-in, no zoom-in.
-            // _sequenceAttackerClosePos = origin so PlayTeardown is a zero-distance no-op
-            // on the attacker.
-            _sequenceAttacker         = enemyAttacker;
-            _sequenceDefender         = playerDefender;
-            _sequenceAttackerClosePos = enemyAttacker.Origin;
+        // Non-hop-in path (both SkipHopIn=true and SkipHopIn=false + non-hop-in attack):
+        // enemy stays at origin and plays the cast arc. Hop-in only occurs for melee attacks.
+        // _sequenceAttackerClosePos = origin so PlayTeardown is a zero-distance no-op.
+        _sequenceAttacker         = enemyAttacker;
+        _sequenceDefender         = playerDefender;
+        _sequenceAttackerClosePos = enemyAttacker.Origin;
 
-            // Start the cast animation and kick off the sequence immediately.
-            // SafeDisconnect first — prevents stacking if BeginEnemyAttack fires more than once
-            // (e.g. second turn) without the prior OnCastIntroFinished having run its own disconnect.
-            SafeDisconnectEnemyAnim(OnCastIntroFinished);
-            PlayEnemy("cast_intro");
-            _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
+        // Start the cast animation and kick off the sequence immediately.
+        // SafeDisconnect first — prevents stacking if BeginEnemyAttack fires more than once
+        // (e.g. second turn) without the prior OnCastIntroFinished having run its own disconnect.
+        SafeDisconnectEnemyAnim(OnCastIntroFinished);
+        PlayEnemy("cast_intro");
+        _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
-            Vector2 defenderCenter  = playerDefender.Origin + playerDefender.PositionRect.Size / 2f;
-            Vector2 promptPos        = ComputeCameraMidpoint(enemyAttacker, playerDefender);
-            _targetZone.Position     = promptPos;
-            _targetZone.Visible      = true;
-            _battleSystem.StartSequence(this, defenderCenter, promptPos);
-        }
-        else
-        {
-            // SkipHopIn=false, non-hop-in attack — same as SkipHopIn path:
-            // enemy stays at origin, plays cast arc. Hop-in only occurs for melee attacks.
-            _sequenceAttacker         = enemyAttacker;
-            _sequenceDefender         = playerDefender;
-            _sequenceAttackerClosePos = enemyAttacker.Origin;
-
-            SafeDisconnectEnemyAnim(OnCastIntroFinished);
-            PlayEnemy("cast_intro");
-            _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
-
-            Vector2 defenderCenter  = playerDefender.Origin + playerDefender.PositionRect.Size / 2f;
-            Vector2 promptPos        = ComputeCameraMidpoint(enemyAttacker, playerDefender);
-            _targetZone.Position     = promptPos;
-            _targetZone.Visible      = true;
-            _battleSystem.StartSequence(this, defenderCenter, promptPos);
-        }
+        Vector2 promptPosition = ComputeCameraMidpoint(enemyAttacker, playerDefender);
+        _targetZone.Position   = promptPosition;
+        _targetZone.Visible    = true;
+        _battleSystem.StartSequence(this, ctx, promptPosition);
     }
 
     private void OnEnemyPassEvaluated(int result, int passIndex, int stepIndex)
@@ -1249,13 +1232,13 @@ public partial class BattleTest : Node2D
     /// For hop-in melee attacks, plays the per-step enemy animation (e.g. melee_attack)
     /// with timing aligned so the impact frame lands when the first circle closes.
     /// </summary>
-    private void OnBattleSystemStepStarted(int stepIndex)
+    private void OnBattleSystemStepStarted(int stepIndex, SequenceContext ctx)
     {
-        if (!_battleSystem.CurrentAttackIsHopIn) return;
-        var enemy = _enemyParty[0];  // single attacker in the current UI
+        if (!ctx.CurrentAttack.IsHopIn) return;
+        var enemy = ctx.Attacker;
         if (enemy.IsDead) return;
 
-        var step = _battleSystem.GetCurrentAttack().Steps[stepIndex];
+        var step = ctx.CurrentAttack.Steps[stepIndex];
         if (string.IsNullOrEmpty(step.EnemyAnimation)) return;
 
         // Compute animation start delay so the impact frame lands when circle 0 closes.
@@ -1298,10 +1281,10 @@ public partial class BattleTest : Node2D
     /// each impact frame lands when its circle closes. Schedules a timer BounceDuration
     /// + animDelay seconds after PassEvaluated, matching BattleSystem's effect-replay pattern.
     /// </summary>
-    private void OnBouncingHopInPassEvaluated(int result, int passIndex, int stepIndex)
+    private void OnBouncingHopInPassEvaluated(int result, int passIndex, int stepIndex, SequenceContext ctx)
     {
         if (_bouncingHopInStep == null) return;
-        var enemy = _enemyParty[0];  // single attacker in the current UI
+        var enemy = ctx.Attacker;
         if (enemy.IsDead) return;
 
         // Only replay if more inward passes follow.
@@ -1342,7 +1325,7 @@ public partial class BattleTest : Node2D
     /// Slam is skipped when SkipHopIn is true — the enemy never hopped in close,
     /// so the cross-screen lunge ComputeSlamPosition() would produce looks wrong.
     /// </summary>
-    private void OnBattleSystemStepPassEvaluated(int result, int passIndex, int stepIndex)
+    private void OnBattleSystemStepPassEvaluated(int result, int passIndex, int stepIndex, SequenceContext ctx)
     {
         if (_isPlayerMagicAttack)
         {
@@ -1353,7 +1336,7 @@ public partial class BattleTest : Node2D
         // After player death, skip damage and animation reactions — circles continue silently.
         if (_playerParty[0].IsDead) return;
 
-        if (_battleSystem.CurrentAttackIsHopIn || !SkipHopIn)
+        if (ctx.CurrentAttack.IsHopIn || !SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
         OnEnemyPassEvaluated(result, passIndex, stepIndex);
 
@@ -1399,25 +1382,27 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Routes BattleSystem.SequenceCompleted to the correct handler based on who is attacking.
     /// </summary>
-    private void OnSequenceCompleted()
+    private void OnSequenceCompleted(SequenceContext ctx)
     {
         if (_isPlayerMagicAttack)
             OnPlayerMagicSequenceCompleted();
         else
-            OnEnemySequenceCompleted();
+            OnEnemySequenceCompleted(ctx);
     }
 
-    private void OnEnemySequenceCompleted()
+    private void OnEnemySequenceCompleted(SequenceContext ctx)
     {
         GD.Print("[BattleTest] Enemy attack sequence complete.");
         _targetZone.Visible        = false;
         TimingPrompt.SuppressInput = false;
 
+        bool isHopIn = ctx.CurrentAttack.IsHopIn;
+
         // Player died mid-sequence — death animation is already playing.
         // Clean up the enemy and let the death flow finish (Game Over label).
         if (_playerParty[0].IsDead)
         {
-            if (_battleSystem.CurrentAttackIsHopIn)
+            if (isHopIn)
             {
                 // Hop-in path: let ProceedAfterHopInAnim handle teardown.
                 UpdateHPBars();
@@ -1441,7 +1426,7 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        if (_battleSystem.CurrentAttackIsHopIn)
+        if (isHopIn)
         {
             // Hop-in path continuation — runs after counter animation (if any) completes.
             void HopInContinuation()
@@ -1460,7 +1445,7 @@ public partial class BattleTest : Node2D
 
             if (_parryClean)
             {
-                TryTriggerAbsorption();
+                TryTriggerAbsorption(ctx);
                 PlayParryCounter(HopInContinuation);
             }
             else
@@ -1534,7 +1519,7 @@ public partial class BattleTest : Node2D
 
         if (_parryClean)
         {
-            TryTriggerAbsorption();
+            TryTriggerAbsorption(ctx);
             PlayParryCounter(() => NonHopInContinuation(skipCastEnd: true));
         }
         else
@@ -1581,8 +1566,7 @@ public partial class BattleTest : Node2D
         _sequenceDefender         = magicDefender;
         _sequenceAttackerClosePos = playerAttacker.Origin;
 
-        Vector2 defenderCenter = magicDefender.Origin + magicDefender.PositionRect.Size / 2f;
-        Vector2 promptPos      = ComputeCameraMidpoint(playerAttacker, magicDefender);
+        Vector2 promptPos = ComputeCameraMidpoint(playerAttacker, magicDefender);
 
         // Play cast animation; defer StartSequence until it finishes so the wind-up
         // completes before the timing circle appears and the effect fires.
@@ -1591,9 +1575,9 @@ public partial class BattleTest : Node2D
         GetTree().CreateTimer(1f / 12f).Timeout += () => PlaySound("magic_launch_4.wav");  // frame 1 at 12fps
         _playerAnimSprite.AnimationFinished += OnPlayerCastFinished;
 
-        // Capture locals for the callback closure.
-        _playerMagicDefenderCenter = defenderCenter;
-        _playerMagicPromptPos      = promptPos;
+        // OnPlayerCastFinished reads _sequenceAttacker / _sequenceDefender (set above)
+        // to build the SequenceContext. Only the prompt position needs caching here.
+        _playerMagicPromptPos = promptPos;
     }
 
     private void OnPlayerPromptCompleted(int result)
@@ -2046,9 +2030,9 @@ public partial class BattleTest : Node2D
     /// <see cref="_absorbedMoves"/> — absorption is per-move-type, not per-enemy-instance.
     /// Called immediately before PlayParryCounter in OnEnemySequenceCompleted.
     /// </summary>
-    private void TryTriggerAbsorption()
+    private void TryTriggerAbsorption(SequenceContext ctx)
     {
-        var currentAttack = _battleSystem.GetCurrentAttack();
+        var currentAttack = ctx.CurrentAttack;
         if (EnemyData?.LearnableAttack == null || currentAttack != EnemyData.LearnableAttack) return;
         if (_absorbedMoves.Contains(EnemyData.LearnableAttack)) return;
 

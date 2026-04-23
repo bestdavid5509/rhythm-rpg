@@ -343,8 +343,14 @@ public partial class BattleTest : Node2D
             if (_playerParty[0].IsDead) return;
             _targetZone.Position = _playerMagicPromptPos;
             _targetZone.Visible  = true;
-            _battleSystem.SetAttack(_activeMagicAttack);
-            _battleSystem.StartSequence(this, _playerMagicDefenderCenter, _playerMagicPromptPos, isPlayerAttack: true);
+            var ctx = new SequenceContext
+            {
+                Attacker      = _sequenceAttacker,
+                Target        = _sequenceDefender,
+                CurrentAttack = _activeMagicAttack,
+                SequenceId    = _battleSystem.NextSequenceId(),
+            };
+            _battleSystem.StartSequence(this, ctx, _playerMagicPromptPos);
         };
     }
 
