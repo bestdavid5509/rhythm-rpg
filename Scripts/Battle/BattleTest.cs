@@ -207,9 +207,12 @@ public partial class BattleTest : Node2D
     // _selectedTarget is the currently-highlighted combatant (read by Begin* once
     // the player confirms); _pendingActionLauncher is the closure that fires the
     // attack (including MP deduction) when the player presses battle_confirm.
-    // Both are cleared on confirm (after launcher invocation) and on cancel.
-    private Combatant  _selectedTarget;
+    // _selectingTargetFromSubmenu remembers which menu context the target-select
+    // was entered from so Cancel returns to the correct menu (main vs. Absorbed
+    // Moves submenu). All three fields are cleared on confirm and on cancel.
+    private Combatant     _selectedTarget;
     private System.Action _pendingActionLauncher;
+    private bool          _selectingTargetFromSubmenu;
 
     // Party lists owned by BattleTest. Single-entry for the 1v1 prototype; the
     // scaffolding exercise grows them to 4/5. Source of truth for combat-universal
@@ -1555,18 +1558,42 @@ public partial class BattleTest : Node2D
     // wire ui_left / ui_right to iterate valid targets once multi-enemy / party
     // selection density exists.
 
-    private void EnterSelectingTarget(Combatant defaultTarget)
+    private void EnterSelectingTarget(Combatant defaultTarget, bool fromSubmenu)
     {
-        _state          = BattleState.SelectingTarget;
-        _selectedTarget = defaultTarget;
+        _state                       = BattleState.SelectingTarget;
+        _selectedTarget              = defaultTarget;
+        _selectingTargetFromSubmenu  = fromSubmenu;
+
+        // Auto-confirm when target is unambiguous. Today every attack has exactly
+        // one valid target (offensive → single enemy, Cure → self); the pointer
+        // appears when friendly-fire / ally-heal support introduces multi-target
+        // pools. Until then, skip the confirmation ceremony — selecting a known
+        // single target adds input friction without giving the player a choice.
+        if (IsTargetPoolSingleton(defaultTarget))
+        {
+            ConfirmTargetSelection();
+            return;
+        }
+
         _targetPointer.SnapTo(defaultTarget);
         _targetPointer.Visible = true;
         GD.Print($"[BattleTest] Selecting target — default: {defaultTarget.Name}.");
     }
 
+    /// <summary>
+    /// True when the valid-target pool for the current attack contains exactly one
+    /// combatant (i.e. <paramref name="defaultTarget"/> is the only choice). Stub
+    /// today — every offensive attack targets the single enemy; Cure targets self;
+    /// no attack yet allows ally-target or friendly-fire. When those land (post
+    /// Phase 6, pending AttackData target-pool metadata), this checks the actual
+    /// alive-combatants-on-the-appropriate-side count instead of hard-returning true.
+    /// </summary>
+    private bool IsTargetPoolSingleton(Combatant defaultTarget) => true;
+
     private void ConfirmTargetSelection()
     {
-        _targetPointer.Visible = false;
+        _targetPointer.Visible       = false;
+        _selectingTargetFromSubmenu  = false;  // defensive clear; mirrors cancel's reset pattern
         var launcher = _pendingActionLauncher;
         _pendingActionLauncher = null;
         launcher?.Invoke();
@@ -1583,7 +1610,31 @@ public partial class BattleTest : Node2D
         // reads them in the interval.
         _isComboAttack          = false;
         _activeMagicAttack      = null;
-        ShowMenu();  // resets _state = PlayerMenu and re-displays the main menu
+
+        // Return to the menu context the target-select was entered from.
+        // Submenu picks (Combo Strike, any magic) cancel back to the Absorbed
+        // Moves submenu so the player's prior navigation isn't lost; main-menu
+        // picks (Basic Attack) cancel back to the main menu. Flag cleared after
+        // dispatch so the next SelectingTarget entry sets it fresh.
+        //
+        // ShowSubMenu doesn't set _state / _inputLocked (it assumes it's called
+        // from within the menu flow, not from SelectingTarget). Set them
+        // explicitly for the submenu branch; ShowMenu handles both for its
+        // branch. _menuLayer.Visible was toggled off by HideMenu at the menu
+        // handler, so restore it too.
+        bool fromSubmenu = _selectingTargetFromSubmenu;
+        _selectingTargetFromSubmenu = false;
+        if (fromSubmenu)
+        {
+            _state             = BattleState.PlayerMenu;
+            _inputLocked       = false;
+            _menuLayer.Visible = true;
+            ShowSubMenu();
+        }
+        else
+        {
+            ShowMenu();
+        }
     }
 
     private void HandleSelectingTargetInput(InputEvent @event)

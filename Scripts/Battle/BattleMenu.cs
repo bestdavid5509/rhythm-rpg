@@ -369,7 +369,7 @@ public partial class BattleTest : Node2D
                 _isComboAttack = false;
                 _pendingActionLauncher = () => BeginPlayerAttack();
                 HideMenu();
-                EnterSelectingTarget(_enemyParty[0]);
+                EnterSelectingTarget(_enemyParty[0], fromSubmenu: false);
                 break;
             case 1: ShowSubMenu(); break;   // Absorbed Moves
             case 2:                         // Defend — halve miss damage this enemy turn
@@ -418,7 +418,7 @@ public partial class BattleTest : Node2D
                 BeginPlayerAttack();
             };
             HideMenu();
-            EnterSelectingTarget(_enemyParty[0]);
+            EnterSelectingTarget(_enemyParty[0], fromSubmenu: true);
         }
         else if (category == AttackCategory.Magic)
         {
@@ -437,7 +437,7 @@ public partial class BattleTest : Node2D
                 BeginPlayerMagicAttack();
             };
             HideMenu();
-            EnterSelectingTarget(defaultTarget);
+            EnterSelectingTarget(defaultTarget, fromSubmenu: true);
         }
     }
 
