@@ -71,9 +71,11 @@ public partial class BattleTest : Node2D
     // Perfect parry
     // =========================================================================
 
-    // Set true at the start of each enemy attack, cleared to false on any Miss result.
-    // Checked when PromptCompleted fires to decide whether to trigger the auto counter.
-    // Per-sequence context — will move to SequenceContext in Phase 3.9 (J-category).
+    // Per-sequence parry-outcome state. Stays on BattleTest — this is BattleTest's
+    // control-flow state for the sequence, not sequence identity/data (which lives
+    // on SequenceContext). Reset to true on BeginEnemyAttack; cleared to false on
+    // any Miss in OnEnemyPassEvaluated; read at OnEnemySequenceCompleted to decide
+    // whether to trigger the auto parry-counter.
     private bool _parryClean;
 
     // =========================================================================
@@ -280,10 +282,6 @@ public partial class BattleTest : Node2D
     // Set at the start of each combo turn; cleared in BeginPlayerAttack and BeginComboMissRetreat.
     // When true, OnComboPassNSlashFinished skips the wind-up hold and triggers the retreat instead.
     private bool       _comboMissed;
-
-    // Cached in BeginPlayerMagicAttack; consumed by OnPlayerCastFinished once the
-    // cast animation completes and it is safe to start the sequence.
-    private Vector2    _playerMagicPromptPos;
 
     // Hop-in coordination — two-flag rendezvous so ProceedAfterHopInAnim fires only after
     // BOTH the sequence completes AND the attack animation finishes (whichever is last).
@@ -1571,18 +1569,14 @@ public partial class BattleTest : Node2D
         _sequenceDefender         = magicDefender;
         _sequenceAttackerClosePos = playerAttacker.Origin;
 
-        Vector2 promptPos = ComputeCameraMidpoint(playerAttacker, magicDefender);
-
         // Play cast animation; defer StartSequence until it finishes so the wind-up
         // completes before the timing circle appears and the effect fires.
+        // OnPlayerCastFinished recomputes the prompt position from the sequence
+        // fields set above — no separate cached Vector2 needed.
         SafeDisconnectPlayerAnim(OnPlayerCastFinished);
         PlayPlayer("cast");  // OWNER: BeginPlayerMagicAttack — cast wind-up before sequence
         GetTree().CreateTimer(1f / 12f).Timeout += () => PlaySound("magic_launch_4.wav");  // frame 1 at 12fps
         _playerAnimSprite.AnimationFinished += OnPlayerCastFinished;
-
-        // OnPlayerCastFinished reads _sequenceAttacker / _sequenceDefender (set above)
-        // to build the SequenceContext. Only the prompt position needs caching here.
-        _playerMagicPromptPos = promptPos;
     }
 
     private void OnPlayerPromptCompleted(int result)

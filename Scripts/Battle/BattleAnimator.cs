@@ -341,7 +341,11 @@ public partial class BattleTest : Node2D
         GetTree().CreateTimer(0.2f).Timeout += () =>
         {
             if (_playerParty[0].IsDead) return;
-            _targetZone.Position = _playerMagicPromptPos;
+            // Recompute the prompt position from the sequence-scoped fields set in
+            // BeginPlayerMagicAttack — they remain stable across the cast delay, so
+            // no separate Vector2 cache is needed.
+            Vector2 promptPos = ComputeCameraMidpoint(_sequenceAttacker, _sequenceDefender);
+            _targetZone.Position = promptPos;
             _targetZone.Visible  = true;
             var ctx = new SequenceContext
             {
@@ -350,7 +354,7 @@ public partial class BattleTest : Node2D
                 CurrentAttack = _activeMagicAttack,
                 SequenceId    = _battleSystem.NextSequenceId(),
             };
-            _battleSystem.StartSequence(this, ctx, _playerMagicPromptPos);
+            _battleSystem.StartSequence(this, ctx, promptPos);
         };
     }
 
