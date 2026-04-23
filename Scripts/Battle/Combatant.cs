@@ -65,6 +65,14 @@ public class Combatant
     // the tween self-destructs.
     public Tween FlashTween;
 
+    // Mirror of FlashTween — independent handle for the Phase 5 red-tint threat
+    // pulse. Tweens tint_amount on FlashMaterial; the two effects (white flash +
+    // red tint) coexist via separate uniforms on CombatantOverlay.gdshader, so
+    // both tween handles must be independent to avoid stomping each other when
+    // white-flash and threat-reveal fire in the same turn (e.g., enemy uses a
+    // learnable move — white flash on enemy + red tint on player).
+    public Tween ThreatTween;
+
     // ---- Damage / heal application --------------------------------------------
     //
     // Friendly-fire-readiness note: TakeDamage and Heal are attacker-agnostic —

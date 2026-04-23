@@ -178,7 +178,7 @@ When Beckon target-redirect lands, the Beckon turn's sequence becomes:
   expectation: "I called it; now it comes for me").
 - Enemy's `SelectEnemyAttack` returns the learnable attack → enemy white-flash
   fires (learnable signal) → attack proceeds.
-- Both visual signals ( enemy white flash + Beckoner red outline ) run
+- Both visual signals ( enemy white flash + Beckoner red tint ) run
   concurrently on their respective sprites, consistent with the Phase 5
   composite-shader design.
 

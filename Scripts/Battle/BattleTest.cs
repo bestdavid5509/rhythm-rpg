@@ -227,6 +227,13 @@ public partial class BattleTest : Node2D
     private List<Combatant> _playerParty = new();
     private List<Combatant> _enemyParty  = new();
 
+    // Phase 5 — threat-reveal target list, populated each enemy turn in BeginEnemyAttack
+    // and read by the threat-reveal fire loop. Single entry today (enemy always targets
+    // the single player); multi-target attacks post-Phase-6 populate more entries. Cleared
+    // + repopulated each turn rather than accumulated so stale entries from previous turns
+    // don't bleed into the current threat reveal.
+    private List<Combatant> _threatenedCombatants = new();
+
     // =========================================================================
     // Characters and animations
     // =========================================================================
@@ -438,14 +445,24 @@ public partial class BattleTest : Node2D
         _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;  // snapshot for teardown restoration
         _enemyAnimSprite.Play("idle");
 
-        // White flash shader — used for learnable move signalling. Created here, attached
-        // to the enemy AnimatedSprite2D, and later referenced by enemyCombatant.FlashMaterial
-        // in BuildInitialParties (which reads _enemyAnimSprite.Material back as ShaderMaterial).
-        var flashShader = GD.Load<Shader>("res://Assets/Shaders/WhiteFlash.gdshader");
-        var flashMaterial = new ShaderMaterial();
-        flashMaterial.Shader = flashShader;
-        flashMaterial.SetShaderParameter("flash_amount", 0.0f);
-        _enemyAnimSprite.Material = flashMaterial;
+        // Combatant-overlay shader — composites two independent effects (white flash
+        // for learnable-move signalling, red tint for Phase 5 threat reveal) on a
+        // single material slot. Each combatant gets its own ShaderMaterial instance so
+        // the uniforms are per-combatant; both sprites get one attached here and are
+        // later referenced by Combatant.FlashMaterial in BuildInitialParties.
+        var overlayShader = GD.Load<Shader>("res://Assets/Shaders/CombatantOverlay.gdshader");
+
+        var enemyOverlayMaterial = new ShaderMaterial();
+        enemyOverlayMaterial.Shader = overlayShader;
+        enemyOverlayMaterial.SetShaderParameter("flash_amount", 0.0f);
+        enemyOverlayMaterial.SetShaderParameter("tint_amount",  0.0f);
+        _enemyAnimSprite.Material = enemyOverlayMaterial;
+
+        var playerOverlayMaterial = new ShaderMaterial();
+        playerOverlayMaterial.Shader = overlayShader;
+        playerOverlayMaterial.SetShaderParameter("flash_amount", 0.0f);
+        playerOverlayMaterial.SetShaderParameter("tint_amount",  0.0f);
+        _playerAnimSprite.Material = playerOverlayMaterial;
 
         _battleSystem = new BattleSystem();
         AddChild(_battleSystem);
@@ -1223,7 +1240,6 @@ public partial class BattleTest : Node2D
         var selectedAttack = SelectEnemyAttack();
 
         var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
-        var playerDefender = _playerParty[0];
 
         // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
         // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
@@ -1235,6 +1251,36 @@ public partial class BattleTest : Node2D
             ShowLearnableSignal();
             FlashCombatantWhite(enemyAttacker);
         }
+
+        // Phase 5 — threat reveal. Populate the threatened-combatants list (single
+        // entry today: the enemy always targets the single player; AOE-ready via the
+        // list so multi-target attacks can add more entries once AttackData gains
+        // target-pool metadata in Phase 6). Fire FlashCombatantThreatened on each to
+        // run the 1.0s red-tint pulse, then defer the actual attack launch by 1.0s
+        // so the tint fades out exactly as the attack animation begins.
+        _threatenedCombatants.Clear();
+        _threatenedCombatants.Add(_playerParty[0]);
+        foreach (var target in _threatenedCombatants)
+            FlashCombatantThreatened(target);
+
+        GetTree().CreateTimer(1.0f).Timeout += () =>
+        {
+            if (!GodotObject.IsInstanceValid(this)) return;
+            ExecuteEnemyAttack(selectedAttack);
+        };
+    }
+
+    /// <summary>
+    /// Second half of the enemy turn — runs 1.0s after BeginEnemyAttack, once the
+    /// threat-reveal tint pulse has completed. Builds the SequenceContext and
+    /// dispatches to the hop-in or cast path. Split out from BeginEnemyAttack so the
+    /// pre-attack threat-reveal beat doesn't entangle with timer-callback plumbing
+    /// on the hop-in branch's early-return.
+    /// </summary>
+    private void ExecuteEnemyAttack(AttackData selectedAttack)
+    {
+        var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
+        var playerDefender = _playerParty[0];
 
         // Build the sequence context once — the same reference threads through every
         // StepStarted / StepPassEvaluated / SequenceCompleted signal for this sequence.
@@ -2289,9 +2335,10 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Flashes <paramref name="target"/>'s sprite white 3 times over ~0.6s using the
-    /// WhiteFlash shader. Reads / writes the flash material and tween on the Combatant
-    /// so per-target flashes remain independently trackable at multi-combat density.
-    /// Target-agnostic — works for any Combatant with a populated FlashMaterial.
+    /// <c>flash_amount</c> uniform on <c>CombatantOverlay.gdshader</c>. Reads / writes the
+    /// flash material and tween on the Combatant so per-target flashes remain
+    /// independently trackable at multi-combat density. Target-agnostic — works for any
+    /// Combatant with a populated FlashMaterial.
     /// </summary>
     private void FlashCombatantWhite(Combatant target)
     {
@@ -2309,6 +2356,35 @@ public partial class BattleTest : Node2D
                 Callable.From((float v) => material.SetShaderParameter("flash_amount", v)),
                 1.0f, 0.0f, 0.1f);
         }
+    }
+
+    /// <summary>
+    /// Plays a ~1s red-tint pulse on <paramref name="target"/>'s sprite to signal that
+    /// an incoming enemy attack is about to hit this combatant (Phase 5 threat reveal).
+    /// Tweens the <c>tint_amount</c> uniform on <c>CombatantOverlay.gdshader</c> —
+    /// independent of <c>flash_amount</c>, so the white-flash and threat-reveal effects
+    /// can run concurrently on the same sprite (rare today, more common post-Phase-6).
+    /// Target-agnostic — works for any Combatant with a populated FlashMaterial.
+    /// </summary>
+    private void FlashCombatantThreatened(Combatant target)
+    {
+        if (target.IsDead) return;
+
+        target.ThreatTween?.Kill();
+        target.FlashMaterial.SetShaderParameter("tint_amount", 0.0f);
+
+        // 0.2s fade in → 0.6s hold at full → 0.2s fade out. 1.0s total — matches the
+        // BeginEnemyAttack pause duration so the tint fades out exactly as the attack
+        // animation begins.
+        target.ThreatTween = CreateTween();
+        var material = target.FlashMaterial;
+        target.ThreatTween.TweenMethod(
+            Callable.From((float v) => material.SetShaderParameter("tint_amount", v)),
+            0.0f, 1.0f, 0.2f);
+        target.ThreatTween.TweenInterval(0.6f);
+        target.ThreatTween.TweenMethod(
+            Callable.From((float v) => material.SetShaderParameter("tint_amount", v)),
+            1.0f, 0.0f, 0.2f);
     }
 
     // Single-party prototype: reads party[0] because there's only one combatant per side.
@@ -2631,18 +2707,19 @@ public partial class BattleTest : Node2D
 
         var playerCombatant = new Combatant
         {
-            Name         = "Knight",
-            Side         = CombatantSide.Player,
-            CurrentHp    = PlayerMaxHP,
-            MaxHp        = PlayerMaxHP,
-            IsDead       = false,
-            Origin       = _playerOrigin,
-            PositionRect = _playerSprite,
-            AnimSprite   = _playerAnimSprite,
-            CurrentMp    = PlayerMaxMp,
-            MaxMp        = PlayerMaxMp,
-            IsDefending  = false,
-            IsBeckoning  = false,
+            Name          = "Knight",
+            Side          = CombatantSide.Player,
+            CurrentHp     = PlayerMaxHP,
+            MaxHp         = PlayerMaxHP,
+            IsDead        = false,
+            Origin        = _playerOrigin,
+            PositionRect  = _playerSprite,
+            AnimSprite    = _playerAnimSprite,
+            CurrentMp     = PlayerMaxMp,
+            MaxMp         = PlayerMaxMp,
+            IsDefending   = false,
+            IsBeckoning   = false,
+            FlashMaterial = _playerAnimSprite.Material as ShaderMaterial,
         };
         _playerParty.Add(playerCombatant);
 
