@@ -32,10 +32,12 @@ The Absorber accumulates a library of absorbed moves over time.
 | File | Responsibility |
 |---|---|
 | `BattleTest.cs` | Core turn loop, state machine, lifecycle (`_Ready`/`_Input`), all field declarations, tween helpers, position helpers, shared combat helpers |
-| `BattleAnimator.cs` | Sprite frame construction, all `AnimationFinished` callbacks, dead-flag guards (`PlayPlayer`/`PlayEnemy`/etc.), safe-disconnect helpers, end-of-battle overlay |
+| `BattleAnimator.cs` | Sprite frame construction, all `AnimationFinished` callbacks, unified target-aware sprite helpers (`PlayAnim`/`StopAnim`/`SafeDisconnectAnim`/etc.), end-of-battle overlay |
 | `BattleMenu.cs` | Battle menu construction, navigation, input handling — main menu and Absorbed Moves submenu |
 | `BattleDialogue.cs` | Narrative dialogue component — multi-line speaker-tagged character speech with character-by-character reveal; constructed per use and `QueueFree`'d after `DialogueCompleted`. Standalone class, not a `BattleTest` partial. |
-| `BattleSystem.cs` | Attack sequence runner — drives `AttackData` steps, spawns `TimingPrompt` circles and timed effect `AnimatedSprite2D` nodes, emits `StepPassEvaluated` / `SequenceCompleted` |
+| `BattleSystem.cs` | Attack sequence runner — drives `AttackData` steps, spawns `TimingPrompt` circles and timed effect `AnimatedSprite2D` nodes, emits `StepPassEvaluated` / `SequenceCompleted` (both carry `SequenceContext` payload) |
+| `Combatant.cs` | Plain C# class representing a single battle participant. Fields for HP/MP/side/sprite refs; `TakeDamage(int)` / `Heal(int)` methods. `CombatantSide` enum (Player / Enemy). |
+| `SequenceContext.cs` | `RefCounted`-derived wrapper carrying per-sequence identity (Attacker, Target, CurrentAttack, SequenceId) through BattleSystem signals. Combatant isn't Variant-compatible; this is the marshalling vehicle. |
 | `TimingPrompt.cs` | Single closing circle — Standard, Slow, and Bouncing variants; draws only the moving ring and hit/miss flash; does **not** draw the target ring (see `TargetZone`); emits `PassEvaluated` and `PromptCompleted`; static `ConfirmAll()` resolves all active circles on one input event |
 | `TargetZone.cs` | Persistent shared target ring node in `BattleTest.tscn`; draws the stationary white ring and green hit-window band; shown/hidden by `BattleTest` at sequence start/end; has no knowledge of individual circles |
 | `AttackData.cs` | `[GlobalClass]` Resource — ordered list of `AttackStep` objects, `DisplayName`, `BaseDamage`, `MpCost`, `Category`, `IsHopIn`; saved as `.tres` files |
@@ -218,6 +220,92 @@ All active `TimingPrompt` instances register themselves in a static `List<Timing
 
 `TimingPrompt.ConfirmAll()` is a static method that calls `EvaluateInput()` on every registered prompt. BattleSystem calls this once per input event to resolve all in-window circles simultaneously. Prompts outside the window, locked out, or on outward passes are silently skipped by `EvaluateInput`'s existing guards.
 
+### Combatant
+
+The `Combatant` is a plain C# class (not a `GodotObject`) representing a single battle participant. One instance per unit; side-agnostic — same type on both sides, `CombatantSide.Player` / `CombatantSide.Enemy` distinguishes them.
+
+Source of truth for per-unit state. Scene-tree nodes (`ColorRect`, `AnimatedSprite2D`) are owned by the scene; the Combatant holds references.
+
+**Fields** (see `Combatant.cs`):
+
+| Field | Purpose |
+|---|---|
+| `Name`, `Side` | identity; `Side` is `CombatantSide.Player`/`.Enemy` |
+| `CurrentHp`, `MaxHp`, `IsDead` | combat state; mutate via `TakeDamage(int)` / `Heal(int)` |
+| `Origin`, `PositionRect`, `AnimSprite` | scene-tree node refs |
+| `CurrentMp`, `MaxMp`, `IsDefending`, `IsBeckoning` | player-only; null/default on enemies |
+| `Data`, `HasBeenAbsorbed` | enemy-only; `Data` is `EnemyData` |
+| `FlashMaterial`, `FlashTween` | per-unit flash shader state |
+
+**Party lists** on `BattleTest`:
+```csharp
+private List<Combatant> _playerParty = new();
+private List<Combatant> _enemyParty  = new();
+```
+Built once by `BuildInitialParties()` in `_Ready`. Single-entry at the 1v1 prototype surface; the scaffolding exercise grows them to 4/5. `_playerParty[0]` / `_enemyParty[0]` is the accepted access pattern today.
+
+**Party-level state** that's not per-unit:
+- `_absorbedMoves: HashSet<AttackData>` — per-move-type absorb tracking. Prototype simplification; long-term home is Absorber-character persistent skill data.
+
+**`TakeDamage(int)` / `Heal(int)`** clamp HP to `[0, MaxHp]`. Attacker-agnostic — the receiver operates on itself without knowing the attacker. Same-side targeting (friendly-fire, ally-heal, self-damage, self-heal) is supported by construction; see `docs/design-notes.md` for the forward-looking design.
+
+**Signal marshalling:** Combatant is not Variant-compatible, so it cannot be a direct `[Signal]` parameter. It marshals through `SequenceContext` (RefCounted wrapper) — see the next section. Full rationale in `docs/combatant-abstraction-design.md`.
+
+### SequenceContext
+
+`SequenceContext` is a `RefCounted`-derived wrapper carrying per-sequence identity through `BattleSystem` signals. One instance per attack sequence.
+
+**Fields** (see `SequenceContext.cs`):
+```csharp
+public Combatant  Attacker      { get; init; }
+public Combatant  Target        { get; init; }
+public AttackData CurrentAttack { get; init; }
+public int        SequenceId    { get; init; }
+```
+
+**Why a RefCounted wrapper:** Godot's `[Signal]` parameters must be Variant-compatible. Plain C# classes trigger source-generator error GD0202. A RefCounted wrapper marshals through Variant; its plain-C#-class fields preserve reference identity on the subscriber side.
+
+**Construction:** callers build the context before invoking `BattleSystem.StartSequence(parent, ctx, promptPosition)`. Monotonic IDs via `_battleSystem.NextSequenceId()`:
+```csharp
+var ctx = new SequenceContext {
+    Attacker      = enemyAttacker,
+    Target        = playerDefender,
+    CurrentAttack = selectedAttack,
+    SequenceId    = _battleSystem.NextSequenceId(),
+};
+_battleSystem.StartSequence(this, ctx, promptPos);
+```
+
+**Signal payload on BattleSystem:**
+- `StepStarted(int stepIndex, SequenceContext ctx)`
+- `StepPassEvaluated(int result, int passIndex, int stepIndex, SequenceContext ctx)`
+- `SequenceCompleted(SequenceContext ctx)`
+
+Every signal for a given sequence carries the same `ctx` reference. Subscribers use reference equality or `SequenceId` to identify the sequence.
+
+**Context-preserved invariant:** BattleSystem does NOT clear `_sequenceContext` when `SequenceCompleted` fires. Animation callbacks and teardown queries (e.g. `GetLastStepPostAnimDelayMs()`) run AFTER SequenceCompleted and still need to inspect the most recent attack. The context is overwritten by the next `StartSequence` — matching the old "last attack stays resident" semantics of the retired `_currentAttack` field.
+
+**SpawnEffectSprite geometry** derives from `ctx`:
+- Target center: `ctx.Target.Origin + ctx.Target.PositionRect.Size / 2f`
+- FlipH: `attackerOnRight = ctx.Attacker.Origin.X > ctx.Target.Origin.X` — invert authored `step.FlipH` for left-side attackers so the same `.tres` file works in both directions.
+- Active offset: `attackerOnRight ? step.Offset : step.PlayerOffset`.
+
+### Refactor Conventions
+
+Patterns established during Phase 3. New combat code should follow these.
+
+**[0]-access discipline.** At the current single-unit surface, `_playerParty[0]` / `_enemyParty[0]` are the accepted party accessors. Prefer semantic locals (`var player = _playerParty[0];`) where a single local serves multiple calls. Direct `_playerParty[0]` / `_enemyParty[0]` is accepted at one-off helper calls (e.g. `PlayAnim(_playerParty[0], "idle")`) where a local adds no clarity. Party iteration replaces this entirely when multi-unit density lands.
+
+**Combatant-prefix naming for attacker-agnostic operations.** Methods that operate on a receiver without knowing the attacker use the `Combatant` prefix: `Combatant.TakeDamage`, `Combatant.Heal`, `FlashCombatantWhite`, `ShakeCombatantSprite`, `PlayCombatantHurtFlash`. The naming signals "target-parameterised and side-agnostic" and parallels the unified guard helpers (`PlayAnim(Combatant, string)` etc.).
+
+**Dispatch-vs-receiver predicate.** Two semantically distinct questions that sometimes coincide:
+- **Dispatch** (before target is selected): "which target should this attack pick?" — attack-identity, e.g. `_activeMagicAttack == _playerCureAttack` in `BeginPlayerMagicAttack` to decide self-vs-enemy.
+- **Receiver** (after attacker/target pair is chosen): "is this a same-side scenario?" — side-equality, e.g. `_sequenceAttacker.Side == _sequenceDefender.Side` in `OnPlayerMagicPassEvaluated` to fork heal-vs-damage.
+
+Today they coincide (Cure is the only self-targeter). They generalise differently: dispatch stays attack-specific; receiver generalises to friendly-fire / ally-heal without further refactor. See `docs/design-notes.md` on friendly-fire.
+
+**Sequence-scoped fields on BattleTest** (Option Y from the Phase 3.4 migration): `_sequenceAttacker`, `_sequenceDefender`, `_sequenceAttackerClosePos`. Set at sequence start; read by positioning helpers and animation-callback continuations that can't receive `ctx` as a parameter (AnimationFinished callbacks use reference-equality `SafeDisconnect` patterns that closures would break). These mirror data on `_sequenceContext` inside BattleSystem but are local to BattleTest.
+
 ### Shared Target Zone
 
 A single persistent `TargetZone` node lives in `BattleTest.tscn`. It draws the stationary white ring and green hit-window band that all closing circles aim at.
@@ -272,13 +360,13 @@ Multi-step hop-in melee attacks drive the enemy's own sprite animation per step 
 
 - **`AttackStep.EnemyAnimation`** — name of the enemy animation to play at the start of this step (e.g. `"melee_attack"`, `"light_attack"`). Empty string = no enemy animation driven (cast attacks use this). Ignored when `AttackData.IsHopIn` is false.
 - **`AttackStep.WaitAnimation`** — name of an animation to freeze on frame 0 during the gap before the **next** step plays (the idle-pose substitute during `StartOffsetMs` delays between steps). Read from the **next step** in `OnEnemyAttackAnimFinished` so the enemy holds a wind-up pose during the wait. Empty = plays idle.
-- **`BattleSystem.StepStarted(stepIndex)`** signal — emitted at the top of `RunStep()` before circles spawn. `BattleTest.OnBattleSystemStepStarted` subscribes and plays `step.EnemyAnimation` after the impact-frame-sync delay so the animation's impact frame lands when the first circle closes.
+- **`BattleSystem.StepStarted(int stepIndex, SequenceContext ctx)`** signal — emitted at the top of `RunStep()` before circles spawn. `BattleTest.OnBattleSystemStepStarted` subscribes and plays `step.EnemyAnimation` after the impact-frame-sync delay so the animation's impact frame lands when the first circle closes.
 
 Step scheduling stays timer-driven in `BattleSystem.RunStep` — `StartOffsetMs` controls the gap between steps. For hop-in combos, authors must set `StartOffsetMs` large enough for the previous animation to complete (e.g. 16 frames at 12 fps ≈ 1.33 s) or use `WaitAnimation` to show a held pose during the gap.
 
 `ProceedAfterHopInAnim` reads `GetLastStepPostAnimDelayMs()` — the **last** step's `PostAnimationDelayMs` controls the hold before retreat on multi-step attacks.
 
-Enemy Physical miss cancellation is gated by `_isPlayerAttack &&` so enemy attacks always play their full sequence regardless of parry outcome. Only player Physical attacks cancel on miss.
+Enemy Physical miss cancellation is gated by `_sequenceContext.Attacker.Side == CombatantSide.Player` (inside `BattleSystem.OnAnyCircleCompleted`) so enemy attacks always play their full sequence regardless of parry outcome. Only player Physical attacks cancel on miss.
 
 ### Player Menu Structure
 
@@ -312,43 +400,58 @@ All knight animations use 120×80 px frames from horizontal-strip PNGs at `res:/
 
 **Parry** (`_Attack2NoMovement.png`, frames 2–5): plays on every successful enemy-attack block.
 
-**Wind-up hold behaviour:** after the hop-in completes, `Animation = "combo"`, `Stop()`, `Frame = 0` freezes the sprite on the first wind-up pose while the player waits to input. `Stop()` is called before `Frame =` to counteract Godot 4's reset-to-0 on a stopped non-looping animation.
+**Wind-up hold behaviour:** after the hop-in completes, the sprite freezes on the first wind-up pose via `Animation = "combo"; StopAnim(player); SetAnimFrame(player, 0)`. `StopAnim` is called before `SetAnimFrame` to counteract Godot 4's reset-to-0 on a stopped non-looping animation.
 
-**Parry and hit frame-hold pattern:** `OnParryFinished` and `OnHitAnimFinished` use a variant of the combo wind-up's Stop/Frame ordering — `int lastFrame = _playerAnimSprite.Frame; StopPlayer(); SetPlayerFrame(lastFrame);`. Where the combo wind-up deliberately sets a specific target frame (`Stop()` then `Frame = 0`), the parry/hit handlers capture the *natural* last frame of the just-completed animation so the held pose always matches wherever the animation ended. Capturing `Frame` *before* `StopPlayer()` is load-bearing because Godot 4's `AnimatedSprite2D.Stop()` resets `Frame` to 0 on a finished non-looping animation; `SetPlayerFrame` after `Stop` restores the actual last pose. A `CreateTimer` then holds the frozen frame before returning to `idle` — **3 frames** (3/12 ≈ 0.25s) on parry, **4 frames** (4/12 ≈ 0.333s) on hit. The asymmetry is intentional: parry's animation (frames 2–5 of `_Attack2NoMovement.png`) already has visible follow-through that registers the action, so the post-hold needs to carry less of the beat. Hit is currently a 1-frame animation with no follow-through, so it leans harder on the hold.
+**Parry and hit frame-hold pattern:** `OnParryFinished` and `OnHitAnimFinished` use a variant of the combo wind-up's Stop/Frame ordering — `int lastFrame = _playerAnimSprite.Frame; StopAnim(player); SetAnimFrame(player, lastFrame);`. Where the combo wind-up deliberately sets a specific target frame (`StopAnim` then `SetAnimFrame(player, 0)`), the parry/hit handlers capture the *natural* last frame of the just-completed animation so the held pose always matches wherever the animation ended. Capturing `Frame` *before* `StopAnim` is load-bearing because Godot 4's `AnimatedSprite2D.Stop()` resets `Frame` to 0 on a finished non-looping animation; `SetAnimFrame` after `Stop` restores the actual last pose. (The `Frame` read is a direct sprite access — there is no guard-helper for read-only operations.) A `CreateTimer` then holds the frozen frame before returning to `idle` — **3 frames** (3/12 ≈ 0.25s) on parry, **4 frames** (4/12 ≈ 0.333s) on hit. The asymmetry is intentional: parry's animation (frames 2–5 of `_Attack2NoMovement.png`) already has visible follow-through that registers the action, so the post-hold needs to carry less of the beat. Hit is currently a 1-frame animation with no follow-through, so it leans harder on the hold.
 
-**Retreat (PlayBackwards):**
+**Retreat (PlayAnimBackwards):**
 1. Before retreat: `SpriteFrames.SetAnimationLoop("run", false)` so `AnimationFinished` fires at frame 0.
-2. `SpeedScale = 2f`, `PlayBackwards("run")` — snappy hop-back.
+2. `SpeedScale = 2f`, `PlayAnimBackwards(_playerParty[0], "run")` — snappy hop-back.
 3. `OnRetreatFinished` resets `SpeedScale = 1f`, restores `SetAnimationLoop("run", true)`, returns to `idle` only if `Animation == "run"` (guards against a concurrent parry/hit taking ownership).
 
 **Item use (`_ItemUse.png`, 9 frames, no loop):** `item_use` plays when the player uses the Ether item. Triggered from `BattleMenu` → `UseEtherItem()` in BattleTest. At frame 6 of the animation, `SpawnEtherEffect()` spawns the Blue Descending Circle Buff sprite overlaid on the player, plays `cure_spell.wav`, and calls `RestoreMp(20)`. The Ether effect data comes from `player_ether_item_use.tres` — an `AttackData` used as pure visual data (no circles, not routed through `BattleSystem.StartSequence`). When the animation finishes, `OnEtherAnimationFinished` returns the player to idle, then `BeginEnemyAttack` fires after 0.5 s.
 
 **AddPlayerAnimationMixed** (BattleAnimator.cs): utility helper that registers an animation sampled from a list of `(texture path, frame index)` pairs — supports non-contiguous frames and frames pulled from multiple source strips. Retained for future custom multi-source animations; not currently used (all active player animations use the contiguous-range `AddPlayerAnimation` helper).
 
-### Dead-Flag Guards
+### Dead-Flag Guards and Unified Sprite Helpers
 
-Once `_playerDead` or `_enemyDead` is set, no further animation calls can override the death pose. All sprite interaction routes through five helpers in `BattleAnimator.cs`:
+Once `Combatant.IsDead` is true, no further animation calls can override the death pose. All sprite interactions route through five unified target-aware helpers in `BattleAnimator.cs`:
 
 ```csharp
-PlayPlayer(string anim)          // guarded by !_playerDead
-PlayPlayerBackwards(string anim) // guarded by !_playerDead
-StopPlayer()                     // guarded by !_playerDead
-SetPlayerFrame(int frame)        // guarded by !_playerDead
-PlayEnemy(string anim)           // guarded by !_enemyDead
+PlayAnim(Combatant target, string anim)
+PlayAnimBackwards(Combatant target, string anim)
+StopAnim(Combatant target)
+SetAnimFrame(Combatant target, int frame)
+SafeDisconnectAnim(Combatant target, Action handler)
 ```
 
-### Safe Signal Disconnect Pattern
+Each guards on `!target.IsDead` before touching `target.AnimSprite`. `SafeDisconnectAnim` wraps the `Callable.From(handler)` + `IsConnected` check so redundant `-=` never throws "Attempt to disconnect a nonexistent connection".
 
-All `AnimationFinished` disconnects route through `SafeDisconnectPlayerAnim(Action)` / `SafeDisconnectEnemyAnim(Action)`, which check `IsConnected` before calling `Disconnect`. This prevents the Godot 4 "Attempt to disconnect a nonexistent connection" error.
-
-Connect sites also call `SafeDisconnect` **before** `+=` to prevent handler stacking across turns:
+**Call-site pattern:** callers pass the combatant the operation targets — usually `_playerParty[0]` or `_enemyParty[0]` directly, or a semantic local already in scope. Animation-callback subscriptions stay on the singleton sprite fields:
 
 ```csharp
-SafeDisconnectEnemyAnim(OnCastIntroFinished);
+SafeDisconnectAnim(_enemyParty[0], OnCastIntroFinished);
+PlayAnim(_enemyParty[0], "cast_intro");
 _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 ```
 
-**Entry-site disconnect to prevent handler firing across state transitions:** `PlayParryCounter` calls `SafeDisconnectPlayerAnim(OnParryFinished)` at its first line. Without this, the parry animation's natural `AnimationFinished` signal fires mid-counter-sequence and invokes `OnParryFinished`, which schedules a `PlayPlayer("idle")` ~250ms later — producing a visible idle frame between the parry and the counter's wind-up. The entry-site disconnect cancels the handler before the transition so the counter's own animation takes over cleanly. The pattern generalises: when a handler is bound to one animation's completion but the code path is superseded by another, disconnect at the new path's entry.
+**Handler signatures stay parameterless.** `OnParryFinished`, `OnCastIntroFinished`, `OnEnemyAttackAnimFinished`, etc. fire as Godot `AnimationFinished` callbacks — adding a `Combatant` parameter would require every `+=` site to wrap the handler in a closure, breaking the reference-equality that `SafeDisconnectAnim` depends on. Handler bodies pass the appropriate singleton to helpers (`PlayAnim(_enemyParty[0], "idle")`). See the Deferred Architecture Work section.
+
+**Direct sprite access that bypasses the guards** is used deliberately in a small set of sites: death-animation plays right after `IsDead = true` is set (the guard would block), `Stop()` + `Frame = X` frame-freeze patterns after `PlayAnim`, and `Frame` reads in the capture-before-Stop pattern. Grep `_(player|enemy)AnimSprite\.(Play|Stop|Frame|IsConnected|Disconnect)` to enumerate them.
+
+### Safe Disconnect Entry-Site Pattern
+
+All `AnimationFinished` `+=` pairings call `SafeDisconnectAnim` on the same target **before** subscribing, to prevent handler stacking across turns:
+
+```csharp
+SafeDisconnectAnim(_enemyParty[0], OnCastIntroFinished);
+PlayAnim(_enemyParty[0], "cast_intro");
+_enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
+```
+
+**Entry-site disconnect when state transitions away from a handler:** `PlayParryCounter` calls `SafeDisconnectAnim(_playerParty[0], OnParryFinished)` at its first line. Without this, the parry animation's natural `AnimationFinished` signal fires mid-counter-sequence and invokes `OnParryFinished`, which schedules a `PlayAnim(_playerParty[0], "idle")` ~250ms later — producing a visible idle frame between the parry and the counter's wind-up. The entry-site disconnect cancels the handler before the transition so the counter's own animation takes over cleanly.
+
+**Pattern generalisation:** when a handler is bound to one animation's completion but the code path is superseded by another, disconnect at the new path's entry before `PlayAnim` takes sprite ownership.
 
 ### Enemy Animation System — Data-Driven
 
@@ -361,7 +464,7 @@ _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 - `HurtRow/Frames` — main-sheet hurt animation; `HurtSheetPath` + `HurtFullFrames` for enemies with a separate hurt spritesheet (e.g. 8 Sword Warrior)
 - `DeathRow/Frames` — blank transparent frame appended at `FrameWidth×FrameHeight` held 0.5s
 
-**Absorption system:** `TryTriggerAbsorption()` assigns `_absorbedMoveAttack` directly from `EnemyData.LearnableAttack` (no hardcoded path). The absorbed move's `DisplayName` field drives the submenu label.
+**Absorption system:** `TryTriggerAbsorption(ctx)` adds the move to `_absorbedMoves` (a party-level `HashSet<AttackData>` for per-move-type tracking) and assigns the latest to `_absorbedMoveAttack` for the submenu label. `EnemyData.LearnableAttack` sources the move; the absorbed move's `DisplayName` drives the submenu label.
 
 ### Input Lock and Sequence Safety
 
@@ -419,7 +522,7 @@ Triggered automatically on Warrior (Phase 1) death when `BattleTest.Phase2EnemyD
 3. `SpawnBossReveal()` constructs a single `"default"` animation **in code** from two textures: 12 frames from `8_sword_warrior__red_boss_reveal.png` (row 0, 160×160) **followed by 3 cycles of the 8 Sword Warrior idle** (row 0 of `8_sword_warrior_red-Sheet.png`, 14 frames × 3 = 42 frames). Total 54 frames @ 12 fps, `loop = false`. `FlipH = true` to mirror-match the 8 Sword Warrior's gameplay orientation. Position = warrior's local position − `(0, 10)` (10px lift to align visually with the Phase 2 idle).
 4. Reveal plays through concurrently with the warrior's slowed death. Warrior AnimationFinished fires `OnEnemyDeathFinished`.
 5. `OnEnemyDeathFinished` calls `ApplyPhase2Sprite()` which: sets `_phaseTransitionConsumed = true`, frees the reveal, reassigns `EnemyData = Phase2EnemyData`, disconnects every stale enemy `AnimationFinished` handler (`OnEnemyDeathFinished`, `OnCastIntroFinished`, `OnCastEndFinished`, `OnEnemyAttackAnimFinished`, `OnEnemyHurtFlashFinished`), nulls `SpriteFrames` to defeat the `BuildEnemySpriteFrames` early-return, rebuilds frames for the new enemy, repositions via the standard floor-anchored formula, and plays `idle`.
-6. 0.5s pause → `ShowBattleMessage("You've only just begun to suffer.")` → 3s timer → `SwapToPhase2()` finalises state: resets HP (`_enemyMaxHP = _enemyHP = EnemyData.MaxHp`), updates the enemy name label, calls `UpdateHPBars()`, resets per-fight flags (`_hasAbsorbedLearnableMove`, `_beckoning`, `_playerDefending`, `_parryClean`, `_pendingGameOver`, hop-in rendezvous flags, `_lastAttackIndex`).
+6. 0.5s pause → `ShowBattleMessage("You've only just begun to suffer.")` → 3s timer → `SwapToPhase2()` finalises state: resets the enemy Combatant (`MaxHp`, `CurrentHp`, `IsDead = false`, reassigns `Data`/`Name`), updates the enemy name label, calls `UpdateHPBars()`, clears per-fight state on the player Combatant (`IsBeckoning`, `IsDefending`) and BattleTest (`_parryClean`, `_pendingGameOver`, hop-in rendezvous flags, `_lastAttackIndex`). `_absorbedMoves` is NOT reset — per-move-type absorb tracking persists across the phase transition so Phase 2's learnable is absorbable regardless of Phase 1 state.
 7. 0.5s → `ShowMenu()` — Phase 2 begins.
 
 **ZIndex layering** during the reveal sequence (everything ≥ 0 so the default-ZIndex `Background` ColorRect stays at the bottom):
@@ -430,9 +533,9 @@ Triggered automatically on Warrior (Phase 1) death when `BattleTest.Phase2EnemyD
 | Warrior (bumped during reveal) | 2 |
 | Effect sprites (`SpawnEffectSprite`) | 3 |
 
-`PlayTeardown` normally resets `_enemyAnimSprite.ZIndex = 0` at the end of every attack tween — that clobber would knock the warrior below the reveal mid-sequence, so it is guarded with `if (!_enemyDead)`. `SwapToPhase2` restores the pre-reveal snapshot explicitly.
+`PlayTeardown` normally resets `_enemyAnimSprite.ZIndex = 0` at the end of every attack tween — that clobber would knock the warrior below the reveal mid-sequence, so it is guarded with `if (!_enemyParty[0].IsDead)`. `SwapToPhase2` restores the pre-reveal snapshot explicitly.
 
-**Player retreat in the killing-blow path:** `OnFinalSlashFinished` and `BeginComboMissRetreat`'s `_pendingGameOver` branches run the same 0.3s hold + `PlayPlayerBackwards("run")` + `PlayTeardown` + `OnRetreatFinished → PlayPlayer("idle")` treatment as the non-game-over path. Without this the player freezes on the last slash frame because `PlayTeardown(null)` only tweens positions; the run-backwards animation and idle return are what make the retreat visually complete. Required for Phase 2 to start with the player idling.
+**Player retreat in the killing-blow path:** `OnFinalSlashFinished` and `BeginComboMissRetreat`'s `_pendingGameOver` branches run the same 0.3s hold + `PlayAnimBackwards(_playerParty[0], "run")` + `PlayTeardown` + `OnRetreatFinished → PlayAnim(_playerParty[0], "idle")` treatment as the non-game-over path. Without this the player freezes on the last slash frame because `PlayTeardown(null)` only tweens positions; the run-backwards animation and idle return are what make the retreat visually complete. Required for Phase 2 to start with the player idling.
 
 **Stale-handler disconnect in `ApplyPhase2Sprite`:** every named handler that might still be bound to `_enemyAnimSprite.AnimationFinished` from Phase 1 is disconnected before `BuildEnemySpriteFrames` runs. Without this, the first Phase 2 animation completion (idle → hurt → cast_intro) would fire the stale `OnEnemyDeathFinished` and drop straight into the Victory path.
 
@@ -475,9 +578,9 @@ Development scaffolding — `[Export] bool` flags on `BattleTest` that shortcut 
 
 | Flag | Effect | Skips intro? |
 |---|---|---|
-| `TestVictoryScreen` | Swaps `EnemyData` to `Phase2EnemyData` before sprite build, sets `SkipHopIn = true`, sets `_enemyHP = 1`, sets `_phaseTransitionConsumed = true` so enemy death goes straight to Victory (not the Phase 1 → Phase 2 reveal), starts Phase 2 music. First player attack triggers Victory. | Yes |
-| `TestGameOverScreen` | Sets `_playerHP = 1`, starts Phase 1 music. First missed parry triggers Game Over. | Yes |
-| `TestPhaseTransition` | Sets `_enemyHP = 1` at battle start so the first player hit against the Warrior triggers the Phase 1 → Phase 2 reveal at full fidelity (reveal sprite, battle message, music swap all play normally). Documented in context in the Phase 1 → Phase 2 Transition section. | No |
+| `TestVictoryScreen` | Swaps `EnemyData` to `Phase2EnemyData` before sprite build, sets `SkipHopIn = true`, sets `_enemyParty[0].CurrentHp = 1`, sets `_phaseTransitionConsumed = true` so enemy death goes straight to Victory (not the Phase 1 → Phase 2 reveal), starts Phase 2 music. First player attack triggers Victory. | Yes |
+| `TestGameOverScreen` | Sets `_playerParty[0].CurrentHp = 1`, starts Phase 1 music. First missed parry triggers Game Over. | Yes |
+| `TestPhaseTransition` | Sets `_enemyParty[0].CurrentHp = 1` at battle start so the first player hit against the Warrior triggers the Phase 1 → Phase 2 reveal at full fidelity (reveal sprite, battle message, music swap all play normally). Documented in context in the Phase 1 → Phase 2 Transition section. | No |
 
 **Priority** (resolved at the top of `_Ready` before any state is applied): `TestVictoryScreen` > `TestGameOverScreen` > `TestPhaseTransition`. If multiple flags are `true`, the highest-priority one wins and the others are logged-and-ignored with a `[TEST]` warning rather than erroring out — the flags are forgiving rather than strict.
 
@@ -489,12 +592,12 @@ Development scaffolding — `[Export] bool` flags on `BattleTest` that shortcut 
 
 ### SkipHopIn Flag and FloorY Constant
 
-`[Export] public bool SkipHopIn = true` — when set, the enemy stays at origin for the entire turn. Setup and teardown tweens are skipped (no hop-in, no camera zoom). `_attackerClosePos` is set to the enemy origin so `PlayTeardown` is a zero-distance no-op. Used for large/stationary enemies like the 8 Sword Warrior. Set to `false` for the Warrior Phase 1 which hops in for melee attacks.
+`[Export] public bool SkipHopIn = true` — when set, the enemy stays at origin for the entire turn. Setup and teardown tweens are skipped (no hop-in, no camera zoom). `_sequenceAttackerClosePos` is set to the enemy origin so `PlayTeardown` is a zero-distance no-op. Used for large/stationary enemies like the 8 Sword Warrior. Set to `false` for the Warrior Phase 1 which hops in for melee attacks.
 
 `const float FloorY = 750f` — world-space Y of the ground line. All character sprites are floor-anchored:
 - Player: `Position.Y = FloorY - frameHeight * scale * 0.5f` (center-anchored sprite)
 - Enemy: `Position.Y = FloorY - EnemyData.FrameHeight * 3f * 0.6f + EnemyData.SpriteOffsetY` (per-enemy tuned nudge for visual ground contact)
-- Effects: `Position = (defenderCenter.X, FloorY) + step.Offset` — no hidden math; `step.Offset.Y < 0` moves up, `> 0` moves down. `sprite.Centered = true` is set explicitly in `SpawnEffectSprite` — the floor-baseline formula depends on this being true. `step.Scale` controls the sprite scale; default `Vector2(3, 3)` is the standard 3× world-space upscale used for all effect sheets.
+- Effects: `Position = (targetCenter.X, FloorY) + activeOffset` where `targetCenter = ctx.Target.Origin + ctx.Target.PositionRect.Size / 2f` and `activeOffset = attackerOnRight ? step.Offset : step.PlayerOffset` (`attackerOnRight` derived from attacker-vs-target X positions in `BattleSystem.SpawnEffectSprite`). `step.Offset.Y < 0` moves up, `> 0` moves down. `sprite.Centered = true` is set explicitly in `SpawnEffectSprite` — the floor-baseline formula depends on this being true. `step.Scale` controls the sprite scale; default `Vector2(3, 3)` is the standard 3× world-space upscale used for all effect sheets.
 
 `EnemyData.SpriteOffsetY` — per-enemy additional downward nudge on the enemy sprite, tuned visually. Warrior Phase 1 = 90f, 8 Sword Warrior = 130f.
 
@@ -552,6 +655,18 @@ Two distinct text-display components serve different UX purposes. They are **not
 
 **Name-tag color dispatch** (in `BattleDialogue.StartNextLine`): `line.Speaker == "The Harbinger"` selects `HarbingerNameColor` (cold blue-grey); any other speaker string falls through to `ApprenticeNameColor` (parchment / off-white). The body-text color is `BodyColor` regardless of speaker — only the name tag carries the speaker's visual identity. The current in-game speaker label for the non-Harbinger voice is `"Knight"` (not `"Apprentice"`); the `ApprenticeNameColor` field name remains as the internal identifier for the non-Harbinger fallback color. The label-vs-identifier mismatch is intentional — see "Senior's fixed starting move set" in "Design Decisions — Pending Implementation" for the narrative rationale.
 
+### Deferred Architecture Work
+
+Three pieces of the Phase 3 refactor were deliberately deferred and remain out-of-scope until the triggering need arises.
+
+**Handler signature generalization.** Animation callbacks (`OnParryFinished`, `OnCastIntroFinished`, `OnEnemyAttackAnimFinished`, etc.) stay parameterless and singleton-bound — see Dead-Flag Guards and Unified Sprite Helpers. Generalizing them to take `Combatant` would require every `+=` subscription site to use a closure, breaking the reference-equality that `SafeDisconnectAnim` depends on. Deferred until multi-character density actually needs per-unit handler dispatch.
+
+**AttackStep.Offset / PlayerOffset schema consolidation (audit D5).** Today each `AttackStep` has two offset fields (`Offset` for right-side attackers, `PlayerOffset` for left-side). `SpawnEffectSprite`'s geometric `attackerOnRight` check already routes the right one. The fields could collapse to a single `TargetOffset` authored once. Deferred to an AttackData authoring pass where `.tres` files would need re-editing anyway.
+
+**`PlayCombatantHurtFlash` load-bearing constraint.** Method body uses the unified guard helpers (post-3.7b), but the paired callback `OnEnemyHurtFlashFinished` is still singleton-bound (plays "idle" on `_enemyAnimSprite`). Passing a non-enemy `target` to `PlayCombatantHurtFlash` today would split the sprite between Play (target's) and Finished (enemy's). Safe because all current callers pass the enemy; constraint lifts when handler signatures generalize. Documented inline in the method's doc comment.
+
+(See also "Refactor parry counter-attack to use `BattleSystem.StartSequence` with impact-frame sync" in Known Next Steps — conceptually similar architectural deferral, documented there for historical reasons.)
+
 ## Audio Trigger Reference
 
 ### Event-Based Triggers (no frame sync needed)
@@ -588,8 +703,8 @@ Two distinct text-display components serve different UX purposes. They are **not
 - **Taunt ability (post-prototype)** — player action that baits the enemy into using their signature/learnable move
 - **Self-targeting spell alignment** — Cure spell effect and target zone are not perfectly centered on the player's visual body due to the knight sprite having the character body left-of-center within its frame. Revisit when implementing the full character system — the correct fix is either adjusting the sprite frame composition or implementing a per-spell visual center offset.
 - **Refactor parry counter-attack to use `BattleSystem.StartSequence` with impact-frame sync** (post-prototype, not urgent) — the current hand-rolled timer cascade in `PlayParryCounter` (nested `CreateTimer` calls for wind-up → impact → follow-through → hold) is architecturally inconsistent with every other attack in the game, which routes through `BattleSystem` and uses `ImpactFrames`-anchored animation sync. The hand-rolled approach makes timing tweaks fragile — changing one delay can desync the slash spawn from the player pose — and duplicates logic that already exists in `SpawnEffectSprite`. Proper fix: author the counter as an `AttackData` resource with its own `AttackStep`s, then drive it through `BattleSystem.StartSequence` like any other attack. Would also make the counter tunable via the inspector without code changes.
-- **Target selection + multi-character scaffolding** — see docs/target-selection-and-scaffolding-plan.md. Prerequisite to the Phase 1 code review. Multi-session scope. Consider /model opusplan in Claude Code.
-- **Target selection audit** — see docs/target-selection-audit.md. Reference for the in-progress multi-character refactor on branch target-selection-and-scaffolding.
+- **Target selection + multi-character scaffolding** — Phase 3 landed on branch `target-selection-and-scaffolding`: Combatant abstraction, SequenceContext signal payload, unified guard helpers, TakeDamage/Heal, per-sequence cache cleanup. Phase 4+ remains: `SelectingTarget` state with player pointer, enemy target indicator, multi-character scaffolding exercise (4v5 party wiring). See docs/target-selection-and-scaffolding-plan.md for the phase plan.
+- **Target selection audit** — see docs/target-selection-audit.md. Catalogues pre-refactor 1v1 assumptions; drove Phase 3's chunks. A/B/C/D/E/F/I/J categories landed; D5 (AttackStep.Offset/PlayerOffset schema consolidation) and full multi-character work remain — see the Deferred Architecture Work section below.
 - **Phase 1 code review** — see docs/phase1-code-review-plan.md. Run before starting Phase 2 using /model opusplan in Claude Code.
 
 ## Design Decisions — Pending Implementation
