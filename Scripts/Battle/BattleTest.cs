@@ -265,8 +265,11 @@ public partial class BattleTest : Node2D
     private int       _gameOverOptionIndex;    // 0 = Retry, 1 = Quit
     private Label[]   _gameOverTextLabels;     // centered option text; yellow when selected, white otherwise
     private Label[]   _gameOverArrows;         // ► cursor absolutely anchored left; Visible toggled per selection
-    private ulong     _gameOverInputUnlockedAtMsec;  // Game Over input buffer — 2150ms after ShowEndLabel
-                                                     // (matches Victory's 2s beat + 150ms held-input drain).
+    private ulong     _gameOverInputUnlockedAtMsec;  // Game Over input buffer — 150ms held-input drain set
+                                                     // at ShowGameOverOptionsPanel entry (mirrors Victory's
+                                                     // pattern). The 2.0s beat before that is implicit in the
+                                                     // timer cascade from ShowEndLabel; cumulative end-to-end
+                                                     // lockout is 2150ms — matches Victory exactly.
                                                      // Input rejected while Time.GetTicksMsec() < this value.
     private static readonly string[] GameOverOptionLabels = { "Retry", "Quit" };
 
@@ -1035,9 +1038,73 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
+    /// Builds the Game Over Retry/Quit panel and fades it in, then transitions state to
+    /// BattleState.GameOver so HandleGameOverInput takes over. Called from ShowEndLabel's
+    /// shared 2.0s timer after the "Game Over" fullscreen label appears. Mirror of
+    /// <see cref="ShowVictoryOptionsPanel"/> — same layout, anchoring, spacers, tween;
+    /// the two end-screens are structurally symmetric post-parity-refactor.
+    ///
+    /// Positioned below viewport center (+200px) so the "Game Over" label at center
+    /// stays legible. 150ms input buffer set at fade-in start drains held battle_confirm
+    /// presses from the killing blow. Combined with the 2.0s timer delay from
+    /// ShowEndLabel, the cumulative input lockout is 2.15s — matching Victory exactly.
+    /// </summary>
+    private void ShowGameOverOptionsPanel()
+    {
+        if (!GodotObject.IsInstanceValid(this)) return;
+
+        var layer = new CanvasLayer();
+        layer.Name = "GameOverOptionsLayer";
+        AddChild(layer);
+
+        var wrapper = new Control();
+        wrapper.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        wrapper.MouseFilter = Control.MouseFilterEnum.Ignore;
+        wrapper.Modulate    = new Color(1f, 1f, 1f, 0f);
+        layer.AddChild(wrapper);
+
+        var panel = MakeLayeredPanel(minWidth: 400f, out var content);
+        panel.AnchorLeft     = 0.5f;
+        panel.AnchorRight    = 0.5f;
+        panel.AnchorTop      = 0.5f;
+        panel.AnchorBottom   = 0.5f;
+        panel.GrowHorizontal = Control.GrowDirection.Both;
+        panel.GrowVertical   = Control.GrowDirection.Both;
+        // Offset the panel down 100px from viewport center so it sits clearly below the
+        // lifted "Game Over" title (title's OffsetBottom = -200f lifts its center 100px
+        // above viewport middle; this 100f offset keeps the panel 100px below middle,
+        // preserving the same title-to-panel spacing while the whole composition reads
+        // higher on screen). Matches Victory's lifted offset.
+        panel.OffsetTop      = 100f;
+        panel.OffsetBottom   = 100f;
+        wrapper.AddChild(panel);
+
+        content.AddThemeConstantOverride("separation", 24);
+
+        // 8px top/bottom spacers, options, no divider — same content layout as the
+        // Victory options panel. The free-floating "Game Over" label above already
+        // serves as the headline, so a divider inside would be decorative without purpose.
+        var topSpacer = new Control();
+        topSpacer.CustomMinimumSize = new Vector2(0, 8);
+        content.AddChild(topSpacer);
+
+        AddGameOverOptions(content);
+
+        var bottomSpacer = new Control();
+        bottomSpacer.CustomMinimumSize = new Vector2(0, 8);
+        content.AddChild(bottomSpacer);
+
+        _state                       = BattleState.GameOver;
+        _gameOverInputUnlockedAtMsec = Time.GetTicksMsec() + 150;
+
+        var tween = CreateTween();
+        tween.TweenProperty(wrapper, "modulate:a", 1.0f, 0.5f);
+    }
+
+    /// <summary>
     /// Builds the Victory Close/Retry panel and fades it in, then transitions state to
     /// BattleState.Victory so HandleVictoryInput takes over. Called from ShowEndLabel's
-    /// Victory branch via a 1.5s timer after the "Victory!" fullscreen label appears.
+    /// shared 2.0s timer after the "Victory!" fullscreen label appears.
     /// Positioned below viewport center (+200px) so the Victory! label at center stays legible.
     /// 150ms input buffer set at fade-in start prevents final-strike input bleed.
     /// </summary>
@@ -1062,10 +1129,13 @@ public partial class BattleTest : Node2D
         panel.AnchorBottom   = 0.5f;
         panel.GrowHorizontal = Control.GrowDirection.Both;
         panel.GrowVertical   = Control.GrowDirection.Both;
-        // Offset the panel down 200px from viewport center so it sits clearly below the
-        // "Victory!" fullscreen label (which is centered on the viewport at y=540 on 1080p).
-        panel.OffsetTop      = 200f;
-        panel.OffsetBottom   = 200f;
+        // Offset the panel down 100px from viewport center so it sits clearly below the
+        // lifted "Victory!" title (title's OffsetBottom = -200f lifts its center 100px
+        // above viewport middle; this 100f offset keeps the panel 100px below middle,
+        // preserving the same title-to-panel spacing while the whole composition reads
+        // higher on screen).
+        panel.OffsetTop      = 100f;
+        panel.OffsetBottom   = 100f;
         wrapper.AddChild(panel);
 
         content.AddThemeConstantOverride("separation", 24);
@@ -1246,7 +1316,12 @@ public partial class BattleTest : Node2D
             {
                 GD.Print("[BattleTest] Player HP reached zero mid-sequence — death triggered immediately.");
                 player.IsDead = true;
-                _state        = BattleState.GameOver;
+                // _state transition deferred to ShowGameOverOptionsPanel (2.0s later,
+                // matching Victory's pattern). During the beat, player.IsDead and
+                // SuppressInput below already suppress combat-path input and damage;
+                // _state == EnemyAttack routes battle_confirm to TimingPrompt.ConfirmAll
+                // which no-ops under SuppressInput. HandleGameOverInput only routes once
+                // _state actually flips.
                 TimingPrompt.SuppressInput = true;
                 _playerAnimSprite.Play("death");
                 // Show Game Over overlay + fade music immediately; enemy sequence continues playing out.
@@ -2242,16 +2317,22 @@ public partial class BattleTest : Node2D
     // rule.
     private bool CheckGameOver()
     {
+        // Returns whether the battle has ended. Callers drive downstream behaviour
+        // (death animation, ShowEndLabel) off the bool. State transition to
+        // BattleState.GameOver or .Victory is deferred to the respective
+        // options-panel method (ShowGameOverOptionsPanel / ShowVictoryOptionsPanel)
+        // where it fires after the 2.0s end-label beat — mirrors how Victory already
+        // handled state timing before the parity refactor and fixes a pre-refactor
+        // latent bug where the player-wins branch briefly set _state = GameOver on
+        // the Victory path before ShowVictoryOptionsPanel corrected it.
         if (_playerParty[0].CurrentHp <= 0)
         {
             GD.Print("[BattleTest] Enemy wins.");
-            _state = BattleState.GameOver;
             return true;
         }
         if (_enemyParty[0].CurrentHp <= 0)
         {
             GD.Print("[BattleTest] Player wins.");
-            _state = BattleState.GameOver;
             return true;
         }
         return false;

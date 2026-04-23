@@ -1277,89 +1277,42 @@ public partial class BattleTest : Node2D
         wrapper.Modulate     = new Color(1f, 1f, 1f, 0f);  // start transparent; Tween fades in below
         layer.AddChild(wrapper);
 
-        if (text.Contains("Game Over"))
-        {
-            // Input buffer for the Game Over panel. Matches Victory's combined
-            // 2.0s beat + 150ms held-input drain (ShowVictoryOptionsPanel fires
-            // 2.0s after ShowEndLabel and sets a further 150ms buffer on entry).
-            // HandleGameOverInput early-returns while Time.GetTicksMsec() is below
-            // this timestamp, so queued battle_confirm presses from the killing blow
-            // don't immediately select Retry the moment the options panel appears.
-            _gameOverInputUnlockedAtMsec = Time.GetTicksMsec() + 2150;
-
-            // Game Over uses a layered panel (dark navy fill + fantasy border) so the UI
-            // stays readable even if battle effects (circles, sprites, damage numbers) are
-            // still animating behind it. Panel anchors to viewport center and auto-sizes
-            // from its content VBox.
-            var panel = BattleTest.MakeLayeredPanel(minWidth: 400f, out var content);
-            panel.AnchorLeft     = 0.5f;
-            panel.AnchorRight    = 0.5f;
-            panel.AnchorTop      = 0.5f;
-            panel.AnchorBottom   = 0.5f;
-            panel.GrowHorizontal = Control.GrowDirection.Both;
-            panel.GrowVertical   = Control.GrowDirection.Both;
-            wrapper.AddChild(panel);
-
-            // Content VBox holds the "Game Over" title, a fade divider, and the options stack.
-            // Separation of 24 gives breathing room between title/divider/options groups.
-            content.AddThemeConstantOverride("separation", 24);
-
-            // Top breathing room — 8px above "Game Over" so it sits comfortably below the
-            // border art rather than hugging the top edge of the panel padding.
-            var topSpacer = new Control();
-            topSpacer.CustomMinimumSize = new Vector2(0, 8);
-            content.AddChild(topSpacer);
-
-            var label = new Label();
-            label.Text                = text;
-            label.HorizontalAlignment = HorizontalAlignment.Center;
-            label.VerticalAlignment   = VerticalAlignment.Center;
-            label.AddThemeFontSizeOverride("font_size", 64);
-            content.AddChild(label);
-
-            // Horizontal divider between the title and the options. Uses the symmetric
-            // divider art (not the battle menu's divider-fade variant) for a more decorative
-            // split under the Game Over title.
-            AddMenuDivider(content,
-                "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Divider/divider-002_symmetric.png");
-
-            AddGameOverOptions(content);
-
-            // Bottom breathing room — mirrors the top spacer so the panel reads as balanced
-            // and feels a touch taller overall.
-            var bottomSpacer = new Control();
-            bottomSpacer.CustomMinimumSize = new Vector2(0, 8);
-            content.AddChild(bottomSpacer);
-        }
-        else
-        {
-            // Victory — full-screen label, unchanged from the original centered layout.
-            var label = new Label();
-            label.Text                = text;
-            label.HorizontalAlignment = HorizontalAlignment.Center;
-            label.VerticalAlignment   = VerticalAlignment.Center;
-            label.AddThemeFontSizeOverride("font_size", 64);
-            label.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-            label.OffsetLeft   = 0f;
-            label.OffsetTop    = 0f;
-            label.OffsetRight  = 0f;
-            label.OffsetBottom = 0f;
-            wrapper.AddChild(label);
-        }
+        // Free-floating full-rect title label — shared by both end-screens. Fades in
+        // with the wrapper (single tween below). Font 64 centered matches the original
+        // Victory treatment; Game Over now uses the exact same construction post-refactor.
+        //
+        // OffsetBottom = -200f lifts the composition ~100px above viewport center. A
+        // FullRect label vertically-centers within its rect; shrinking the rect by
+        // 200px off the bottom moves its center up by 100px. Options panel below
+        // uses a matching 100px lift (OffsetTop/Bottom = 100f instead of 200f) to
+        // preserve title-to-panel relative spacing.
+        var label = new Label();
+        label.Text                = text;
+        label.HorizontalAlignment = HorizontalAlignment.Center;
+        label.VerticalAlignment   = VerticalAlignment.Center;
+        label.AddThemeFontSizeOverride("font_size", 64);
+        label.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        label.OffsetLeft   = 0f;
+        label.OffsetTop    = 0f;
+        label.OffsetRight  = 0f;
+        label.OffsetBottom = -200f;
+        wrapper.AddChild(label);
 
         var tween = CreateTween();
         tween.TweenProperty(wrapper, "modulate:a", 1.0f, 0.5f);
 
-        // Victory — after the label's 0.5s fade-in plus a 1.5s beat, fade in the
-        // Close/Retry options panel and transition state so the player has an exit path.
-        // Game Over does not schedule this — its panel already contains the options.
-        if (text.Contains("Victory"))
+        // After the label's 0.5s fade-in plus a 1.5s beat, fade in the lower options
+        // panel and transition state. Both screens follow this same 2.0s cadence; only
+        // the options-panel method differs. State transitions + input-buffer sets happen
+        // inside the respective options-panel method, not here — mirrors how Victory
+        // already handled it pre-refactor.
+        GetTree().CreateTimer(2.0f).Timeout += () =>
         {
-            GetTree().CreateTimer(2.0f).Timeout += () =>
-            {
-                if (!GodotObject.IsInstanceValid(this)) return;
+            if (!GodotObject.IsInstanceValid(this)) return;
+            if (text.Contains("Victory"))
                 ShowVictoryOptionsPanel();
-            };
-        }
+            else if (text.Contains("Game Over"))
+                ShowGameOverOptionsPanel();
+        };
     }
 }
