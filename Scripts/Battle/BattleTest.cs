@@ -207,12 +207,14 @@ public partial class BattleTest : Node2D
     // _selectedTarget is the currently-highlighted combatant (read by Begin* once
     // the player confirms); _pendingActionLauncher is the closure that fires the
     // attack (including MP deduction) when the player presses battle_confirm.
-    // _selectingTargetFromSubmenu remembers which menu context the target-select
-    // was entered from so Cancel returns to the correct menu (main vs. Absorbed
-    // Moves submenu). All three fields are cleared on confirm and on cancel.
+    // _selectingTargetMenuContext remembers which menu context the target-select
+    // was entered from so Cancel returns to the correct menu (main / Absorbed
+    // Moves submenu / Items submenu). All three fields are cleared on confirm
+    // and on cancel.
+    private enum MenuContext { Main, AbsorbedMoves, Items }
     private Combatant     _selectedTarget;
     private System.Action _pendingActionLauncher;
-    private bool          _selectingTargetFromSubmenu;
+    private MenuContext   _selectingTargetMenuContext;
 
     // Party lists owned by BattleTest. Single-entry for the 1v1 prototype; the
     // scaffolding exercise grows them to 4/5. Source of truth for combat-universal
@@ -1558,11 +1560,11 @@ public partial class BattleTest : Node2D
     // wire ui_left / ui_right to iterate valid targets once multi-enemy / party
     // selection density exists.
 
-    private void EnterSelectingTarget(Combatant defaultTarget, bool fromSubmenu)
+    private void EnterSelectingTarget(Combatant defaultTarget, MenuContext fromMenu)
     {
         _state                       = BattleState.SelectingTarget;
         _selectedTarget              = defaultTarget;
-        _selectingTargetFromSubmenu  = fromSubmenu;
+        _selectingTargetMenuContext  = fromMenu;
 
         // Auto-confirm when target is unambiguous. Today every attack has exactly
         // one valid target (offensive → single enemy, Cure → self); the pointer
@@ -1593,7 +1595,7 @@ public partial class BattleTest : Node2D
     private void ConfirmTargetSelection()
     {
         _targetPointer.Visible       = false;
-        _selectingTargetFromSubmenu  = false;  // defensive clear; mirrors cancel's reset pattern
+        _selectingTargetMenuContext  = MenuContext.Main;  // defensive clear; mirrors cancel's reset pattern
         var launcher = _pendingActionLauncher;
         _pendingActionLauncher = null;
         launcher?.Invoke();
@@ -1611,29 +1613,35 @@ public partial class BattleTest : Node2D
         _isComboAttack          = false;
         _activeMagicAttack      = null;
 
-        // Return to the menu context the target-select was entered from.
-        // Submenu picks (Combo Strike, any magic) cancel back to the Absorbed
-        // Moves submenu so the player's prior navigation isn't lost; main-menu
-        // picks (Basic Attack) cancel back to the main menu. Flag cleared after
-        // dispatch so the next SelectingTarget entry sets it fresh.
+        // Return to the menu context the target-select was entered from so the
+        // player's prior navigation isn't lost. Three contexts today: main menu
+        // (Basic Attack), Absorbed Moves submenu (Combo Strike, magic), Items
+        // submenu (Ether). Flag reset to Main after dispatch so the next
+        // SelectingTarget entry sets it fresh.
         //
-        // ShowSubMenu doesn't set _state / _inputLocked (it assumes it's called
-        // from within the menu flow, not from SelectingTarget). Set them
-        // explicitly for the submenu branch; ShowMenu handles both for its
-        // branch. _menuLayer.Visible was toggled off by HideMenu at the menu
-        // handler, so restore it too.
-        bool fromSubmenu = _selectingTargetFromSubmenu;
-        _selectingTargetFromSubmenu = false;
-        if (fromSubmenu)
+        // ShowSubMenu / ShowItemMenu don't set _state / _inputLocked / _menuLayer
+        // (they assume they're called from within the menu flow, not from
+        // SelectingTarget). Set them explicitly for those branches; ShowMenu
+        // handles all three for its branch.
+        var fromMenu = _selectingTargetMenuContext;
+        _selectingTargetMenuContext = MenuContext.Main;
+        switch (fromMenu)
         {
-            _state             = BattleState.PlayerMenu;
-            _inputLocked       = false;
-            _menuLayer.Visible = true;
-            ShowSubMenu();
-        }
-        else
-        {
-            ShowMenu();
+            case MenuContext.Main:
+                ShowMenu();
+                break;
+            case MenuContext.AbsorbedMoves:
+                _state             = BattleState.PlayerMenu;
+                _inputLocked       = false;
+                _menuLayer.Visible = true;
+                ShowSubMenu();
+                break;
+            case MenuContext.Items:
+                _state             = BattleState.PlayerMenu;
+                _inputLocked       = false;
+                _menuLayer.Visible = true;
+                ShowItemMenu();
+                break;
         }
     }
 

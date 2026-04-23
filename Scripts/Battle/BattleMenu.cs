@@ -353,9 +353,17 @@ public partial class BattleTest : Node2D
 
         if (label.StartsWith("Ether"))
         {
-            EtherCount--;
+            // EtherCount decrement and UseEtherItem invocation move into the launcher
+            // so cancel from SelectingTarget is a clean no-cost back-out. Default target
+            // is the player (sole MP-having combatant today); multi-ally pools post
+            // Phase 6 will let the player pick which ally receives the MP restore.
+            _pendingActionLauncher = () =>
+            {
+                EtherCount--;
+                UseEtherItem();
+            };
             HideMenu();
-            UseEtherItem();
+            EnterSelectingTarget(_playerParty[0], MenuContext.Items);
         }
     }
 
@@ -369,7 +377,7 @@ public partial class BattleTest : Node2D
                 _isComboAttack = false;
                 _pendingActionLauncher = () => BeginPlayerAttack();
                 HideMenu();
-                EnterSelectingTarget(_enemyParty[0], fromSubmenu: false);
+                EnterSelectingTarget(_enemyParty[0], MenuContext.Main);
                 break;
             case 1: ShowSubMenu(); break;   // Absorbed Moves
             case 2:                         // Defend — halve miss damage this enemy turn
@@ -418,7 +426,7 @@ public partial class BattleTest : Node2D
                 BeginPlayerAttack();
             };
             HideMenu();
-            EnterSelectingTarget(_enemyParty[0], fromSubmenu: true);
+            EnterSelectingTarget(_enemyParty[0], MenuContext.AbsorbedMoves);
         }
         else if (category == AttackCategory.Magic)
         {
@@ -437,7 +445,7 @@ public partial class BattleTest : Node2D
                 BeginPlayerMagicAttack();
             };
             HideMenu();
-            EnterSelectingTarget(defaultTarget, fromSubmenu: true);
+            EnterSelectingTarget(defaultTarget, MenuContext.AbsorbedMoves);
         }
     }
 
