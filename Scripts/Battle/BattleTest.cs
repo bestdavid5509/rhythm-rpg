@@ -1256,14 +1256,14 @@ public partial class BattleTest : Node2D
         // entry today: the enemy always targets the single player; AOE-ready via the
         // list so multi-target attacks can add more entries once AttackData gains
         // target-pool metadata in Phase 6). Fire FlashCombatantThreatened on each to
-        // run the 1.0s red-tint pulse, then defer the actual attack launch by 1.0s
+        // run the 0.6s red-tint pulse, then defer the actual attack launch by 0.6s
         // so the tint fades out exactly as the attack animation begins.
         _threatenedCombatants.Clear();
         _threatenedCombatants.Add(_playerParty[0]);
         foreach (var target in _threatenedCombatants)
             FlashCombatantThreatened(target);
 
-        GetTree().CreateTimer(1.0f).Timeout += () =>
+        GetTree().CreateTimer(0.6f).Timeout += () =>
         {
             if (!GodotObject.IsInstanceValid(this)) return;
             ExecuteEnemyAttack(selectedAttack);
@@ -2373,18 +2373,20 @@ public partial class BattleTest : Node2D
         target.ThreatTween?.Kill();
         target.FlashMaterial.SetShaderParameter("tint_amount", 0.0f);
 
-        // 0.2s fade in → 0.6s hold at full → 0.2s fade out. 1.0s total — matches the
-        // BeginEnemyAttack pause duration so the tint fades out exactly as the attack
-        // animation begins.
+        // 0.12s fade in → 0.36s hold at 0.85 → 0.12s fade out. 0.6s total — matches
+        // the BeginEnemyAttack pause duration so the tint fades out exactly as the
+        // attack animation begins. Peak capped at 0.85 rather than 1.0 so some
+        // original colour bleeds through even at peak hold, softening the tint's
+        // aggressiveness while still reading clearly as a threat signal.
         target.ThreatTween = CreateTween();
         var material = target.FlashMaterial;
         target.ThreatTween.TweenMethod(
             Callable.From((float v) => material.SetShaderParameter("tint_amount", v)),
-            0.0f, 1.0f, 0.2f);
-        target.ThreatTween.TweenInterval(0.6f);
+            0.0f, 0.85f, 0.12f);
+        target.ThreatTween.TweenInterval(0.36f);
         target.ThreatTween.TweenMethod(
             Callable.From((float v) => material.SetShaderParameter("tint_amount", v)),
-            1.0f, 0.0f, 0.2f);
+            0.85f, 0.0f, 0.12f);
     }
 
     // Single-party prototype: reads party[0] because there's only one combatant per side.

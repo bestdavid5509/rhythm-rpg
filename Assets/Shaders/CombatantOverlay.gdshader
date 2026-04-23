@@ -15,9 +15,15 @@ uniform vec4  tint_color   : source_color         = vec4(1.0, 0.2, 0.2, 1.0);
 void fragment() {
     vec4 col = texture(TEXTURE, UV);
 
-    // Red tint — mixes the sprite's RGB toward tint_color within the sprite
-    // silhouette (tint_amount * col.a keeps the tint inside opaque pixels).
-    col.rgb = mix(col.rgb, tint_color.rgb, tint_amount * col.a);
+    // Red tint — multiplicative blend that preserves the sprite's internal tonal
+    // structure. col.rgb * tint_color.rgb gives each pixel its original luminance
+    // variation but skewed toward the tint color (red channel preserved at full
+    // 1.0 multiplier; green/blue channels suppressed by the tint_color values).
+    // mix() interpolates between "original" (tint_amount=0) and "fully multiplied"
+    // (tint_amount=1) so fade-in/out edges are smooth. col.a in the factor keeps
+    // the tint within the sprite silhouette (no effect on transparent pixels).
+    vec3 tinted = col.rgb * tint_color.rgb;
+    col.rgb = mix(col.rgb, tinted, tint_amount * col.a);
 
     // White flash — applied after the tint so a concurrent flash overrides
     // the tint (white = learnable signal, higher priority).
