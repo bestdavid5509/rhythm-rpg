@@ -999,7 +999,7 @@ public partial class BattleTest : Node2D
                     SafeDisconnectEnemyAnim(OnCastEndFinished);
                     PlayEnemy("idle");
                     var counterTarget = _enemyParty[0];  // counter lands on the attacker-who-was-parried (single enemy in current UI)
-                    counterTarget.CurrentHp = Mathf.Max(0, counterTarget.CurrentHp - CounterDamage);
+                    counterTarget.TakeDamage(CounterDamage);
                     GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {counterTarget.CurrentHp}/{counterTarget.MaxHp}");
                     PlaySound("enemy_hit.wav");
                     // Spawn damage number at the target's current world position, offset

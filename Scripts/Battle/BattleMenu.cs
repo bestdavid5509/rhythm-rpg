@@ -414,8 +414,7 @@ public partial class BattleTest : Node2D
             // Magic moves (Comet, Comet Barrage, Cure, etc.) — magic attack flow.
             if (attack != null)
                 player.CurrentMp -= attack.MpCost;
-            _activeMagicAttack  = attack;
-            _isPlayerHealAttack = (attack == _playerCureAttack);
+            _activeMagicAttack = attack;
             HideMenu(); BeginPlayerMagicAttack();
         }
     }

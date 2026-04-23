@@ -64,4 +64,37 @@ public class Combatant
     // flash concurrently. Lifetime is short (~0.6s); safe to hold as a reference until
     // the tween self-destructs.
     public Tween FlashTween;
+
+    // ---- Damage / heal application --------------------------------------------
+    //
+    // Friendly-fire-readiness note: TakeDamage and Heal are attacker-agnostic —
+    // they operate on the receiver only. Dispatch sites that need to distinguish
+    // ally-target from enemy-target scenarios should check
+    // `attacker.Side == target.Side` rather than an attack-specific flag; that
+    // predicate generalizes to friendly-fire / ally-heal / self-damage / self-heal
+    // by construction. Geometric positioning (FlipH, PlayerOffset) is already
+    // handled attacker-agnostically by BattleSystem.SpawnEffectSprite's
+    // attackerOnRight check (Phase 3.5). No current ability needs same-side
+    // targeting; this design simply removes the prior limitation.
+
+    /// <summary>
+    /// Applies damage to this combatant's HP, clamping to [0, MaxHp]. Target-agnostic
+    /// with respect to attacker — works for any attacker-target pair including same-side
+    /// (ally attacks ally, self-damage). Caller is responsible for damage calculation
+    /// (defend modifiers, crit, etc.) before passing the final value here.
+    /// </summary>
+    public void TakeDamage(int amount)
+    {
+        CurrentHp = Mathf.Max(0, CurrentHp - amount);
+    }
+
+    /// <summary>
+    /// Heals this combatant's HP, clamping to MaxHp. Works for self-heal
+    /// (attacker == target) and ally-heal (attacker != target, same side). Caller
+    /// is responsible for heal amount calculation before passing the final value here.
+    /// </summary>
+    public void Heal(int amount)
+    {
+        CurrentHp = Mathf.Min(MaxHp, CurrentHp + amount);
+    }
 }

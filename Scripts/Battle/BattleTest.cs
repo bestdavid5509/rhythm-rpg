@@ -261,7 +261,6 @@ public partial class BattleTest : Node2D
     private static readonly string[] VictoryOptionLabels = { "Retry", "Close" };
     private bool      _isComboAttack;       // true when the current player turn uses Combo Strike (Bouncing prompt)
     private bool      _isPlayerMagicAttack; // true when the current player turn uses a magic attack via BattleSystem
-    private bool      _isPlayerHealAttack;  // true when the current player turn uses Cure (heal self instead of damage enemy)
     private int       _comboPassIndex;      // which Bouncing pass just resolved; set in OnAttackPassEvaluated
 
     // Loaded once in _Ready; used to restore the enemy attack after a player magic turn.
@@ -1110,7 +1109,6 @@ public partial class BattleTest : Node2D
         _inputLocked         = false;  // Unlock input — enemy prompts are about to appear.
         _parryClean          = true;
         _isPlayerMagicAttack = false;
-        _isPlayerHealAttack  = false;
         _isComboAttack       = false;   // Clear stale combo flag from previous player turn.
         TimingPrompt.SuppressInput = false;  // safety reset
 
@@ -1201,7 +1199,7 @@ public partial class BattleTest : Node2D
             _parryClean   = false;
             int damage    = _battleSystem.GetStepBaseDamage(stepIndex);
             if (player.IsDefending) damage = Mathf.Max(1, damage / 2);
-            player.CurrentHp = Mathf.Max(0, player.CurrentHp - damage);
+            player.TakeDamage(damage);
             GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {player.CurrentHp}/{player.MaxHp}");
             PlaySound("player_hit.wav");
             SpawnDamageNumber(ComputeDamageOrigin(player), damage, DmgColorPlayer);
@@ -1551,17 +1549,24 @@ public partial class BattleTest : Node2D
         _state               = BattleState.PlayerAttack;
         _isPlayerMagicAttack = true;
         _isComboAttack       = false;
-        GD.Print(_isPlayerHealAttack
+
+        // Attack-identity predicate — answers "which target should this attack pick?"
+        // Used at dispatch (target not yet chosen). Downstream sites inspect the chosen
+        // pair via _sequenceAttacker.Side == _sequenceDefender.Side instead, which
+        // generalizes to ally-target scenarios beyond the specific Cure-on-self case.
+        bool isHealAttack = _activeMagicAttack == _playerCureAttack;
+
+        GD.Print(isHealAttack
             ? "[BattleTest] Player uses Cure."
             : "[BattleTest] Player uses magic attack.");
 
         // Set sequence context so ComputeCameraMidpoint returns a sensible midpoint.
         // No hop-in — _sequenceAttackerClosePos = attacker origin so PlayTeardown is a
-        // zero-distance no-op on the attacker. The _isPlayerHealAttack ternary resolves
-        // target selection: Cure targets self (same combatant on both sides of the
-        // sequence), other magic targets the single enemy in the current UI.
+        // zero-distance no-op on the attacker. The isHealAttack ternary resolves target
+        // selection: Cure targets self (same combatant on both sides of the sequence),
+        // other magic targets the single enemy in the current UI.
         var playerAttacker = _playerParty[0];
-        var magicDefender  = _isPlayerHealAttack ? playerAttacker : _enemyParty[0];
+        var magicDefender  = isHealAttack ? playerAttacker : _enemyParty[0];
         _sequenceAttacker         = playerAttacker;
         _sequenceDefender         = magicDefender;
         _sequenceAttackerClosePos = playerAttacker.Origin;
@@ -1615,7 +1620,7 @@ public partial class BattleTest : Node2D
             ShakeCamera(intensity: 6f, duration: 0.2f);  // shake — perfect timing feedback
 
         var enemy = _enemyParty[0];  // single target in the current UI
-        enemy.CurrentHp = Mathf.Max(0, enemy.CurrentHp - damage);
+        enemy.TakeDamage(damage);
         GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(ComputeDamageOrigin(enemy), damage, dmgColor);
@@ -1649,11 +1654,15 @@ public partial class BattleTest : Node2D
         int baseDamage = _battleSystem.GetStepBaseDamage(stepIndex);
         int amount     = ComputePlayerDamage(baseDamage, r);
 
-        if (_isPlayerHealAttack)
+        // Side-equality receiver predicate — true whenever the attacker and target
+        // share a side (self-heal, ally-heal, self-damage, friendly-fire). Today only
+        // Cure self-targets, so this reduces to "player casting heal on player," but
+        // the predicate is friendly-fire-ready without further refactor.
+        if (_sequenceAttacker.Side == _sequenceDefender.Side)
         {
             var player = _playerParty[0];  // heal targets self in the current single-player UI
             GD.Print($"[BattleTest] Cure pass {passIndex + 1} resolved: {r}  ({amount} HP).");
-            player.CurrentHp = Mathf.Min(player.MaxHp, player.CurrentHp + amount);
+            player.Heal(amount);
             GD.Print($"[BattleTest] Cure heals {amount} HP. Player HP: {player.CurrentHp}/{player.MaxHp}");
             SpawnDamageNumber(ComputeDamageOrigin(player), amount, DmgColorPerfect);  // green for healing
             UpdateHPBars();
@@ -1673,7 +1682,7 @@ public partial class BattleTest : Node2D
             ShakeCamera(intensity: 6f, duration: 0.2f);
 
         var enemy = _enemyParty[0];  // single target in the current UI
-        enemy.CurrentHp = Mathf.Max(0, enemy.CurrentHp - amount);
+        enemy.TakeDamage(amount);
         GD.Print($"[BattleTest] Magic hit deals {amount} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(ComputeDamageOrigin(enemy), amount, dmgColor);
@@ -1697,10 +1706,11 @@ public partial class BattleTest : Node2D
         PlayPlayer("cast_transition");  // OWNER: OnPlayerMagicSequenceCompleted — exit cast pose
         _playerAnimSprite.AnimationFinished += OnPlayerCastTransitionFinished;
 
-        // Cure heals the player — no game-over check needed, proceed directly to enemy turn.
-        if (_isPlayerHealAttack)
+        // Same-side attacker/target (self-heal today, ally-heal in future) — skip the
+        // game-over check and proceed directly to the enemy turn. Sequence fields still
+        // point at the just-completed sequence until the next StartSequence overwrites.
+        if (_sequenceAttacker.Side == _sequenceDefender.Side)
         {
-            _isPlayerHealAttack = false;
             GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
             return;
         }
@@ -2778,7 +2788,7 @@ public partial class BattleTest : Node2D
         if (comboDmgResult == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);
         var comboTarget = _enemyParty[0];  // single target in the current UI
-        comboTarget.CurrentHp = Mathf.Max(0, comboTarget.CurrentHp - comboDamage);
+        comboTarget.TakeDamage(comboDamage);
         GD.Print($"[BattleTest] Combo pass {passIndex + 1} {comboDmgResult}: {comboDamage} damage. " +
                  $"Enemy HP: {comboTarget.CurrentHp}/{comboTarget.MaxHp}");
         PlaySound("enemy_hit.wav");
