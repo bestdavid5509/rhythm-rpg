@@ -662,9 +662,24 @@ operate on at multi-character density:
   sequence start. Turn-based combat means at most one sequence is
   active at a time; the fields are unambiguous at every handler fire
   point.
-- Parry counter is the one edge case: at `PlayParryCounter` entry, swap
-  the scope fields so the counter's attacker/target reverse the prior
-  sequence's. Single write site.
+- Parry counter uses **no scope-field swap**. The scope fields stay
+  bound to the original sequence (attacker = enemy, defender = player)
+  throughout the counter. Inside `PlayParryCounter`, two locals name
+  the reversed roles explicitly:
+
+  ```csharp
+  var counterAttacker = _sequenceDefender;  // player delivers the counter
+  var counterTarget   = _sequenceAttacker;  // enemy receives the counter
+  ```
+
+  This resolves an ambiguity that surfaced during C2 survey: handlers
+  subscribed both pre-swap (regular sequence completion — e.g.
+  `OnCastEndFinished` at NonHopInContinuation) and post-swap (during
+  the counter — the cast_end line inside `PlayParryCounter`) would
+  have to resolve which sequence-scoped field points at the enemy
+  based on whether a swap was active. With no swap, handler bodies
+  unambiguously read `_sequenceAttacker` for enemy-side ops regardless
+  of entry path.
 - Preserves the `SafeDisconnectAnim` reference-equality pattern intact.
 - Migrates naturally to queue-based turn flow (C5): each
   `AdvanceTurn` / `ExecuteEnemyAttack` / `BeginPlayerAttack` call sets
@@ -672,8 +687,9 @@ operate on at multi-character density:
   target.
 
 **Recommendation:** Option B, strictly smaller diff surface, preserves
-load-bearing patterns, and the one edge case (parry counter) is a
-single intentional write.
+load-bearing patterns, and the parry-counter role reversal is contained
+to two locals inside one method (`PlayParryCounter`) rather than a
+global swap that every handler body would have to reason about.
 
 ---
 
