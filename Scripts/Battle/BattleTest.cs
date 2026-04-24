@@ -256,6 +256,20 @@ public partial class BattleTest : Node2D
     private Combatant _sequenceAttacker;
     private Combatant _sequenceDefender;
     private Vector2   _sequenceAttackerClosePos;  // close-but-not-touching stance position for this sequence
+    // Dying combatant for the in-flight death animation. Set immediately before each
+    // death-subscription site (enemy or player death) so OnEnemyDeathFinished /
+    // OnPlayerDeathFinished can route their disconnects/teardown through the correct
+    // combatant without relying on _sequenceAttacker/_sequenceDefender (which can point
+    // at either side depending on whether a player attack, enemy attack, or parry counter
+    // killed the combatant). Sequence-scoped: overwritten on each death; retention past
+    // handler fire is harmless.
+    private Combatant _sequenceDeathTarget;
+    // Target of the most recent PlayCombatantHurtFlash call. Set at PlayCombatantHurtFlash
+    // entry; read by OnEnemyHurtFlashFinished for its disconnect + idle reset. Decouples
+    // the hurt-flash callback from the sequence-scoped fields since the flash can fire
+    // outside of a normal enemy-sequence context (e.g. learnable-move selection on the
+    // enemy at the start of a turn, before the attack sequence begins).
+    private Combatant _lastHurtFlashTarget;
     private bool      _pendingGameOver;   // cached result of CheckGameOver(); read by OnFinalSlashFinished
     // Death flags live on Combatant.IsDead now (_playerParty[0].IsDead / _enemyParty[0].IsDead).
     // Once set, no further animation calls can override the death pose — see the five
@@ -1326,9 +1340,9 @@ public partial class BattleTest : Node2D
         // Start the cast animation and kick off the sequence immediately.
         // SafeDisconnect first — prevents stacking if BeginEnemyAttack fires more than once
         // (e.g. second turn) without the prior OnCastIntroFinished having run its own disconnect.
-        SafeDisconnectAnim(_enemyParty[0], OnCastIntroFinished);
-        PlayAnim(_enemyParty[0], "cast_intro");
-        _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
+        SafeDisconnectAnim(enemyAttacker, OnCastIntroFinished);
+        PlayAnim(enemyAttacker, "cast_intro");
+        ConnectAnim(enemyAttacker, OnCastIntroFinished);
 
         Vector2 promptPosition = ComputeCameraMidpoint(enemyAttacker, playerDefender);
         _targetZone.Position   = promptPosition;
@@ -1369,7 +1383,7 @@ public partial class BattleTest : Node2D
                 // which no-ops under SuppressInput. HandleGameOverInput only routes once
                 // _state actually flips.
                 TimingPrompt.SuppressInput = true;
-                _playerAnimSprite.Play("death");
+                player.AnimSprite.Play("death");
                 // Show Game Over overlay + fade music immediately; enemy sequence continues playing out.
                 // No OnPlayerDeathFinished is wired at this mid-sequence site, so this is the only
                 // place the overlay can be triggered.
@@ -1400,9 +1414,9 @@ public partial class BattleTest : Node2D
         void PlayStepAnimation()
         {
             if (enemy.IsDead) return;
-            SafeDisconnectAnim(_enemyParty[0], OnEnemyAttackAnimFinished);
-            PlayAnim(_enemyParty[0], step.EnemyAnimation);
-            _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
+            SafeDisconnectAnim(enemy, OnEnemyAttackAnimFinished);
+            PlayAnim(enemy, step.EnemyAnimation);
+            ConnectAnim(enemy, OnEnemyAttackAnimFinished);
             _hopInAnimFinished = false;  // Reset for this step's animation.
         }
 
@@ -1449,9 +1463,9 @@ public partial class BattleTest : Node2D
         GetTree().CreateTimer(replayDelay).Timeout += () =>
         {
             if (enemy.IsDead) return;
-            SafeDisconnectAnim(_enemyParty[0], OnEnemyAttackAnimFinished);
-            PlayAnim(_enemyParty[0], step.EnemyAnimation);
-            _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
+            SafeDisconnectAnim(enemy, OnEnemyAttackAnimFinished);
+            PlayAnim(enemy, step.EnemyAnimation);
+            ConnectAnim(enemy, OnEnemyAttackAnimFinished);
             _hopInAnimFinished = false;
         };
     }
@@ -1496,8 +1510,9 @@ public partial class BattleTest : Node2D
         // If the backward run loop hasn't fired OnRetreatFinished yet, cancel it here so
         // it doesn't stomp the parry/hit animation or restore idle at the wrong moment.
         // SpeedScale must be reset regardless — it may still be 2 from the retreat.
-        SafeDisconnectAnim(_playerParty[0], OnRetreatFinished);
-        _playerAnimSprite.SpeedScale = 1f;  // always reset — may still be 2 from retreat hop-back
+        var defender = _sequenceDefender;  // player defends in enemy-attack sequences
+        SafeDisconnectAnim(defender, OnRetreatFinished);
+        defender.AnimSprite.SpeedScale = 1f;  // always reset — may still be 2 from retreat hop-back
 
         var r = (TimingPrompt.InputResult)result;
         if (r == TimingPrompt.InputResult.Hit || r == TimingPrompt.InputResult.Perfect)
@@ -1508,20 +1523,20 @@ public partial class BattleTest : Node2D
             // Stop() before Play() is required because Godot 4's AnimatedSprite2D.Play()
             // is a no-op when the requested animation is already playing — Stop() halts
             // the current playback so the subsequent Play("parry") always restarts fresh.
-            SafeDisconnectAnim(_playerParty[0], OnParryFinished);
-            StopAnim(_playerParty[0]);
+            SafeDisconnectAnim(defender, OnParryFinished);
+            StopAnim(defender);
             PlaySound("parry_clash.wav");
             if (r == TimingPrompt.InputResult.Perfect)
                 PlaySound("perfect_parry_instance.wav");
-            PlayAnim(_playerParty[0], "parry");  // OWNER: enemy pass, player defends — always restarts from frame 0
-            _playerAnimSprite.AnimationFinished += OnParryFinished;
+            PlayAnim(defender, "parry");  // OWNER: enemy pass, player defends — always restarts from frame 0
+            ConnectAnim(defender, OnParryFinished);
         }
         else if (r == TimingPrompt.InputResult.Miss)
         {
             // Strike landed — flinch animation, then return to idle.
-            SafeDisconnectAnim(_playerParty[0], OnHitAnimFinished);
-            PlayAnim(_playerParty[0], "hit");    // OWNER: enemy pass, player takes damage — always restarts fresh
-            _playerAnimSprite.AnimationFinished += OnHitAnimFinished;
+            SafeDisconnectAnim(defender, OnHitAnimFinished);
+            PlayAnim(defender, "hit");    // OWNER: enemy pass, player takes damage — always restarts fresh
+            ConnectAnim(defender, OnHitAnimFinished);
         }
     }
 
@@ -1565,14 +1580,15 @@ public partial class BattleTest : Node2D
                 return;
             }
 
+            var enemyAttacker = _sequenceAttacker;
             if (HasCastEnd())
             {
-                SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
-                PlayAnim(_enemyParty[0], "cast_end");
-                _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+                SafeDisconnectAnim(enemyAttacker, OnCastEndFinished);
+                PlayAnim(enemyAttacker, "cast_end");
+                ConnectAnim(enemyAttacker, OnCastEndFinished);
             }
             else
-                PlayAnim(_enemyParty[0], "idle");
+                PlayAnim(enemyAttacker, "idle");
             ShowEndLabel("Game Over");
             return;
         }
@@ -1611,6 +1627,8 @@ public partial class BattleTest : Node2D
             UpdateHPBars();
             bool over = CheckGameOver();
 
+            var attacker = _sequenceAttacker;  // enemy — original sequence's attacker (no swap per C2 §3)
+            var defender = _sequenceDefender;  // player
             if (!over)
             {
                 if (!skipCastEnd)
@@ -1618,12 +1636,12 @@ public partial class BattleTest : Node2D
                     // Normal completion — transition enemy out of cast pose.
                     if (HasCastEnd())
                     {
-                        SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
-                        PlayAnim(_enemyParty[0], "cast_end");
-                        _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+                        SafeDisconnectAnim(attacker, OnCastEndFinished);
+                        PlayAnim(attacker, "cast_end");
+                        ConnectAnim(attacker, OnCastEndFinished);
                     }
                     else
-                        PlayAnim(_enemyParty[0], "idle");
+                        PlayAnim(attacker, "idle");
                 }
                 PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += ShowMenu);
                 return;
@@ -1632,8 +1650,8 @@ public partial class BattleTest : Node2D
             // Game over — determine which side is dead and play the appropriate death animation.
             PlayTeardown(null);
 
-            var player = _playerParty[0];
-            var enemy  = _enemyParty[0];
+            var player = defender;  // alias for readability below (defender == player in enemy sequences)
+            var enemy  = attacker;
 
             if (player.CurrentHp <= 0)
             {
@@ -1641,17 +1659,18 @@ public partial class BattleTest : Node2D
                 {
                     if (HasCastEnd())
                     {
-                        SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
-                        PlayAnim(_enemyParty[0], "cast_end");
-                        _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+                        SafeDisconnectAnim(attacker, OnCastEndFinished);
+                        PlayAnim(attacker, "cast_end");
+                        ConnectAnim(attacker, OnCastEndFinished);
                     }
                     else
-                        PlayAnim(_enemyParty[0], "idle");
+                        PlayAnim(attacker, "idle");
                 }
                 player.IsDead = true;
-                SafeDisconnectAnim(_playerParty[0], OnPlayerDeathFinished);
-                _playerAnimSprite.Play("death");
-                _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+                _sequenceDeathTarget = player;
+                SafeDisconnectAnim(player, OnPlayerDeathFinished);
+                player.AnimSprite.Play("death");
+                ConnectAnim(player, OnPlayerDeathFinished);
                 // Early overlay + music fade so the Game Over reads the moment the knight falls.
                 // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
                 ShowEndLabel("Game Over");
@@ -1660,11 +1679,12 @@ public partial class BattleTest : Node2D
             {
                 enemy.IsDead = true;
                 PlaySound("enemy_defeat.mp3");
-                SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
-                _enemyAnimSprite.Play("death");
-                _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+                _sequenceDeathTarget = enemy;
+                SafeDisconnectAnim(enemy, OnEnemyDeathFinished);
+                enemy.AnimSprite.Play("death");
+                ConnectAnim(enemy, OnEnemyDeathFinished);
                 ScheduleBossRevealIfPhase1();
-                PlayAnim(_playerParty[0], "idle");
+                PlayAnim(defender, "idle");  // player returns to idle (defender == player pre-C2 §3 no-swap semantics)
             }
         }
 
@@ -1850,10 +1870,10 @@ public partial class BattleTest : Node2D
         // completes before the timing circle appears and the effect fires.
         // OnPlayerCastFinished recomputes the prompt position from the sequence
         // fields set above — no separate cached Vector2 needed.
-        SafeDisconnectAnim(_playerParty[0], OnPlayerCastFinished);
-        PlayAnim(_playerParty[0], "cast");  // OWNER: BeginPlayerMagicAttack — cast wind-up before sequence
+        SafeDisconnectAnim(playerAttacker, OnPlayerCastFinished);
+        PlayAnim(playerAttacker, "cast");  // OWNER: BeginPlayerMagicAttack — cast wind-up before sequence
         GetTree().CreateTimer(1f / 12f).Timeout += () => PlaySound("magic_launch_4.wav");  // frame 1 at 12fps
-        _playerAnimSprite.AnimationFinished += OnPlayerCastFinished;
+        ConnectAnim(playerAttacker, OnPlayerCastFinished);
     }
 
     private void OnPlayerPromptCompleted(int result)
@@ -1906,9 +1926,10 @@ public partial class BattleTest : Node2D
         // combo_slash1 covers sheet frames 1–3; frame 0 was already shown as the wind-up.
         // PlayTeardown is deferred to OnFinalSlashFinished so the strike plays before retreat.
         PlaySound("player_attack_swing.wav");
-        SafeDisconnectAnim(_playerParty[0], OnFinalSlashFinished);
-        PlayAnim(_playerParty[0], "combo_slash1");  // OWNER: player turn, single-hit slash on resolve
-        _playerAnimSprite.AnimationFinished += OnFinalSlashFinished;
+        var playerAttacker = _sequenceAttacker;  // player (physical attack)
+        SafeDisconnectAnim(playerAttacker, OnFinalSlashFinished);
+        PlayAnim(playerAttacker, "combo_slash1");  // OWNER: player turn, single-hit slash on resolve
+        ConnectAnim(playerAttacker, OnFinalSlashFinished);
     }
 
     // =========================================================================
@@ -1973,9 +1994,10 @@ public partial class BattleTest : Node2D
         _inputLocked = true;  // Lock input through cast transition and teardown.
 
         // Play cast_transition once to smoothly exit the held cast pose, then return to idle.
-        SafeDisconnectAnim(_playerParty[0], OnPlayerCastTransitionFinished);
-        PlayAnim(_playerParty[0], "cast_transition");  // OWNER: OnPlayerMagicSequenceCompleted — exit cast pose
-        _playerAnimSprite.AnimationFinished += OnPlayerCastTransitionFinished;
+        var playerAttacker = _sequenceAttacker;  // player (magic attacker)
+        SafeDisconnectAnim(playerAttacker, OnPlayerCastTransitionFinished);
+        PlayAnim(playerAttacker, "cast_transition");  // OWNER: OnPlayerMagicSequenceCompleted — exit cast pose
+        ConnectAnim(playerAttacker, OnPlayerCastTransitionFinished);
 
         // Same-side attacker/target (self-heal today, ally-heal in future) — skip the
         // game-over check and proceed directly to the enemy turn. Sequence fields still
@@ -1996,21 +2018,28 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        if (_enemyParty[0].CurrentHp <= 0)
+        // Magic sequences: attacker = player, defender = target (usually enemy; self for Cure).
+        var magicDefender = _sequenceDefender;
+        var magicAttacker = _sequenceAttacker;
+        if (magicDefender.CurrentHp <= 0 && magicDefender.Side == CombatantSide.Enemy)
         {
-            _enemyParty[0].IsDead = true;
+            magicDefender.IsDead = true;
             PlaySound("enemy_defeat.mp3");
-            SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
-            _enemyAnimSprite.Play("death");
-            _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+            _sequenceDeathTarget = magicDefender;
+            SafeDisconnectAnim(magicDefender, OnEnemyDeathFinished);
+            magicDefender.AnimSprite.Play("death");
+            ConnectAnim(magicDefender, OnEnemyDeathFinished);
             ScheduleBossRevealIfPhase1();
         }
         else
         {
-            _playerParty[0].IsDead = true;
-            SafeDisconnectAnim(_playerParty[0], OnPlayerDeathFinished);
-            _playerAnimSprite.Play("death");
-            _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+            // Player died from a self-damage magic sequence (hypothetical; no current
+            // attack does self-damage that can reach 0 HP, but the branch stays defensive).
+            magicAttacker.IsDead = true;
+            _sequenceDeathTarget = magicAttacker;
+            SafeDisconnectAnim(magicAttacker, OnPlayerDeathFinished);
+            magicAttacker.AnimSprite.Play("death");
+            ConnectAnim(magicAttacker, OnPlayerDeathFinished);
             // Early overlay + music fade so the Game Over reads the moment the knight falls.
             // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
             ShowEndLabel("Game Over");
@@ -2033,10 +2062,17 @@ public partial class BattleTest : Node2D
         _state       = BattleState.PlayerAttack;
         _inputLocked = true;  // block input during item use
 
+        // Ether is a self-targeted pseudo-sequence (no BattleSystem circles). Set the
+        // sequence-scoped fields so OnEtherAnimationFinished can route through them
+        // instead of reaching into _playerParty[0] directly — the same pattern as
+        // every other sequence-driven handler post-C2.
+        _sequenceAttacker = player;
+        _sequenceDefender = player;  // self-targeted item use
+
         // Play the item-use animation on the player.
-        SafeDisconnectAnim(_playerParty[0], OnEtherAnimationFinished);
-        PlayAnim(_playerParty[0], "item_use");
-        _playerAnimSprite.AnimationFinished += OnEtherAnimationFinished;
+        SafeDisconnectAnim(player, OnEtherAnimationFinished);
+        PlayAnim(player, "item_use");
+        ConnectAnim(player, OnEtherAnimationFinished);
 
         // Schedule effect + sound + MP restore at the impact frame of the combo animation.
         int   impactFrame = _playerEtherEffect?.Steps?[0]?.ImpactFrames?[0] ?? 7;
@@ -2053,9 +2089,10 @@ public partial class BattleTest : Node2D
 
     private void OnEtherAnimationFinished()
     {
-        SafeDisconnectAnim(_playerParty[0], OnEtherAnimationFinished);
-        if (_playerParty[0].IsDead) return;
-        PlayAnim(_playerParty[0], "idle");
+        var attacker = _sequenceAttacker;  // self-targeted; player is both attacker and defender
+        SafeDisconnectAnim(attacker, OnEtherAnimationFinished);
+        if (attacker.IsDead) return;
+        PlayAnim(attacker, "idle");
         GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
     }
 
@@ -2163,9 +2200,10 @@ public partial class BattleTest : Node2D
             if (!_hopInOver)
             {
                 // Normal completion — enemy retreats then returns to idle; menu reappears.
+                var enemyAttacker = _sequenceAttacker;
                 PlayTeardown(() =>
                 {
-                    PlayAnim(_enemyParty[0], "idle");
+                    PlayAnim(enemyAttacker, "idle");
                     GetTree().CreateTimer(0.5f).Timeout += ShowMenu;
                 });
             }
@@ -2174,15 +2212,19 @@ public partial class BattleTest : Node2D
                 // Game over — retreat enemy without scheduling next turn, then handle death.
                 PlayTeardown(null);
 
-                var player = _playerParty[0];
-                var enemy  = _enemyParty[0];
+                // Roles in the hop-in enemy-attack sequence: attacker = enemy, defender = player.
+                // No swap per C2 §3; parry counter that may have killed the enemy still sees
+                // _sequenceAttacker = enemy / _sequenceDefender = player.
+                var player = _sequenceDefender;
+                var enemy  = _sequenceAttacker;
 
                 if (player.CurrentHp <= 0 && !player.IsDead)
                 {
                     player.IsDead = true;
-                    SafeDisconnectAnim(_playerParty[0], OnPlayerDeathFinished);
-                    _playerAnimSprite.Play("death");
-                    _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
+                    _sequenceDeathTarget = player;
+                    SafeDisconnectAnim(player, OnPlayerDeathFinished);
+                    player.AnimSprite.Play("death");
+                    ConnectAnim(player, OnPlayerDeathFinished);
                     // Early overlay + music fade so the Game Over reads the moment the knight falls.
                     // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
                     ShowEndLabel("Game Over");
@@ -2196,11 +2238,12 @@ public partial class BattleTest : Node2D
                 {
                     enemy.IsDead = true;
                     PlaySound("enemy_defeat.mp3");
-                    SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
-                    _enemyAnimSprite.Play("death");
-                    _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
+                    _sequenceDeathTarget = enemy;
+                    SafeDisconnectAnim(enemy, OnEnemyDeathFinished);
+                    enemy.AnimSprite.Play("death");
+                    ConnectAnim(enemy, OnEnemyDeathFinished);
                     ScheduleBossRevealIfPhase1();
-                    PlayAnim(_playerParty[0], "idle");
+                    PlayAnim(player, "idle");
                 }
             }
         }
@@ -3023,8 +3066,8 @@ public partial class BattleTest : Node2D
                 // "combo" frame 0 = first wind-up pose for both single and combo attacks.
                 attacker.AnimSprite.SpeedScale = 1f;
                 attacker.AnimSprite.Animation  = "combo";
-                SetAnimFrame(_playerParty[0], 0);  // OWNER: player turn, wind-up pose (sheet frame 0)
-                StopAnim(_playerParty[0]);
+                SetAnimFrame(attacker, 0);  // OWNER: player turn, wind-up pose (sheet frame 0)
+                StopAnim(attacker);
             }
             // Position is set here so ComputeCameraMidpoint reflects the final close stance.
             prompt.Position      = ComputeCameraMidpoint(attacker, defender);
@@ -3064,15 +3107,15 @@ public partial class BattleTest : Node2D
         {
             case 0:
                 PlaySound("player_attack_swing.wav");
-                SafeDisconnectAnim(_playerParty[0], OnComboPass0SlashFinished);
-                PlayAnim(_playerParty[0], "combo_slash1");  // OWNER: combo pass 0, first strike (frames 1–3)
-                _playerAnimSprite.AnimationFinished += OnComboPass0SlashFinished;
+                SafeDisconnectAnim(attacker, OnComboPass0SlashFinished);
+                PlayAnim(attacker, "combo_slash1");  // OWNER: combo pass 0, first strike (frames 1–3)
+                ConnectAnim(attacker, OnComboPass0SlashFinished);
                 break;
             case 1:
                 PlaySound("player_attack_swing.wav");
-                SafeDisconnectAnim(_playerParty[0], OnComboPass1SlashFinished);
-                PlayAnim(_playerParty[0], "combo_slash2");  // OWNER: combo pass 1, second strike (frames 6–9)
-                _playerAnimSprite.AnimationFinished += OnComboPass1SlashFinished;
+                SafeDisconnectAnim(attacker, OnComboPass1SlashFinished);
+                PlayAnim(attacker, "combo_slash2");  // OWNER: combo pass 1, second strike (frames 6–9)
+                ConnectAnim(attacker, OnComboPass1SlashFinished);
                 break;
             case 2:
                 // Final strike — OnFinalSlashFinished handles the 0.3s hold and retreat.
@@ -3080,9 +3123,9 @@ public partial class BattleTest : Node2D
                 // the same frame as the last PassEvaluated) for the all-hits case, or here when
                 // the miss branch runs.
                 PlaySound("player_attack_swing.wav");
-                SafeDisconnectAnim(_playerParty[0], OnFinalSlashFinished);
-                PlayAnim(_playerParty[0], "combo_slash1");  // OWNER: combo pass 2, final strike (frames 1–3)
-                _playerAnimSprite.AnimationFinished += OnFinalSlashFinished;
+                SafeDisconnectAnim(attacker, OnFinalSlashFinished);
+                PlayAnim(attacker, "combo_slash1");  // OWNER: combo pass 2, final strike (frames 1–3)
+                ConnectAnim(attacker, OnFinalSlashFinished);
                 break;
         }
 
