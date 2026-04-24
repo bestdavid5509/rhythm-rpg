@@ -147,16 +147,16 @@ public partial class BattleTest : Node2D
 
     private void ShowMenu()
     {
-        _state                  = BattleState.PlayerMenu;
-        _inputLocked            = false;  // Unlock input — player can interact with menu.
-        _playerDefending        = false;  // Defend only lasts one enemy turn.
-        _inSubMenu              = false;
-        _inItemMenu             = false;
-        _menuIndex              = 0;
-        _mainMenuPanel.Visible  = true;
-        _subMenuPanel.Visible   = false;
-        _itemMenuPanel.Visible  = false;
-        _menuLayer.Visible      = true;
+        _state                        = BattleState.PlayerMenu;
+        _inputLocked                  = false;  // Unlock input — player can interact with menu.
+        _playerParty[0].IsDefending   = false;  // Defend only lasts one enemy turn.
+        _inSubMenu                    = false;
+        _inItemMenu                   = false;
+        _menuIndex                    = 0;
+        _mainMenuPanel.Visible        = true;
+        _subMenuPanel.Visible         = false;
+        _itemMenuPanel.Visible        = false;
+        _menuLayer.Visible            = true;
         RefreshMenuLabels();
         GD.Print("[BattleTest] Player menu shown.");
     }
@@ -306,6 +306,18 @@ public partial class BattleTest : Node2D
             else ConfirmMenuSelection();
             GetViewport().SetInputAsHandled();
         }
+        else if (@event.IsActionPressed("battle_cancel"))
+        {
+            // Quick back-out from either submenu. Main menu has no parent to
+            // return to, so battle_cancel is a no-op there. Identical effect
+            // to selecting the "Back" entry + confirm; kept as a parallel path
+            // so controller users don't need to navigate to Back every time.
+            if (_inItemMenu || _inSubMenu)
+            {
+                ShowMenu();
+                GetViewport().SetInputAsHandled();
+            }
+        }
     }
 
     private void NavigateMenu(int direction)
@@ -353,9 +365,17 @@ public partial class BattleTest : Node2D
 
         if (label.StartsWith("Ether"))
         {
-            EtherCount--;
+            // EtherCount decrement and UseEtherItem invocation move into the launcher
+            // so cancel from SelectingTarget is a clean no-cost back-out. Default target
+            // is the player (sole MP-having combatant today); multi-ally pools post
+            // Phase 6 will let the player pick which ally receives the MP restore.
+            _pendingActionLauncher = () =>
+            {
+                EtherCount--;
+                UseEtherItem();
+            };
             HideMenu();
-            UseEtherItem();
+            EnterSelectingTarget(_playerParty[0], MenuContext.Items);
         }
     }
 
@@ -365,10 +385,15 @@ public partial class BattleTest : Node2D
         GD.Print($"[BattleTest] Player selects: {MenuOptionLabels[_menuIndex]}.");
         switch (_menuIndex)
         {
-            case 0: HideMenu(); _isComboAttack = false; BeginPlayerAttack(); break;
+            case 0:  // Basic Attack — single-hit enemy attack, no MP cost.
+                _isComboAttack = false;
+                _pendingActionLauncher = () => BeginPlayerAttack();
+                HideMenu();
+                EnterSelectingTarget(_enemyParty[0], MenuContext.Main);
+                break;
             case 1: ShowSubMenu(); break;   // Absorbed Moves
             case 2:                         // Defend — halve miss damage this enemy turn
-                _playerDefending = true;
+                _playerParty[0].IsDefending = true;  // single defender in the current UI
                 GD.Print("[BattleTest] Player defending — incoming miss damage halved this turn.");
                 HideMenu();
                 BeginEnemyAttack();
@@ -403,19 +428,36 @@ public partial class BattleTest : Node2D
 
         if (category == AttackCategory.Physical)
         {
-            // Physical moves (Combo Strike) — combo attack flow.
-            if (attack != null && attack.MpCost > 0)
-                _playerMp -= attack.MpCost;
-            HideMenu(); _isComboAttack = true; BeginPlayerAttack();
+            // Physical moves (Combo Strike) — combo attack flow. MP deduction moves
+            // into the launcher so cancel from SelectingTarget is a no-cost back-out.
+            _isComboAttack = true;
+            int mpCost = attack?.MpCost ?? 0;
+            _pendingActionLauncher = () =>
+            {
+                if (mpCost > 0) _playerParty[0].CurrentMp -= mpCost;
+                BeginPlayerAttack();
+            };
+            HideMenu();
+            EnterSelectingTarget(_enemyParty[0], MenuContext.AbsorbedMoves);
         }
         else if (category == AttackCategory.Magic)
         {
             // Magic moves (Comet, Comet Barrage, Cure, etc.) — magic attack flow.
-            if (attack != null)
-                _playerMp -= attack.MpCost;
-            _activeMagicAttack  = attack;
-            _isPlayerHealAttack = (attack == _playerCureAttack);
-            HideMenu(); BeginPlayerMagicAttack();
+            // Default-target resolution via the attack-identity dispatch predicate
+            // (same split as Phase 3.6): Cure targets self, other magic targets enemy.
+            // MP deduction moves into the launcher — deducted on confirm, not on menu
+            // pick, so cancel from SelectingTarget is a clean no-cost back-out.
+            _activeMagicAttack = attack;
+            bool isHealAttack = attack == _playerCureAttack;
+            Combatant defaultTarget = isHealAttack ? _playerParty[0] : _enemyParty[0];
+            int mpCost = attack?.MpCost ?? 0;
+            _pendingActionLauncher = () =>
+            {
+                if (mpCost > 0) _playerParty[0].CurrentMp -= mpCost;
+                BeginPlayerMagicAttack();
+            };
+            HideMenu();
+            EnterSelectingTarget(defaultTarget, MenuContext.AbsorbedMoves);
         }
     }
 
@@ -459,19 +501,22 @@ public partial class BattleTest : Node2D
     /// </summary>
     private bool IsSubMenuOptionEnabled(int index)
     {
+        var player = _playerParty[0];  // single MP spender in the current UI
+
         // Beckon — utility ability with a fixed MP cost (no AttackData backing).
-        // Also disabled when there's nothing to draw out (no learnable move or already absorbed).
+        // Also disabled when there's nothing to draw out: no learnable move, or this
+        // specific learnable has already been absorbed (per-move-type gating).
         if (_subMenuLabelsData[index] == "Beckon")
         {
-            if (_playerMp < BeckonMpCost) return false;
+            if (player.CurrentMp < BeckonMpCost) return false;
             if (EnemyData?.LearnableAttack == null) return false;
-            if (_hasAbsorbedLearnableMove) return false;
+            if (_absorbedMoves.Contains(EnemyData.LearnableAttack)) return false;
             return true;
         }
 
         var attack = GetSubMenuAttack(index);
         if (attack == null) return true;  // Back
-        if (attack.MpCost > 0 && _playerMp < attack.MpCost) return false;
+        if (attack.MpCost > 0 && player.CurrentMp < attack.MpCost) return false;
         return true;
     }
 

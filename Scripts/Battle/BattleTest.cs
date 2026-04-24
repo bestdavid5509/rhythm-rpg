@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Godot;
 
 /// <summary>
@@ -31,7 +32,7 @@ public partial class BattleTest : Node2D
     // State machine
     // =========================================================================
 
-    private enum BattleState { EnemyAttack, PlayerMenu, PlayerAttack, GameOver, Victory }
+    private enum BattleState { EnemyAttack, PlayerMenu, SelectingTarget, PlayerAttack, GameOver, Victory }
     private BattleState _state = BattleState.EnemyAttack;
 
     // True during attack resolution phases (slash animations, retreat, teardown) when all
@@ -40,15 +41,11 @@ public partial class BattleTest : Node2D
     private bool _inputLocked;
 
     // =========================================================================
-    // HP
+    // HP / MP defaults — used to seed Combatant fields at BuildInitialParties time.
+    // Per-unit state lives on the Combatant now; see _playerParty / _enemyParty below.
     // =========================================================================
 
-    private const int PlayerMaxHP      = 100;
-    private const int EnemyMaxHPDefault = 200;
-
-    private int _playerHP    = PlayerMaxHP;
-    private int _enemyHP     = EnemyMaxHPDefault;
-    private int _enemyMaxHP  = EnemyMaxHPDefault;  // overridden by EnemyData.MaxHp when set
+    private const int PlayerMaxHP = 100;
 
     // =========================================================================
     // MP
@@ -57,8 +54,6 @@ public partial class BattleTest : Node2D
     [Export] public int PlayerMaxMp = 50;
 
     [Export] public int EtherCount = 1;
-
-    private int _playerMp;  // initialized to PlayerMaxMp in _Ready
 
     // UI bar references — built in BuildStatusPanels(), updated by UpdateHPBars()/UpdateMpBar().
     // Type is Control (not ColorRect) because the fill uses 3-part TextureRect children
@@ -76,21 +71,27 @@ public partial class BattleTest : Node2D
     // Perfect parry
     // =========================================================================
 
-    // Set true at the start of each enemy attack, cleared to false on any Miss result.
-    // Checked when PromptCompleted fires to decide whether to trigger the auto counter.
+    // Per-sequence parry-outcome state. Stays on BattleTest — this is BattleTest's
+    // control-flow state for the sequence, not sequence identity/data (which lives
+    // on SequenceContext). Reset to true on BeginEnemyAttack; cleared to false on
+    // any Miss in OnEnemyPassEvaluated; read at OnEnemySequenceCompleted to decide
+    // whether to trigger the auto parry-counter.
     private bool _parryClean;
 
-    // Set true when the player picks Defend from the main menu. While true, miss damage
-    // from enemy passes is halved. Cleared at the start of each player menu turn.
-    private bool _playerDefending;
+    // =========================================================================
+    // Absorb tracking — party-level, per-move-type
+    // =========================================================================
 
-    // True once the player has absorbed the enemy's learnable move via perfect parry.
-    // Prevents the absorption moment from triggering more than once per fight.
-    private bool _hasAbsorbedLearnableMove = false;
-
-    // Set true by the Beckon ability; consumed on the next SelectEnemyAttack call to
-    // force the enemy to use their LearnableAttack instead of a random pool selection.
-    private bool _beckoning;
+    // Set of AttackData references the Absorber has already learned. Absorption is
+    // per-move-type, not per-enemy-instance — once a move is in this set, any enemy
+    // with the same LearnableAttack offers no further absorption opportunity.
+    //
+    // Prototype simplification: lives on BattleTest as a party-level field. The
+    // long-term correct home is per-Absorber-character skill data, pending Phase 2+
+    // character persistence work. Migration is a mechanical call-site rename
+    // (_absorbedMoves.Contains(x) → absorber.Skills.HasAbsorbed(x)).
+    // See docs/combatant-abstraction-design.md Q1 addendum.
+    private HashSet<AttackData> _absorbedMoves = new();
 
     // =========================================================================
     // Damage numbers
@@ -102,11 +103,21 @@ public partial class BattleTest : Node2D
     private static readonly Color DmgColorMiss    = new Color(0.60f, 0.60f, 0.60f, 1.00f);  // grey (weak hit)
     private static readonly Color DmgColorPlayer  = new Color(1.00f, 0.25f, 0.25f, 1.00f);  // red
 
-    // Spawn points — centered on each sprite, just above its top edge.
-    // PlayerSprite: offset_left=390, offset_right=490 → center X=440,  top Y=590
-    // EnemySprite:  offset_left=1420, offset_right=1540 → center X=1480, top Y=550
-    private static readonly Vector2 PlayerDamageOrigin = new Vector2(440f,  570f);
-    private static readonly Vector2 EnemyDamageOrigin  = new Vector2(1480f, 530f);
+    /// <summary>
+    /// Returns the world-space spawn position for a damage number floating above the
+    /// given combatant's sprite. For the 1v1 prototype these are visually-tuned per-side
+    /// constants matching the sprites' rest positions in the current scene.
+    ///
+    /// TODO (audit finding B5 / scaffolding phase): derive at call time from the unit's
+    /// rest-position sprite anchor + frame-size offset so damage numbers track per-unit
+    /// locations at multi-combat density, rather than hardcoded per-side values. Using
+    /// rest position (not live <c>sprite.GlobalPosition</c>) keeps the number anchored
+    /// to the unit's home location, unaffected by slam or hop-in tweens mid-combat.
+    /// </summary>
+    private static Vector2 ComputeDamageOrigin(Combatant unit) =>
+        unit.Side == CombatantSide.Player
+            ? new Vector2(440f,  570f)
+            : new Vector2(1480f, 530f);
 
     // =========================================================================
     // Prompt management
@@ -124,10 +135,6 @@ public partial class BattleTest : Node2D
     // When assigned, the enemy's death triggers the Phase 2 reveal sequence and swaps
     // to this EnemyData instead of ending the battle. Null disables the transition.
     [Export] public EnemyData Phase2EnemyData;
-
-    // When true, skip the reveal animation + dialogue entirely and swap directly to
-    // Phase 2 once the Phase 1 death animation completes. Test hook.
-    [Export] public bool SkipPhaseTransition = false;
 
     // When true, start the battle with the enemy at 1 HP so the first player hit
     // kills the warrior and triggers the Phase 1 → Phase 2 transition immediately.
@@ -171,8 +178,9 @@ public partial class BattleTest : Node2D
     [Export] public EnemyData EnemyData;
 
     private BattleMessage  _battleMessage;
-    private ShaderMaterial _enemyFlashMaterial;
-    private Tween          _enemyFlashTween;
+    // Flash material and tween live on enemyCombatant (see Combatant.FlashMaterial /
+    // FlashTween). The material is created in _Ready, attached to the enemy AnimatedSprite2D,
+    // and then referenced on the Combatant in BuildInitialParties.
 
     // Music playback — dedicated AudioStreamPlayer, separate from one-shot SFX players
     // created by PlaySound. Loops via Finished signal so format-specific loop flags aren't
@@ -191,7 +199,40 @@ public partial class BattleTest : Node2D
     private AnimatedSprite2D _enemyAnimSprite;
     private AnimatedSprite2D _playerAnimSprite;
     private TargetZone       _targetZone;       // shared target ring — shown for the duration of any prompt sequence
+    private TargetPointer    _targetPointer;    // selection-phase pointer; shown during SelectingTarget state only (Phase 4)
     private BattleDialogue   _introDialogue;    // owned narrative-dialogue component; QueueFree'd after DialogueCompleted
+
+    // Phase 4 — target selection. Between a menu pick and the Begin* that launches
+    // the attack, the player confirms (or cancels) the target via the pointer.
+    // _selectedTarget is the currently-highlighted combatant (read by Begin* once
+    // the player confirms); _pendingActionLauncher is the closure that fires the
+    // attack (including MP deduction) when the player presses battle_confirm.
+    // _selectingTargetMenuContext remembers which menu context the target-select
+    // was entered from so Cancel returns to the correct menu (main / Absorbed
+    // Moves submenu / Items submenu). All three fields are cleared on confirm
+    // and on cancel.
+    private enum MenuContext { Main, AbsorbedMoves, Items }
+    private Combatant     _selectedTarget;
+    private System.Action _pendingActionLauncher;
+    private MenuContext   _selectingTargetMenuContext;
+
+    // Party lists owned by BattleTest. Single-entry for the 1v1 prototype; the
+    // scaffolding exercise grows them to 4/5. Source of truth for combat-universal
+    // state (HP, MP, defending, dead flags, beckoning) and player/enemy-specific
+    // fields (MP on player, LearnableAttack Data on enemy, FlashMaterial on enemy).
+    //
+    // Sprite/material refs are held by the Combatant but the scene tree owns the
+    // node lifecycle — Combatant just points at the existing nodes.
+    // See docs/combatant-abstraction-design.md.
+    private List<Combatant> _playerParty = new();
+    private List<Combatant> _enemyParty  = new();
+
+    // Phase 5 — threat-reveal target list, populated each enemy turn in BeginEnemyAttack
+    // and read by the threat-reveal fire loop. Single entry today (enemy always targets
+    // the single player); multi-target attacks post-Phase-6 populate more entries. Cleared
+    // + repopulated each turn rather than accumulated so stale entries from previous turns
+    // don't bleed into the current threat reveal.
+    private List<Combatant> _threatenedCombatants = new();
 
     // =========================================================================
     // Characters and animations
@@ -204,13 +245,21 @@ public partial class BattleTest : Node2D
     private Vector2   _playerAnimSpriteOrigin; // AnimatedSprite2D position after floor-anchoring in _Ready
     private Vector2   _enemyAnimSpriteOrigin;  // AnimatedSprite2D position after floor-anchoring in _Ready
 
-    // Set at the start of each attack turn; used by the shared animation helpers.
-    private ColorRect _attacker;
-    private ColorRect _defender;
-    private Vector2   _attackerClosePos;  // close-but-not-touching stance position for this turn
+    // Per-sequence combat context — set at the start of each attack turn, read by
+    // positioning helpers and animation-callback continuations throughout the sequence.
+    // These are Option Y from the Phase 3.4 migration: sequence-scoped fields rather
+    // than parameter-threaded values. Parameter threading would require lambdas at every
+    // AnimationFinished subscription site (`+= () => OnFinalSlashFinished(attacker, ...)`),
+    // breaking the SafeDisconnectAnim(_playerParty[0], methodName) reference-equality pattern used
+    // throughout. Option Y keeps the existing per-sequence storage pattern; the refactor
+    // is the type change (ColorRect → Combatant) and the rename.
+    private Combatant _sequenceAttacker;
+    private Combatant _sequenceDefender;
+    private Vector2   _sequenceAttackerClosePos;  // close-but-not-touching stance position for this sequence
     private bool      _pendingGameOver;   // cached result of CheckGameOver(); read by OnFinalSlashFinished
-    private bool      _playerDead;        // true once player death animation begins; guards all subsequent sprite calls
-    private bool      _enemyDead;         // true once enemy death animation begins; guards all subsequent sprite calls
+    // Death flags live on Combatant.IsDead now (_playerParty[0].IsDead / _enemyParty[0].IsDead).
+    // Once set, no further animation calls can override the death pose — see the five
+    // dead-flag guard helpers in BattleAnimator.cs (PlayAnim, StopAnim, etc.).
     private bool      _endLabelShown;     // idempotent guard for ShowEndLabel — lets death-start sites trigger the
                                           // Game Over overlay + music fade immediately while OnPlayerDeathFinished's
                                           // own ShowEndLabel call (at death-anim completion) becomes a no-op.
@@ -223,6 +272,12 @@ public partial class BattleTest : Node2D
     private int       _gameOverOptionIndex;    // 0 = Retry, 1 = Quit
     private Label[]   _gameOverTextLabels;     // centered option text; yellow when selected, white otherwise
     private Label[]   _gameOverArrows;         // ► cursor absolutely anchored left; Visible toggled per selection
+    private ulong     _gameOverInputUnlockedAtMsec;  // Game Over input buffer — 150ms held-input drain set
+                                                     // at ShowGameOverOptionsPanel entry (mirrors Victory's
+                                                     // pattern). The 2.0s beat before that is implicit in the
+                                                     // timer cascade from ShowEndLabel; cumulative end-to-end
+                                                     // lockout is 2150ms — matches Victory exactly.
+                                                     // Input rejected while Time.GetTicksMsec() < this value.
     private static readonly string[] GameOverOptionLabels = { "Retry", "Quit" };
 
     // Victory options panel — parallel to the Game Over panel. Populated by AddVictoryOptions
@@ -236,7 +291,6 @@ public partial class BattleTest : Node2D
     private static readonly string[] VictoryOptionLabels = { "Retry", "Close" };
     private bool      _isComboAttack;       // true when the current player turn uses Combo Strike (Bouncing prompt)
     private bool      _isPlayerMagicAttack; // true when the current player turn uses a magic attack via BattleSystem
-    private bool      _isPlayerHealAttack;  // true when the current player turn uses Cure (heal self instead of damage enemy)
     private int       _comboPassIndex;      // which Bouncing pass just resolved; set in OnAttackPassEvaluated
 
     // Loaded once in _Ready; used to restore the enemy attack after a player magic turn.
@@ -256,11 +310,6 @@ public partial class BattleTest : Node2D
     // Set at the start of each combo turn; cleared in BeginPlayerAttack and BeginComboMissRetreat.
     // When true, OnComboPassNSlashFinished skips the wind-up hold and triggers the retreat instead.
     private bool       _comboMissed;
-
-    // Cached in BeginPlayerMagicAttack; consumed by OnPlayerCastFinished once the
-    // cast animation completes and it is safe to start the sequence.
-    private Vector2    _playerMagicDefenderCenter;
-    private Vector2    _playerMagicPromptPos;
 
     // Hop-in coordination — two-flag rendezvous so ProceedAfterHopInAnim fires only after
     // BOTH the sequence completes AND the attack animation finishes (whichever is last).
@@ -313,7 +362,6 @@ public partial class BattleTest : Node2D
     {
         _timingPromptScene = GD.Load<PackedScene>("res://Scenes/Battle/TimingPrompt.tscn");
 
-        _playerMp = PlayerMaxMp;
         ApplyBackgroundGradient();
         BuildStatusPanels();
         _battleMessage = new BattleMessage(this);
@@ -397,21 +445,34 @@ public partial class BattleTest : Node2D
         _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;  // snapshot for teardown restoration
         _enemyAnimSprite.Play("idle");
 
-        // White flash shader — used for learnable move signalling.
-        var flashShader = GD.Load<Shader>("res://Assets/Shaders/WhiteFlash.gdshader");
-        _enemyFlashMaterial = new ShaderMaterial();
-        _enemyFlashMaterial.Shader = flashShader;
-        _enemyFlashMaterial.SetShaderParameter("flash_amount", 0.0f);
-        _enemyAnimSprite.Material = _enemyFlashMaterial;
+        // Combatant-overlay shader — composites two independent effects (white flash
+        // for learnable-move signalling, red tint for Phase 5 threat reveal) on a
+        // single material slot. Each combatant gets its own ShaderMaterial instance so
+        // the uniforms are per-combatant; both sprites get one attached here and are
+        // later referenced by Combatant.FlashMaterial in BuildInitialParties.
+        var overlayShader = GD.Load<Shader>("res://Assets/Shaders/CombatantOverlay.gdshader");
+
+        var enemyOverlayMaterial = new ShaderMaterial();
+        enemyOverlayMaterial.Shader = overlayShader;
+        enemyOverlayMaterial.SetShaderParameter("flash_amount", 0.0f);
+        enemyOverlayMaterial.SetShaderParameter("tint_amount",  0.0f);
+        _enemyAnimSprite.Material = enemyOverlayMaterial;
+
+        var playerOverlayMaterial = new ShaderMaterial();
+        playerOverlayMaterial.Shader = overlayShader;
+        playerOverlayMaterial.SetShaderParameter("flash_amount", 0.0f);
+        playerOverlayMaterial.SetShaderParameter("tint_amount",  0.0f);
+        _playerAnimSprite.Material = playerOverlayMaterial;
 
         _battleSystem = new BattleSystem();
-        AddChild(_battleSystem);  // triggers BattleSystem._Ready, which loads _currentAttack
+        AddChild(_battleSystem);
 
-        // Inspector-assigned attack overrides BattleSystem's built-in TestAttackPath.
-        if (TestEnemyAttack != null)
-            _battleSystem.SetAttack(TestEnemyAttack);
-
-        _enemyAttackData  = _battleSystem.GetCurrentAttack();  // cache for restoration after player turns
+        // Fallback attack used as a last-resort in SelectEnemyAttack when no EnemyData
+        // attack pool is configured. Inspector-assigned TestEnemyAttack wins when set.
+        _enemyAttackData = TestEnemyAttack
+                           ?? GD.Load<AttackData>("res://Resources/Attacks/fire_and_ice_sword_combo.tres");
+        if (_enemyAttackData == null)
+            GD.PrintErr("[BattleTest] Failed to load fallback enemy attack.");
         _playerMagicAttack = GD.Load<AttackData>("res://Resources/Attacks/player_magic_attack.tres");
         if (_playerMagicAttack == null)
             GD.PrintErr("[BattleTest] Failed to load player_magic_attack.tres");
@@ -438,32 +499,47 @@ public partial class BattleTest : Node2D
 
         _targetZone = GetNode<TargetZone>("TargetZone");
 
+        // TargetPointer is code-instantiated (no .tscn). Added as a child of BattleTest so
+        // it inherits scene-tree lifecycle; world-space Node2D so its position tracks
+        // combatant sprites without manual world-to-screen conversion.
+        _targetPointer = new TargetPointer();
+        AddChild(_targetPointer);
+
+        // Construct single-entry party lists before HP init / test-flag overrides.
+        // Combatant fields are now the source of truth; the HP init + test-flag blocks
+        // below write directly into playerCombatant / enemyCombatant, not into retired
+        // singleton fields.
+        BuildInitialParties();
+
+        var playerCombatant = _playerParty[0];
+        var enemyCombatant  = _enemyParty[0];
+
         // EnemyData overrides the default max HP when assigned in the inspector.
         if (EnemyData != null && EnemyData.MaxHp > 0)
         {
-            _enemyMaxHP = EnemyData.MaxHp;
-            _enemyHP    = EnemyData.MaxHp;
+            enemyCombatant.MaxHp     = EnemyData.MaxHp;
+            enemyCombatant.CurrentHp = EnemyData.MaxHp;
             GD.Print($"[BattleTest] EnemyData \"{EnemyData.EnemyName}\" loaded — " +
                      $"MaxHp={EnemyData.MaxHp}, AttackPool={EnemyData.AttackPool?.Length ?? 0} attack(s).");
         }
 
-        // Test hooks — applied AFTER EnemyData HP init so they aren't clobbered. MaxHP is
+        // Test hooks — applied AFTER EnemyData HP init so they aren't clobbered. MaxHp is
         // preserved so HP bars show the correct scale. Priority order resolved above.
         if (testVictory)
         {
-            _enemyHP = 1;
+            enemyCombatant.CurrentHp = 1;
             // Consume the phase-transition gate so enemy death goes straight to Victory
             // instead of retriggering the Phase 1 → Phase 2 reveal cutscene.
             _phaseTransitionConsumed = true;
         }
         else if (testPhaseTrans)
         {
-            _enemyHP = 1;
+            enemyCombatant.CurrentHp = 1;
             GD.Print("[BattleTest] TestPhaseTransition active — enemy HP forced to 1.");
         }
         if (testGameOver)
         {
-            _playerHP = 1;
+            playerCombatant.CurrentHp = 1;
         }
 
         BuildMenu();
@@ -519,6 +595,10 @@ public partial class BattleTest : Node2D
         {
             case BattleState.PlayerMenu:
                 HandleMenuInput(@event);
+                break;
+
+            case BattleState.SelectingTarget:
+                HandleSelectingTargetInput(@event);
                 break;
 
             case BattleState.EnemyAttack:
@@ -831,6 +911,12 @@ public partial class BattleTest : Node2D
     {
         if (_gameOverTextLabels == null) return;
 
+        // Input buffer (set at ShowEndLabel entry for Game Over) — lets the emotional
+        // beat land and drains held battle_confirm presses from the killing blow
+        // before Retry/Quit become interactive. Matches the Victory screen's combined
+        // 2.0s beat + 150ms held-input buffer (total 2150ms from end-label dispatch).
+        if (Time.GetTicksMsec() < _gameOverInputUnlockedAtMsec) return;
+
         if (@event.IsActionPressed("ui_up") || @event.IsActionPressed("ui_down"))
         {
             int direction = @event.IsActionPressed("ui_up") ? -1 : 1;
@@ -969,9 +1055,73 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
+    /// Builds the Game Over Retry/Quit panel and fades it in, then transitions state to
+    /// BattleState.GameOver so HandleGameOverInput takes over. Called from ShowEndLabel's
+    /// shared 2.0s timer after the "Game Over" fullscreen label appears. Mirror of
+    /// <see cref="ShowVictoryOptionsPanel"/> — same layout, anchoring, spacers, tween;
+    /// the two end-screens are structurally symmetric post-parity-refactor.
+    ///
+    /// Positioned below viewport center (+200px) so the "Game Over" label at center
+    /// stays legible. 150ms input buffer set at fade-in start drains held battle_confirm
+    /// presses from the killing blow. Combined with the 2.0s timer delay from
+    /// ShowEndLabel, the cumulative input lockout is 2.15s — matching Victory exactly.
+    /// </summary>
+    private void ShowGameOverOptionsPanel()
+    {
+        if (!GodotObject.IsInstanceValid(this)) return;
+
+        var layer = new CanvasLayer();
+        layer.Name = "GameOverOptionsLayer";
+        AddChild(layer);
+
+        var wrapper = new Control();
+        wrapper.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        wrapper.MouseFilter = Control.MouseFilterEnum.Ignore;
+        wrapper.Modulate    = new Color(1f, 1f, 1f, 0f);
+        layer.AddChild(wrapper);
+
+        var panel = MakeLayeredPanel(minWidth: 400f, out var content);
+        panel.AnchorLeft     = 0.5f;
+        panel.AnchorRight    = 0.5f;
+        panel.AnchorTop      = 0.5f;
+        panel.AnchorBottom   = 0.5f;
+        panel.GrowHorizontal = Control.GrowDirection.Both;
+        panel.GrowVertical   = Control.GrowDirection.Both;
+        // Offset the panel down 100px from viewport center so it sits clearly below the
+        // lifted "Game Over" title (title's OffsetBottom = -200f lifts its center 100px
+        // above viewport middle; this 100f offset keeps the panel 100px below middle,
+        // preserving the same title-to-panel spacing while the whole composition reads
+        // higher on screen). Matches Victory's lifted offset.
+        panel.OffsetTop      = 100f;
+        panel.OffsetBottom   = 100f;
+        wrapper.AddChild(panel);
+
+        content.AddThemeConstantOverride("separation", 24);
+
+        // 8px top/bottom spacers, options, no divider — same content layout as the
+        // Victory options panel. The free-floating "Game Over" label above already
+        // serves as the headline, so a divider inside would be decorative without purpose.
+        var topSpacer = new Control();
+        topSpacer.CustomMinimumSize = new Vector2(0, 8);
+        content.AddChild(topSpacer);
+
+        AddGameOverOptions(content);
+
+        var bottomSpacer = new Control();
+        bottomSpacer.CustomMinimumSize = new Vector2(0, 8);
+        content.AddChild(bottomSpacer);
+
+        _state                       = BattleState.GameOver;
+        _gameOverInputUnlockedAtMsec = Time.GetTicksMsec() + 150;
+
+        var tween = CreateTween();
+        tween.TweenProperty(wrapper, "modulate:a", 1.0f, 0.5f);
+    }
+
+    /// <summary>
     /// Builds the Victory Close/Retry panel and fades it in, then transitions state to
     /// BattleState.Victory so HandleVictoryInput takes over. Called from ShowEndLabel's
-    /// Victory branch via a 1.5s timer after the "Victory!" fullscreen label appears.
+    /// shared 2.0s timer after the "Victory!" fullscreen label appears.
     /// Positioned below viewport center (+200px) so the Victory! label at center stays legible.
     /// 150ms input buffer set at fade-in start prevents final-strike input bleed.
     /// </summary>
@@ -996,10 +1146,13 @@ public partial class BattleTest : Node2D
         panel.AnchorBottom   = 0.5f;
         panel.GrowHorizontal = Control.GrowDirection.Both;
         panel.GrowVertical   = Control.GrowDirection.Both;
-        // Offset the panel down 200px from viewport center so it sits clearly below the
-        // "Victory!" fullscreen label (which is centered on the viewport at y=540 on 1080p).
-        panel.OffsetTop      = 200f;
-        panel.OffsetBottom   = 200f;
+        // Offset the panel down 100px from viewport center so it sits clearly below the
+        // lifted "Victory!" title (title's OffsetBottom = -200f lifts its center 100px
+        // above viewport middle; this 100f offset keeps the panel 100px below middle,
+        // preserving the same title-to-panel spacing while the whole composition reads
+        // higher on screen).
+        panel.OffsetTop      = 100f;
+        panel.OffsetBottom   = 100f;
         wrapper.AddChild(panel);
 
         content.AddThemeConstantOverride("separation", 24);
@@ -1075,7 +1228,6 @@ public partial class BattleTest : Node2D
         _inputLocked         = false;  // Unlock input — enemy prompts are about to appear.
         _parryClean          = true;
         _isPlayerMagicAttack = false;
-        _isPlayerHealAttack  = false;
         _isComboAttack       = false;   // Clear stale combo flag from previous player turn.
         TimingPrompt.SuppressInput = false;  // safety reset
 
@@ -1085,21 +1237,62 @@ public partial class BattleTest : Node2D
         FreeActivePrompt();
         GD.Print("[BattleTest] Enemy attacks.");
 
-        // SetAttack is always called because a preceding player magic turn may have
-        // overridden _currentAttack with _playerMagicAttack.
         var selectedAttack = SelectEnemyAttack();
-        _battleSystem.SetAttack(selectedAttack);
+
+        var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
 
         // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
-        if (!_hasAbsorbedLearnableMove
-            && EnemyData?.LearnableAttack != null
-            && selectedAttack == EnemyData.LearnableAttack)
+        // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
+        // is already in _absorbedMoves (not if any move has been absorbed).
+        if (EnemyData?.LearnableAttack != null
+            && selectedAttack == EnemyData.LearnableAttack
+            && !_absorbedMoves.Contains(EnemyData.LearnableAttack))
         {
             ShowLearnableSignal();
-            FlashEnemyWhite();
+            FlashCombatantWhite(enemyAttacker);
         }
 
-        if (_battleSystem.CurrentAttackIsHopIn)
+        // Phase 5 — threat reveal. Populate the threatened-combatants list (single
+        // entry today: the enemy always targets the single player; AOE-ready via the
+        // list so multi-target attacks can add more entries once AttackData gains
+        // target-pool metadata in Phase 6). Fire FlashCombatantThreatened on each to
+        // run the 0.6s red-tint pulse, then defer the actual attack launch by 0.6s
+        // so the tint fades out exactly as the attack animation begins.
+        _threatenedCombatants.Clear();
+        _threatenedCombatants.Add(_playerParty[0]);
+        foreach (var target in _threatenedCombatants)
+            FlashCombatantThreatened(target);
+
+        GetTree().CreateTimer(0.6f).Timeout += () =>
+        {
+            if (!GodotObject.IsInstanceValid(this)) return;
+            ExecuteEnemyAttack(selectedAttack);
+        };
+    }
+
+    /// <summary>
+    /// Second half of the enemy turn — runs 1.0s after BeginEnemyAttack, once the
+    /// threat-reveal tint pulse has completed. Builds the SequenceContext and
+    /// dispatches to the hop-in or cast path. Split out from BeginEnemyAttack so the
+    /// pre-attack threat-reveal beat doesn't entangle with timer-callback plumbing
+    /// on the hop-in branch's early-return.
+    /// </summary>
+    private void ExecuteEnemyAttack(AttackData selectedAttack)
+    {
+        var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
+        var playerDefender = _playerParty[0];
+
+        // Build the sequence context once — the same reference threads through every
+        // StepStarted / StepPassEvaluated / SequenceCompleted signal for this sequence.
+        var ctx = new SequenceContext
+        {
+            Attacker      = enemyAttacker,
+            Target        = playerDefender,
+            CurrentAttack = selectedAttack,
+            SequenceId    = _battleSystem.NextSequenceId(),
+        };
+
+        if (selectedAttack.IsHopIn)
         {
             // Reset rendezvous flags for this turn — both must be true before teardown runs.
             _hopInSequenceCompleted = false;
@@ -1112,58 +1305,35 @@ public partial class BattleTest : Node2D
             // where the enemy stands during the zoom-in (e.g. push further left to overlap the player).
             // Enemy animation is now driven per-step by OnBattleSystemStepStarted.
             // StartSequence triggers StepStarted for step 0 which plays the first animation.
-            Vector2 hopInOffset = _battleSystem.GetFirstStep()?.Offset ?? Vector2.Zero;
-            PlayHopIn(_enemySprite, _playerSprite, () =>
+            Vector2 hopInOffset = selectedAttack.Steps.Count > 0 ? selectedAttack.Steps[0].Offset : Vector2.Zero;
+            PlayHopIn(enemyAttacker, playerDefender, () =>
             {
-                Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
-                Vector2 promptPos      = ComputeCameraMidpoint();
-                _targetZone.Position   = promptPos;
-                _targetZone.Visible    = true;
-                _battleSystem.StartSequence(this, defenderCenter, promptPos);
+                Vector2 promptPos    = ComputeCameraMidpoint(enemyAttacker, playerDefender);
+                _targetZone.Position = promptPos;
+                _targetZone.Visible  = true;
+                _battleSystem.StartSequence(this, ctx, promptPos);
             }, hopInOffset);
             return;
         }
 
-        if (SkipHopIn)
-        {
-            // Enemy stays at origin — set combat context without any setup animation.
-            // Camera stays at its default position and zoom; no hop-in, no zoom-in.
-            // _attackerClosePos = origin so PlayTeardown is a zero-distance no-op on the attacker.
-            _attacker         = _enemySprite;
-            _defender         = _playerSprite;
-            _attackerClosePos = GetOrigin(_enemySprite);
+        // Non-hop-in path (both SkipHopIn=true and SkipHopIn=false + non-hop-in attack):
+        // enemy stays at origin and plays the cast arc. Hop-in only occurs for melee attacks.
+        // _sequenceAttackerClosePos = origin so PlayTeardown is a zero-distance no-op.
+        _sequenceAttacker         = enemyAttacker;
+        _sequenceDefender         = playerDefender;
+        _sequenceAttackerClosePos = enemyAttacker.Origin;
 
-            // Start the cast animation and kick off the sequence immediately.
-            // SafeDisconnect first — prevents stacking if BeginEnemyAttack fires more than once
-            // (e.g. second turn) without the prior OnCastIntroFinished having run its own disconnect.
-            SafeDisconnectEnemyAnim(OnCastIntroFinished);
-            PlayEnemy("cast_intro");
-            _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
+        // Start the cast animation and kick off the sequence immediately.
+        // SafeDisconnect first — prevents stacking if BeginEnemyAttack fires more than once
+        // (e.g. second turn) without the prior OnCastIntroFinished having run its own disconnect.
+        SafeDisconnectAnim(_enemyParty[0], OnCastIntroFinished);
+        PlayAnim(_enemyParty[0], "cast_intro");
+        _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
 
-            Vector2 defenderCenter  = GetOrigin(_defender) + _defender.Size / 2f;
-            Vector2 promptPos        = ComputeCameraMidpoint();
-            _targetZone.Position     = promptPos;
-            _targetZone.Visible      = true;
-            _battleSystem.StartSequence(this, defenderCenter, promptPos);
-        }
-        else
-        {
-            // SkipHopIn=false, non-hop-in attack — same as SkipHopIn path:
-            // enemy stays at origin, plays cast arc. Hop-in only occurs for melee attacks.
-            _attacker         = _enemySprite;
-            _defender         = _playerSprite;
-            _attackerClosePos = GetOrigin(_enemySprite);
-
-            SafeDisconnectEnemyAnim(OnCastIntroFinished);
-            PlayEnemy("cast_intro");
-            _enemyAnimSprite.AnimationFinished += OnCastIntroFinished;
-
-            Vector2 defenderCenter  = GetOrigin(_defender) + _defender.Size / 2f;
-            Vector2 promptPos        = ComputeCameraMidpoint();
-            _targetZone.Position     = promptPos;
-            _targetZone.Visible      = true;
-            _battleSystem.StartSequence(this, defenderCenter, promptPos);
-        }
+        Vector2 promptPosition = ComputeCameraMidpoint(enemyAttacker, playerDefender);
+        _targetZone.Position   = promptPosition;
+        _targetZone.Visible    = true;
+        _battleSystem.StartSequence(this, ctx, promptPosition);
     }
 
     private void OnEnemyPassEvaluated(int result, int passIndex, int stepIndex)
@@ -1173,13 +1343,14 @@ public partial class BattleTest : Node2D
 
         if (r == TimingPrompt.InputResult.Miss)
         {
+            var player = _playerParty[0];  // enemy attack targets the single player in the current UI
             _parryClean   = false;
             int damage    = _battleSystem.GetStepBaseDamage(stepIndex);
-            if (_playerDefending) damage = Mathf.Max(1, damage / 2);
-            _playerHP     = Mathf.Max(0, _playerHP - damage);
-            GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {_playerHP}/{PlayerMaxHP}");
+            if (player.IsDefending) damage = Mathf.Max(1, damage / 2);
+            player.TakeDamage(damage);
+            GD.Print($"[BattleTest] Pass miss — player takes {damage} damage. Player HP: {player.CurrentHp}/{player.MaxHp}");
             PlaySound("player_hit.wav");
-            SpawnDamageNumber(PlayerDamageOrigin, damage, DmgColorPlayer);
+            SpawnDamageNumber(ComputeDamageOrigin(player), damage, DmgColorPlayer);
             UpdateHPBars();
             ShakeCamera(intensity: 8f, duration: 0.3f);  // shake — player takes a hit
 
@@ -1187,11 +1358,16 @@ public partial class BattleTest : Node2D
             // SuppressInput blocks all further manual input and auto-miss feedback on circles.
             // Game Over label is deferred to OnEnemySequenceCompleted so the player can watch
             // the full attack pattern for future attempts.
-            if (_playerHP <= 0 && !_playerDead)
+            if (player.CurrentHp <= 0 && !player.IsDead)
             {
                 GD.Print("[BattleTest] Player HP reached zero mid-sequence — death triggered immediately.");
-                _playerDead = true;
-                _state      = BattleState.GameOver;
+                player.IsDead = true;
+                // _state transition deferred to ShowGameOverOptionsPanel (2.0s later,
+                // matching Victory's pattern). During the beat, player.IsDead and
+                // SuppressInput below already suppress combat-path input and damage;
+                // _state == EnemyAttack routes battle_confirm to TimingPrompt.ConfirmAll
+                // which no-ops under SuppressInput. HandleGameOverInput only routes once
+                // _state actually flips.
                 TimingPrompt.SuppressInput = true;
                 _playerAnimSprite.Play("death");
                 // Show Game Over overlay + fade music immediately; enemy sequence continues playing out.
@@ -1207,12 +1383,13 @@ public partial class BattleTest : Node2D
     /// For hop-in melee attacks, plays the per-step enemy animation (e.g. melee_attack)
     /// with timing aligned so the impact frame lands when the first circle closes.
     /// </summary>
-    private void OnBattleSystemStepStarted(int stepIndex)
+    private void OnBattleSystemStepStarted(int stepIndex, SequenceContext ctx)
     {
-        if (!_battleSystem.CurrentAttackIsHopIn) return;
-        if (_enemyDead) return;
+        if (!ctx.CurrentAttack.IsHopIn) return;
+        var enemy = ctx.Attacker;
+        if (enemy.IsDead) return;
 
-        var step = _battleSystem.GetCurrentAttack().Steps[stepIndex];
+        var step = ctx.CurrentAttack.Steps[stepIndex];
         if (string.IsNullOrEmpty(step.EnemyAnimation)) return;
 
         // Compute animation start delay so the impact frame lands when circle 0 closes.
@@ -1222,9 +1399,9 @@ public partial class BattleTest : Node2D
 
         void PlayStepAnimation()
         {
-            if (_enemyDead) return;
-            SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
-            PlayEnemy(step.EnemyAnimation);
+            if (enemy.IsDead) return;
+            SafeDisconnectAnim(_enemyParty[0], OnEnemyAttackAnimFinished);
+            PlayAnim(_enemyParty[0], step.EnemyAnimation);
             _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
             _hopInAnimFinished = false;  // Reset for this step's animation.
         }
@@ -1255,10 +1432,11 @@ public partial class BattleTest : Node2D
     /// each impact frame lands when its circle closes. Schedules a timer BounceDuration
     /// + animDelay seconds after PassEvaluated, matching BattleSystem's effect-replay pattern.
     /// </summary>
-    private void OnBouncingHopInPassEvaluated(int result, int passIndex, int stepIndex)
+    private void OnBouncingHopInPassEvaluated(int result, int passIndex, int stepIndex, SequenceContext ctx)
     {
         if (_bouncingHopInStep == null) return;
-        if (_enemyDead) return;
+        var enemy = ctx.Attacker;
+        if (enemy.IsDead) return;
 
         // Only replay if more inward passes follow.
         if (passIndex >= _bouncingHopInStep.BounceCount) return;
@@ -1270,9 +1448,9 @@ public partial class BattleTest : Node2D
 
         GetTree().CreateTimer(replayDelay).Timeout += () =>
         {
-            if (_enemyDead) return;
-            SafeDisconnectEnemyAnim(OnEnemyAttackAnimFinished);
-            PlayEnemy(step.EnemyAnimation);
+            if (enemy.IsDead) return;
+            SafeDisconnectAnim(_enemyParty[0], OnEnemyAttackAnimFinished);
+            PlayAnim(_enemyParty[0], step.EnemyAnimation);
             _enemyAnimSprite.AnimationFinished += OnEnemyAttackAnimFinished;
             _hopInAnimFinished = false;
         };
@@ -1298,7 +1476,7 @@ public partial class BattleTest : Node2D
     /// Slam is skipped when SkipHopIn is true — the enemy never hopped in close,
     /// so the cross-screen lunge ComputeSlamPosition() would produce looks wrong.
     /// </summary>
-    private void OnBattleSystemStepPassEvaluated(int result, int passIndex, int stepIndex)
+    private void OnBattleSystemStepPassEvaluated(int result, int passIndex, int stepIndex, SequenceContext ctx)
     {
         if (_isPlayerMagicAttack)
         {
@@ -1307,9 +1485,9 @@ public partial class BattleTest : Node2D
         }
 
         // After player death, skip damage and animation reactions — circles continue silently.
-        if (_playerDead) return;
+        if (_playerParty[0].IsDead) return;
 
-        if (_battleSystem.CurrentAttackIsHopIn || !SkipHopIn)
+        if (ctx.CurrentAttack.IsHopIn || !SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
         OnEnemyPassEvaluated(result, passIndex, stepIndex);
 
@@ -1318,7 +1496,7 @@ public partial class BattleTest : Node2D
         // If the backward run loop hasn't fired OnRetreatFinished yet, cancel it here so
         // it doesn't stomp the parry/hit animation or restore idle at the wrong moment.
         // SpeedScale must be reset regardless — it may still be 2 from the retreat.
-        SafeDisconnectPlayerAnim(OnRetreatFinished);
+        SafeDisconnectAnim(_playerParty[0], OnRetreatFinished);
         _playerAnimSprite.SpeedScale = 1f;  // always reset — may still be 2 from retreat hop-back
 
         var r = (TimingPrompt.InputResult)result;
@@ -1330,19 +1508,19 @@ public partial class BattleTest : Node2D
             // Stop() before Play() is required because Godot 4's AnimatedSprite2D.Play()
             // is a no-op when the requested animation is already playing — Stop() halts
             // the current playback so the subsequent Play("parry") always restarts fresh.
-            SafeDisconnectPlayerAnim(OnParryFinished);
-            StopPlayer();
+            SafeDisconnectAnim(_playerParty[0], OnParryFinished);
+            StopAnim(_playerParty[0]);
             PlaySound("parry_clash.wav");
             if (r == TimingPrompt.InputResult.Perfect)
                 PlaySound("perfect_parry_instance.wav");
-            PlayPlayer("parry");  // OWNER: enemy pass, player defends — always restarts from frame 0
+            PlayAnim(_playerParty[0], "parry");  // OWNER: enemy pass, player defends — always restarts from frame 0
             _playerAnimSprite.AnimationFinished += OnParryFinished;
         }
         else if (r == TimingPrompt.InputResult.Miss)
         {
             // Strike landed — flinch animation, then return to idle.
-            SafeDisconnectPlayerAnim(OnHitAnimFinished);
-            PlayPlayer("hit");    // OWNER: enemy pass, player takes damage — always restarts fresh
+            SafeDisconnectAnim(_playerParty[0], OnHitAnimFinished);
+            PlayAnim(_playerParty[0], "hit");    // OWNER: enemy pass, player takes damage — always restarts fresh
             _playerAnimSprite.AnimationFinished += OnHitAnimFinished;
         }
     }
@@ -1355,25 +1533,27 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Routes BattleSystem.SequenceCompleted to the correct handler based on who is attacking.
     /// </summary>
-    private void OnSequenceCompleted()
+    private void OnSequenceCompleted(SequenceContext ctx)
     {
         if (_isPlayerMagicAttack)
             OnPlayerMagicSequenceCompleted();
         else
-            OnEnemySequenceCompleted();
+            OnEnemySequenceCompleted(ctx);
     }
 
-    private void OnEnemySequenceCompleted()
+    private void OnEnemySequenceCompleted(SequenceContext ctx)
     {
         GD.Print("[BattleTest] Enemy attack sequence complete.");
         _targetZone.Visible        = false;
         TimingPrompt.SuppressInput = false;
 
+        bool isHopIn = ctx.CurrentAttack.IsHopIn;
+
         // Player died mid-sequence — death animation is already playing.
         // Clean up the enemy and let the death flow finish (Game Over label).
-        if (_playerDead)
+        if (_playerParty[0].IsDead)
         {
-            if (_battleSystem.CurrentAttackIsHopIn)
+            if (isHopIn)
             {
                 // Hop-in path: let ProceedAfterHopInAnim handle teardown.
                 UpdateHPBars();
@@ -1387,17 +1567,17 @@ public partial class BattleTest : Node2D
 
             if (HasCastEnd())
             {
-                SafeDisconnectEnemyAnim(OnCastEndFinished);
-                PlayEnemy("cast_end");
+                SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
+                PlayAnim(_enemyParty[0], "cast_end");
                 _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
             }
             else
-                PlayEnemy("idle");
+                PlayAnim(_enemyParty[0], "idle");
             ShowEndLabel("Game Over");
             return;
         }
 
-        if (_battleSystem.CurrentAttackIsHopIn)
+        if (isHopIn)
         {
             // Hop-in path continuation — runs after counter animation (if any) completes.
             void HopInContinuation()
@@ -1416,7 +1596,7 @@ public partial class BattleTest : Node2D
 
             if (_parryClean)
             {
-                TryTriggerAbsorption();
+                TryTriggerAbsorption(ctx);
                 PlayParryCounter(HopInContinuation);
             }
             else
@@ -1438,12 +1618,12 @@ public partial class BattleTest : Node2D
                     // Normal completion — transition enemy out of cast pose.
                     if (HasCastEnd())
                     {
-                        SafeDisconnectEnemyAnim(OnCastEndFinished);
-                        PlayEnemy("cast_end");
+                        SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
+                        PlayAnim(_enemyParty[0], "cast_end");
                         _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
                     }
                     else
-                        PlayEnemy("idle");
+                        PlayAnim(_enemyParty[0], "idle");
                 }
                 PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += ShowMenu);
                 return;
@@ -1452,46 +1632,166 @@ public partial class BattleTest : Node2D
             // Game over — determine which side is dead and play the appropriate death animation.
             PlayTeardown(null);
 
-            if (_playerHP <= 0)
+            var player = _playerParty[0];
+            var enemy  = _enemyParty[0];
+
+            if (player.CurrentHp <= 0)
             {
                 if (!skipCastEnd)
                 {
                     if (HasCastEnd())
                     {
-                        SafeDisconnectEnemyAnim(OnCastEndFinished);
-                        PlayEnemy("cast_end");
+                        SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
+                        PlayAnim(_enemyParty[0], "cast_end");
                         _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
                     }
                     else
-                        PlayEnemy("idle");
+                        PlayAnim(_enemyParty[0], "idle");
                 }
-                _playerDead = true;
-                SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
+                player.IsDead = true;
+                SafeDisconnectAnim(_playerParty[0], OnPlayerDeathFinished);
                 _playerAnimSprite.Play("death");
                 _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
                 // Early overlay + music fade so the Game Over reads the moment the knight falls.
                 // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
                 ShowEndLabel("Game Over");
             }
-            else // _enemyHP <= 0 — perfect parry counter killed the enemy
+            else // enemy.CurrentHp <= 0 — perfect parry counter killed the enemy
             {
-                _enemyDead = true;
+                enemy.IsDead = true;
                 PlaySound("enemy_defeat.mp3");
-                SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
+                SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
                 _enemyAnimSprite.Play("death");
                 _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
                 ScheduleBossRevealIfPhase1();
-                PlayPlayer("idle");
+                PlayAnim(_playerParty[0], "idle");
             }
         }
 
         if (_parryClean)
         {
-            TryTriggerAbsorption();
+            TryTriggerAbsorption(ctx);
             PlayParryCounter(() => NonHopInContinuation(skipCastEnd: true));
         }
         else
             NonHopInContinuation(skipCastEnd: false);
+    }
+
+    // =========================================================================
+    // Target selection (Phase 4)
+    // =========================================================================
+    // State machine glue between a menu pick and the attack launch. Menu handlers
+    // in BattleMenu.cs build a launcher closure (captures attack-identity state +
+    // MP deduction + the Begin* call) and hand off to EnterSelectingTarget with a
+    // default target. The player confirms with battle_confirm (invokes the
+    // launcher) or cancels with ui_cancel (restores the menu, no MP spent).
+    //
+    // Target cycling is stubbed — single-target today; scaffolding phase will
+    // wire ui_left / ui_right to iterate valid targets once multi-enemy / party
+    // selection density exists.
+
+    private void EnterSelectingTarget(Combatant defaultTarget, MenuContext fromMenu)
+    {
+        _state                       = BattleState.SelectingTarget;
+        _selectedTarget              = defaultTarget;
+        _selectingTargetMenuContext  = fromMenu;
+
+        // Auto-confirm when target is unambiguous. Today every attack has exactly
+        // one valid target (offensive → single enemy, Cure → self); the pointer
+        // appears when friendly-fire / ally-heal support introduces multi-target
+        // pools. Until then, skip the confirmation ceremony — selecting a known
+        // single target adds input friction without giving the player a choice.
+        if (IsTargetPoolSingleton(defaultTarget))
+        {
+            ConfirmTargetSelection();
+            return;
+        }
+
+        _targetPointer.SnapTo(defaultTarget);
+        _targetPointer.Visible = true;
+        GD.Print($"[BattleTest] Selecting target — default: {defaultTarget.Name}.");
+    }
+
+    /// <summary>
+    /// True when the valid-target pool for the current attack contains exactly one
+    /// combatant (i.e. <paramref name="defaultTarget"/> is the only choice). Stub
+    /// today — every offensive attack targets the single enemy; Cure targets self;
+    /// no attack yet allows ally-target or friendly-fire. When those land (post
+    /// Phase 6, pending AttackData target-pool metadata), this checks the actual
+    /// alive-combatants-on-the-appropriate-side count instead of hard-returning true.
+    /// </summary>
+    private bool IsTargetPoolSingleton(Combatant defaultTarget) => true;
+
+    private void ConfirmTargetSelection()
+    {
+        _targetPointer.Visible       = false;
+        _selectingTargetMenuContext  = MenuContext.Main;  // defensive clear; mirrors cancel's reset pattern
+        var launcher = _pendingActionLauncher;
+        _pendingActionLauncher = null;
+        launcher?.Invoke();
+    }
+
+    private void CancelTargetSelection()
+    {
+        _targetPointer.Visible = false;
+        _selectedTarget         = null;
+        _pendingActionLauncher  = null;
+        // Defensive flag reset — stale attack-identity state shouldn't linger
+        // between cancel and the next menu pick. Next pick will set these anyway,
+        // but an explicit clear prevents future regression if a new code path
+        // reads them in the interval.
+        _isComboAttack          = false;
+        _activeMagicAttack      = null;
+
+        // Return to the menu context the target-select was entered from so the
+        // player's prior navigation isn't lost. Three contexts today: main menu
+        // (Basic Attack), Absorbed Moves submenu (Combo Strike, magic), Items
+        // submenu (Ether). Flag reset to Main after dispatch so the next
+        // SelectingTarget entry sets it fresh.
+        //
+        // ShowSubMenu / ShowItemMenu don't set _state / _inputLocked / _menuLayer
+        // (they assume they're called from within the menu flow, not from
+        // SelectingTarget). Set them explicitly for those branches; ShowMenu
+        // handles all three for its branch.
+        var fromMenu = _selectingTargetMenuContext;
+        _selectingTargetMenuContext = MenuContext.Main;
+        switch (fromMenu)
+        {
+            case MenuContext.Main:
+                ShowMenu();
+                break;
+            case MenuContext.AbsorbedMoves:
+                _state             = BattleState.PlayerMenu;
+                _inputLocked       = false;
+                _menuLayer.Visible = true;
+                ShowSubMenu();
+                break;
+            case MenuContext.Items:
+                _state             = BattleState.PlayerMenu;
+                _inputLocked       = false;
+                _menuLayer.Visible = true;
+                ShowItemMenu();
+                break;
+        }
+    }
+
+    private void HandleSelectingTargetInput(InputEvent @event)
+    {
+        if (@event.IsActionPressed("battle_confirm"))
+        {
+            ConfirmTargetSelection();
+            return;
+        }
+        if (@event.IsActionPressed("battle_cancel"))
+        {
+            CancelTargetSelection();
+            return;
+        }
+        if (@event.IsActionPressed("ui_left") || @event.IsActionPressed("ui_right"))
+        {
+            // Stub: target cycling lands with the scaffolding phase once multiple
+            // enemies/allies exist. Single-target today; no-op.
+        }
     }
 
     // =========================================================================
@@ -1506,7 +1806,11 @@ public partial class BattleTest : Node2D
         GD.Print(_isComboAttack ? "[BattleTest] Player uses Combo Strike." : "[BattleTest] Player attacks.");
         _comboPassIndex = 0;
         var promptType = _isComboAttack ? TimingPrompt.PromptType.Bouncing : TimingPrompt.PromptType.Standard;
-        BeginAttack(_playerSprite, _enemySprite, promptType, OnPlayerPromptCompleted);
+        // Defender comes from SelectingTarget (Phase 4). Single-target today so the
+        // fallback to _enemyParty[0] is equivalent; the fallback also covers any call
+        // path that skips SelectingTarget (none today, but defensive).
+        var defender = _selectedTarget ?? _enemyParty[0];
+        BeginAttack(_playerParty[0], defender, promptType, OnPlayerPromptCompleted);
     }
 
     /// <summary>
@@ -1519,32 +1823,37 @@ public partial class BattleTest : Node2D
         _state               = BattleState.PlayerAttack;
         _isPlayerMagicAttack = true;
         _isComboAttack       = false;
-        GD.Print(_isPlayerHealAttack
+
+        // Attack-identity predicate — answers "which target should this attack pick?"
+        // Used at dispatch (target not yet chosen). Downstream sites inspect the chosen
+        // pair via _sequenceAttacker.Side == _sequenceDefender.Side instead, which
+        // generalizes to ally-target scenarios beyond the specific Cure-on-self case.
+        bool isHealAttack = _activeMagicAttack == _playerCureAttack;
+
+        GD.Print(isHealAttack
             ? "[BattleTest] Player uses Cure."
             : "[BattleTest] Player uses magic attack.");
 
-        // Set combat context so ComputeCameraMidpoint() returns a sensible midpoint.
-        // No hop-in — attackerClosePos = player origin so the camera midpoint is the
-        // natural center between the two combatants.
-        _attacker         = _playerSprite;
-        _defender         = _isPlayerHealAttack ? _playerSprite : _enemySprite;
-        _attackerClosePos = GetOrigin(_playerSprite);
-
-        Vector2 defenderCenter = _isPlayerHealAttack
-            ? GetOrigin(_playerSprite) + _playerSprite.Size / 2f
-            : GetOrigin(_enemySprite)  + _enemySprite.Size / 2f;
-        Vector2 promptPos      = ComputeCameraMidpoint();
+        // Set sequence context so ComputeCameraMidpoint returns a sensible midpoint.
+        // No hop-in — _sequenceAttackerClosePos = attacker origin so PlayTeardown is a
+        // zero-distance no-op on the attacker. Target comes from SelectingTarget
+        // (Phase 4); the ?? fallback uses the attack-identity check to keep behaviour
+        // correct if any caller skips SelectingTarget (defensive — all current paths
+        // route through the target-selection pipeline).
+        var playerAttacker = _playerParty[0];
+        var magicDefender  = _selectedTarget ?? (isHealAttack ? playerAttacker : _enemyParty[0]);
+        _sequenceAttacker         = playerAttacker;
+        _sequenceDefender         = magicDefender;
+        _sequenceAttackerClosePos = playerAttacker.Origin;
 
         // Play cast animation; defer StartSequence until it finishes so the wind-up
         // completes before the timing circle appears and the effect fires.
-        SafeDisconnectPlayerAnim(OnPlayerCastFinished);
-        PlayPlayer("cast");  // OWNER: BeginPlayerMagicAttack — cast wind-up before sequence
+        // OnPlayerCastFinished recomputes the prompt position from the sequence
+        // fields set above — no separate cached Vector2 needed.
+        SafeDisconnectAnim(_playerParty[0], OnPlayerCastFinished);
+        PlayAnim(_playerParty[0], "cast");  // OWNER: BeginPlayerMagicAttack — cast wind-up before sequence
         GetTree().CreateTimer(1f / 12f).Timeout += () => PlaySound("magic_launch_4.wav");  // frame 1 at 12fps
         _playerAnimSprite.AnimationFinished += OnPlayerCastFinished;
-
-        // Capture locals for the callback closure.
-        _playerMagicDefenderCenter = defenderCenter;
-        _playerMagicPromptPos      = promptPos;
     }
 
     private void OnPlayerPromptCompleted(int result)
@@ -1581,12 +1890,13 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);  // shake — perfect timing feedback
 
-        _enemyHP = Mathf.Max(0, _enemyHP - damage);
-        GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+        var enemy = _enemyParty[0];  // single target in the current UI
+        enemy.TakeDamage(damage);
+        GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
-        SpawnDamageNumber(EnemyDamageOrigin, damage, dmgColor);
+        SpawnDamageNumber(ComputeDamageOrigin(enemy), damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
-        PlayEnemyHurtFlash();
+        PlayCombatantHurtFlash(enemy);
 
         UpdateHPBars();
         _pendingGameOver = CheckGameOver();
@@ -1596,8 +1906,8 @@ public partial class BattleTest : Node2D
         // combo_slash1 covers sheet frames 1–3; frame 0 was already shown as the wind-up.
         // PlayTeardown is deferred to OnFinalSlashFinished so the strike plays before retreat.
         PlaySound("player_attack_swing.wav");
-        SafeDisconnectPlayerAnim(OnFinalSlashFinished);
-        PlayPlayer("combo_slash1");  // OWNER: player turn, single-hit slash on resolve
+        SafeDisconnectAnim(_playerParty[0], OnFinalSlashFinished);
+        PlayAnim(_playerParty[0], "combo_slash1");  // OWNER: player turn, single-hit slash on resolve
         _playerAnimSprite.AnimationFinished += OnFinalSlashFinished;
     }
 
@@ -1615,12 +1925,17 @@ public partial class BattleTest : Node2D
         int baseDamage = _battleSystem.GetStepBaseDamage(stepIndex);
         int amount     = ComputePlayerDamage(baseDamage, r);
 
-        if (_isPlayerHealAttack)
+        // Side-equality receiver predicate — true whenever the attacker and target
+        // share a side (self-heal, ally-heal, self-damage, friendly-fire). Today only
+        // Cure self-targets, so this reduces to "player casting heal on player," but
+        // the predicate is friendly-fire-ready without further refactor.
+        if (_sequenceAttacker.Side == _sequenceDefender.Side)
         {
+            var player = _playerParty[0];  // heal targets self in the current single-player UI
             GD.Print($"[BattleTest] Cure pass {passIndex + 1} resolved: {r}  ({amount} HP).");
-            _playerHP = Mathf.Min(PlayerMaxHP, _playerHP + amount);
-            GD.Print($"[BattleTest] Cure heals {amount} HP. Player HP: {_playerHP}/{PlayerMaxHP}");
-            SpawnDamageNumber(PlayerDamageOrigin, amount, DmgColorPerfect);  // green for healing
+            player.Heal(amount);
+            GD.Print($"[BattleTest] Cure heals {amount} HP. Player HP: {player.CurrentHp}/{player.MaxHp}");
+            SpawnDamageNumber(ComputeDamageOrigin(player), amount, DmgColorPerfect);  // green for healing
             UpdateHPBars();
             return;
         }
@@ -1637,12 +1952,13 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);
 
-        _enemyHP = Mathf.Max(0, _enemyHP - amount);
-        GD.Print($"[BattleTest] Magic hit deals {amount} damage. Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+        var enemy = _enemyParty[0];  // single target in the current UI
+        enemy.TakeDamage(amount);
+        GD.Print($"[BattleTest] Magic hit deals {amount} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
-        SpawnDamageNumber(EnemyDamageOrigin, amount, dmgColor);
+        SpawnDamageNumber(ComputeDamageOrigin(enemy), amount, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
-        PlayEnemyHurtFlash();
+        PlayCombatantHurtFlash(enemy);
         UpdateHPBars();
     }
 
@@ -1657,14 +1973,15 @@ public partial class BattleTest : Node2D
         _inputLocked = true;  // Lock input through cast transition and teardown.
 
         // Play cast_transition once to smoothly exit the held cast pose, then return to idle.
-        SafeDisconnectPlayerAnim(OnPlayerCastTransitionFinished);
-        PlayPlayer("cast_transition");  // OWNER: OnPlayerMagicSequenceCompleted — exit cast pose
+        SafeDisconnectAnim(_playerParty[0], OnPlayerCastTransitionFinished);
+        PlayAnim(_playerParty[0], "cast_transition");  // OWNER: OnPlayerMagicSequenceCompleted — exit cast pose
         _playerAnimSprite.AnimationFinished += OnPlayerCastTransitionFinished;
 
-        // Cure heals the player — no game-over check needed, proceed directly to enemy turn.
-        if (_isPlayerHealAttack)
+        // Same-side attacker/target (self-heal today, ally-heal in future) — skip the
+        // game-over check and proceed directly to the enemy turn. Sequence fields still
+        // point at the just-completed sequence until the next StartSequence overwrites.
+        if (_sequenceAttacker.Side == _sequenceDefender.Side)
         {
-            _isPlayerHealAttack = false;
             GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
             return;
         }
@@ -1679,19 +1996,19 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        if (_enemyHP <= 0)
+        if (_enemyParty[0].CurrentHp <= 0)
         {
-            _enemyDead = true;
+            _enemyParty[0].IsDead = true;
             PlaySound("enemy_defeat.mp3");
-            SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
+            SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
             _enemyAnimSprite.Play("death");
             _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
             ScheduleBossRevealIfPhase1();
         }
         else
         {
-            _playerDead = true;
-            SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
+            _playerParty[0].IsDead = true;
+            SafeDisconnectAnim(_playerParty[0], OnPlayerDeathFinished);
             _playerAnimSprite.Play("death");
             _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
             // Early overlay + music fade so the Game Over reads the moment the knight falls.
@@ -1711,13 +2028,14 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void UseEtherItem()
     {
-        if (_playerDead) { BeginEnemyAttack(); return; }
+        var player = _playerParty[0];  // item user is the single player in the current UI
+        if (player.IsDead) { BeginEnemyAttack(); return; }
         _state       = BattleState.PlayerAttack;
         _inputLocked = true;  // block input during item use
 
         // Play the item-use animation on the player.
-        SafeDisconnectPlayerAnim(OnEtherAnimationFinished);
-        PlayPlayer("item_use");
+        SafeDisconnectAnim(_playerParty[0], OnEtherAnimationFinished);
+        PlayAnim(_playerParty[0], "item_use");
         _playerAnimSprite.AnimationFinished += OnEtherAnimationFinished;
 
         // Schedule effect + sound + MP restore at the impact frame of the combo animation.
@@ -1726,26 +2044,29 @@ public partial class BattleTest : Node2D
         float impactDelay = impactFrame / fps;
         GetTree().CreateTimer(impactDelay).Timeout += () =>
         {
-            if (_playerDead) return;
+            if (player.IsDead) return;
             PlaySound("cure_spell.wav");
-            RestoreMp(20);  // clamps to PlayerMaxMp and calls UpdateMpBar internally
-            SpawnEtherEffect(_playerEtherEffect);
+            RestoreMp(20);  // clamps to MaxMp and calls UpdateMpBar internally
+            SpawnEtherEffect(player, _playerEtherEffect);
         };
     }
 
     private void OnEtherAnimationFinished()
     {
-        SafeDisconnectPlayerAnim(OnEtherAnimationFinished);
-        if (_playerDead) return;
-        PlayPlayer("idle");
+        SafeDisconnectAnim(_playerParty[0], OnEtherAnimationFinished);
+        if (_playerParty[0].IsDead) return;
+        PlayAnim(_playerParty[0], "idle");
         GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
     }
 
     /// <summary>
-    /// Spawns a one-shot visual effect sprite centered on the player using the first step
-    /// of the given AttackData as the data source. Does not use BattleSystem — no circles.
+    /// Spawns a one-shot visual effect sprite centered on <paramref name="user"/> using
+    /// the first step of the given AttackData as the data source. Does not use
+    /// BattleSystem — no circles. Target-agnostic — works for any Combatant that
+    /// should be the visual anchor for the effect (item user today, any ally/self
+    /// with an Ether-style buff in the future).
     /// </summary>
-    private void SpawnEtherEffect(AttackData data)
+    private void SpawnEtherEffect(Combatant user, AttackData data)
     {
         if (data == null || data.Steps.Count == 0) return;
         var step = data.Steps[0];
@@ -1775,7 +2096,11 @@ public partial class BattleTest : Node2D
             frames.AddFrame("default", atlas);
         }
 
-        Vector2 playerCenter = GetOrigin(_playerSprite) + _playerSprite.Size / 2f;
+        // Ether spawns on the supplied user. Frame anchor is the combatant's visual
+        // center (Origin + PositionRect/2 — the same geometric-center formula used
+        // across the refactor; carries the pre-existing ColorRect-vs-character-body
+        // quirk noted elsewhere).
+        Vector2 playerCenter = user.Origin + user.PositionRect.Size / 2f;
         var sprite          = new AnimatedSprite2D();
         sprite.SpriteFrames = frames;
         sprite.Centered     = true;
@@ -1840,7 +2165,7 @@ public partial class BattleTest : Node2D
                 // Normal completion — enemy retreats then returns to idle; menu reappears.
                 PlayTeardown(() =>
                 {
-                    PlayEnemy("idle");
+                    PlayAnim(_enemyParty[0], "idle");
                     GetTree().CreateTimer(0.5f).Timeout += ShowMenu;
                 });
             }
@@ -1849,30 +2174,33 @@ public partial class BattleTest : Node2D
                 // Game over — retreat enemy without scheduling next turn, then handle death.
                 PlayTeardown(null);
 
-                if (_playerHP <= 0 && !_playerDead)
+                var player = _playerParty[0];
+                var enemy  = _enemyParty[0];
+
+                if (player.CurrentHp <= 0 && !player.IsDead)
                 {
-                    _playerDead = true;
-                    SafeDisconnectPlayerAnim(OnPlayerDeathFinished);
+                    player.IsDead = true;
+                    SafeDisconnectAnim(_playerParty[0], OnPlayerDeathFinished);
                     _playerAnimSprite.Play("death");
                     _playerAnimSprite.AnimationFinished += OnPlayerDeathFinished;
                     // Early overlay + music fade so the Game Over reads the moment the knight falls.
                     // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
                     ShowEndLabel("Game Over");
                 }
-                else if (_playerHP <= 0 && _playerDead)
+                else if (player.CurrentHp <= 0 && player.IsDead)
                 {
                     // Death was triggered mid-sequence — animation already playing.
                     ShowEndLabel("Game Over");
                 }
-                else  // _enemyHP <= 0 — parry counter killed the enemy
+                else  // enemy.CurrentHp <= 0 — parry counter killed the enemy
                 {
-                    _enemyDead = true;
+                    enemy.IsDead = true;
                     PlaySound("enemy_defeat.mp3");
-                    SafeDisconnectEnemyAnim(OnEnemyDeathFinished);
+                    SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
                     _enemyAnimSprite.Play("death");
                     _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
                     ScheduleBossRevealIfPhase1();
-                    PlayPlayer("idle");
+                    PlayAnim(_playerParty[0], "idle");
                 }
             }
         }
@@ -1913,9 +2241,10 @@ public partial class BattleTest : Node2D
 
         // Beckon forces the learnable move for one turn. Consume the flag whether or
         // not a learnable exists; LoopAttack above still wins in dev test mode.
-        if (_beckoning)
+        var player = _playerParty[0];  // single beckoner in the current UI
+        if (player.IsBeckoning)
         {
-            _beckoning = false;
+            player.IsBeckoning = false;
             if (EnemyData?.LearnableAttack != null)
                 return EnemyData.LearnableAttack;
         }
@@ -1960,9 +2289,9 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Beckon ability — if the enemy has an unabsorbed learnable move, sets _beckoning
-    /// so SelectEnemyAttack returns LearnableAttack this turn. Otherwise shows a brief
-    /// message. Always hands off to the enemy turn immediately (no animation).
+    /// Beckon ability — if the enemy has an unabsorbed learnable move, sets
+    /// playerCombatant.IsBeckoning so SelectEnemyAttack returns LearnableAttack this turn.
+    /// Otherwise shows a brief message. Always hands off to the enemy turn immediately (no animation).
     /// </summary>
     /// <summary>
     /// Beckon ability — forces the enemy to use their LearnableAttack next turn.
@@ -1972,28 +2301,30 @@ public partial class BattleTest : Node2D
     private void PerformBeckon()
     {
         const int beckonMpCost = 10;
-        _playerMp -= beckonMpCost;
+        var player = _playerParty[0];  // single beckoner in the current UI
+        player.CurrentMp -= beckonMpCost;
         UpdateMpBar();
-        _beckoning = true;
+        player.IsBeckoning = true;
         GD.Print($"[BattleTest] Player beckons (-{beckonMpCost} MP) — enemy will use learnable move next turn.");
         BeginEnemyAttack();
     }
 
     /// <summary>
     /// If the just-completed enemy attack was the learnable move and the player perfect-parried it,
-    /// triggers the absorption moment (message + flash). No-ops if already absorbed.
+    /// triggers the absorption moment (message + flash). No-ops if this move is already in
+    /// <see cref="_absorbedMoves"/> — absorption is per-move-type, not per-enemy-instance.
     /// Called immediately before PlayParryCounter in OnEnemySequenceCompleted.
     /// </summary>
-    private void TryTriggerAbsorption()
+    private void TryTriggerAbsorption(SequenceContext ctx)
     {
-        if (_hasAbsorbedLearnableMove) return;
-
-        var currentAttack = _battleSystem.GetCurrentAttack();
+        var currentAttack = ctx.CurrentAttack;
         if (EnemyData?.LearnableAttack == null || currentAttack != EnemyData.LearnableAttack) return;
+        if (_absorbedMoves.Contains(EnemyData.LearnableAttack)) return;
 
-        _hasAbsorbedLearnableMove = true;
+        _absorbedMoves.Add(EnemyData.LearnableAttack);
         PlaySound("absorbed_ability_acquired.wav", volumeDb: 6f);
-        // TODO: when player state/character system is built, add absorbed move to player's persistent move list here
+        // TODO: when player state/character system is built, migrate _absorbedMoves to the
+        // Absorber character's persistent skill storage (see Combatant design doc).
 
         _absorbedMoveAttack = EnemyData.LearnableAttack;
         RebuildSubMenu();
@@ -2003,60 +2334,113 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Flashes the enemy sprite white 3 times over ~0.6s using the WhiteFlash shader.
+    /// Flashes <paramref name="target"/>'s sprite white 3 times over ~0.6s using the
+    /// <c>flash_amount</c> uniform on <c>CombatantOverlay.gdshader</c>. Reads / writes the
+    /// flash material and tween on the Combatant so per-target flashes remain
+    /// independently trackable at multi-combat density. Target-agnostic — works for any
+    /// Combatant with a populated FlashMaterial.
     /// </summary>
-    private void FlashEnemyWhite()
+    private void FlashCombatantWhite(Combatant target)
     {
-        _enemyFlashTween?.Kill();
-        _enemyFlashMaterial.SetShaderParameter("flash_amount", 0.0f);
+        target.FlashTween?.Kill();
+        target.FlashMaterial.SetShaderParameter("flash_amount", 0.0f);
 
-        _enemyFlashTween = CreateTween();
+        target.FlashTween = CreateTween();
+        var material = target.FlashMaterial;
         for (int i = 0; i < 3; i++)
         {
-            _enemyFlashTween.TweenMethod(
-                Callable.From((float v) => _enemyFlashMaterial.SetShaderParameter("flash_amount", v)),
+            target.FlashTween.TweenMethod(
+                Callable.From((float v) => material.SetShaderParameter("flash_amount", v)),
                 0.0f, 1.0f, 0.1f);
-            _enemyFlashTween.TweenMethod(
-                Callable.From((float v) => _enemyFlashMaterial.SetShaderParameter("flash_amount", v)),
+            target.FlashTween.TweenMethod(
+                Callable.From((float v) => material.SetShaderParameter("flash_amount", v)),
                 1.0f, 0.0f, 0.1f);
         }
     }
 
+    /// <summary>
+    /// Plays a ~1s red-tint pulse on <paramref name="target"/>'s sprite to signal that
+    /// an incoming enemy attack is about to hit this combatant (Phase 5 threat reveal).
+    /// Tweens the <c>tint_amount</c> uniform on <c>CombatantOverlay.gdshader</c> —
+    /// independent of <c>flash_amount</c>, so the white-flash and threat-reveal effects
+    /// can run concurrently on the same sprite (rare today, more common post-Phase-6).
+    /// Target-agnostic — works for any Combatant with a populated FlashMaterial.
+    /// </summary>
+    private void FlashCombatantThreatened(Combatant target)
+    {
+        if (target.IsDead) return;
+
+        target.ThreatTween?.Kill();
+        target.FlashMaterial.SetShaderParameter("tint_amount", 0.0f);
+
+        // 0.12s fade in → 0.36s hold at 0.85 → 0.12s fade out. 0.6s total — matches
+        // the BeginEnemyAttack pause duration so the tint fades out exactly as the
+        // attack animation begins. Peak capped at 0.85 rather than 1.0 so some
+        // original colour bleeds through even at peak hold, softening the tint's
+        // aggressiveness while still reading clearly as a threat signal.
+        target.ThreatTween = CreateTween();
+        var material = target.FlashMaterial;
+        target.ThreatTween.TweenMethod(
+            Callable.From((float v) => material.SetShaderParameter("tint_amount", v)),
+            0.0f, 0.85f, 0.12f);
+        target.ThreatTween.TweenInterval(0.36f);
+        target.ThreatTween.TweenMethod(
+            Callable.From((float v) => material.SetShaderParameter("tint_amount", v)),
+            0.85f, 0.0f, 0.12f);
+    }
+
+    // Single-party prototype: reads party[0] because there's only one combatant per side.
+    // Party-wipe semantics (Any-alive / All-dead) are audit finding A6 — deferred to the
+    // scaffolding phase. For now this retains the 1v1 "either scalar zero → game over"
+    // rule.
     private bool CheckGameOver()
     {
-        if (_playerHP <= 0)
+        // Returns whether the battle has ended. Callers drive downstream behaviour
+        // (death animation, ShowEndLabel) off the bool. State transition to
+        // BattleState.GameOver or .Victory is deferred to the respective
+        // options-panel method (ShowGameOverOptionsPanel / ShowVictoryOptionsPanel)
+        // where it fires after the 2.0s end-label beat — mirrors how Victory already
+        // handled state timing before the parity refactor and fixes a pre-refactor
+        // latent bug where the player-wins branch briefly set _state = GameOver on
+        // the Victory path before ShowVictoryOptionsPanel corrected it.
+        if (_playerParty[0].CurrentHp <= 0)
         {
             GD.Print("[BattleTest] Enemy wins.");
-            _state = BattleState.GameOver;
             return true;
         }
-        if (_enemyHP <= 0)
+        if (_enemyParty[0].CurrentHp <= 0)
         {
             GD.Print("[BattleTest] Player wins.");
-            _state = BattleState.GameOver;
             return true;
         }
         return false;
     }
 
+    // Single-party prototype: the HP bars render the first (and only) combatant on each
+    // side. Multi-unit UI layout is the scaffolding exercise's concern (Phase 6).
     private void UpdateHPBars()
     {
-        _playerHPFill.Size  = new Vector2(BarWidth * ((float)_playerHP / PlayerMaxHP), _playerHPFill.Size.Y);
-        _playerHPLabel.Text = $"{_playerHP}/{PlayerMaxHP}";
-        _enemyHPFill.Size   = new Vector2(BarWidth * ((float)_enemyHP / _enemyMaxHP), _enemyHPFill.Size.Y);
-        _enemyHPLabel.Text  = $"{_enemyHP}/{_enemyMaxHP}";
+        var player = _playerParty[0];
+        var enemy  = _enemyParty[0];
+        _playerHPFill.Size  = new Vector2(BarWidth * ((float)player.CurrentHp / player.MaxHp), _playerHPFill.Size.Y);
+        _playerHPLabel.Text = $"{player.CurrentHp}/{player.MaxHp}";
+        _enemyHPFill.Size   = new Vector2(BarWidth * ((float)enemy.CurrentHp  / enemy.MaxHp),  _enemyHPFill.Size.Y);
+        _enemyHPLabel.Text  = $"{enemy.CurrentHp}/{enemy.MaxHp}";
         UpdateMpBar();
     }
 
+    // Single-party prototype: the MP bar renders the first (and only) player combatant.
     private void UpdateMpBar()
     {
-        _playerMPFill.Size  = new Vector2(BarWidth * ((float)_playerMp / PlayerMaxMp), _playerMPFill.Size.Y);
-        _playerMPLabel.Text = $"{_playerMp}/{PlayerMaxMp}";
+        var player = _playerParty[0];
+        _playerMPFill.Size  = new Vector2(BarWidth * ((float)player.CurrentMp / player.MaxMp), _playerMPFill.Size.Y);
+        _playerMPLabel.Text = $"{player.CurrentMp}/{player.MaxMp}";
     }
 
     private void RestoreMp(int amount)
     {
-        _playerMp = Mathf.Min(_playerMp + amount, PlayerMaxMp);
+        var player = _playerParty[0];  // single MP pool in the current UI
+        player.CurrentMp = Mathf.Min(player.CurrentMp + amount, player.MaxMp);
         UpdateMpBar();
     }
 
@@ -2300,6 +2684,68 @@ public partial class BattleTest : Node2D
         BuildPlayerPanel(layer);
     }
 
+    /// <summary>
+    /// Constructs the single-entry party lists that back the Combatant abstraction.
+    /// Called from <see cref="_Ready"/> after sprites / BattleSystem / Phase2EnemyData
+    /// are all settled, but before the EnemyData HP init and test-flag overrides —
+    /// those blocks write directly into the Combatant fields produced here.
+    ///
+    /// Initial HP/MP values come from constants (<c>PlayerMaxHP</c>, <c>PlayerMaxMp</c>,
+    /// or <c>EnemyData.MaxHp</c> if the resource's MaxHp is set). The caller's
+    /// downstream blocks handle EnemyData-sourced overrides and test-flag overrides.
+    ///
+    /// Origin note: the Combatant's single <c>Origin</c> field maps to the ColorRect-based
+    /// origin (<c>_playerOrigin</c> / <c>_enemyOrigin</c>). That is what the positioning
+    /// helpers (<c>ComputeClosePosition</c>, <c>ComputeSlamPosition</c>,
+    /// <c>ComputeCameraMidpoint</c>) read as of Phase 3.4. The separate AnimatedSprite2D
+    /// origin (<c>_playerAnimSpriteOrigin</c>, <c>_enemyAnimSpriteOrigin</c>) is not yet
+    /// modeled on Combatant — PlayHopIn / PlayTeardown still reach into the scene-level
+    /// snapshots via a Side switch. Candidate for a later cleanup (add a second Combatant
+    /// field for the AnimatedSprite2D origin).
+    /// </summary>
+    private void BuildInitialParties()
+    {
+        int enemyInitialMaxHp = (EnemyData != null && EnemyData.MaxHp > 0) ? EnemyData.MaxHp : 200;
+
+        var playerCombatant = new Combatant
+        {
+            Name          = "Knight",
+            Side          = CombatantSide.Player,
+            CurrentHp     = PlayerMaxHP,
+            MaxHp         = PlayerMaxHP,
+            IsDead        = false,
+            Origin        = _playerOrigin,
+            PositionRect  = _playerSprite,
+            AnimSprite    = _playerAnimSprite,
+            CurrentMp     = PlayerMaxMp,
+            MaxMp         = PlayerMaxMp,
+            IsDefending   = false,
+            IsBeckoning   = false,
+            FlashMaterial = _playerAnimSprite.Material as ShaderMaterial,
+        };
+        _playerParty.Add(playerCombatant);
+
+        var enemyCombatant = new Combatant
+        {
+            Name          = EnemyData?.EnemyName ?? "Enemy",
+            Side          = CombatantSide.Enemy,
+            CurrentHp     = enemyInitialMaxHp,
+            MaxHp         = enemyInitialMaxHp,
+            IsDead        = false,
+            Origin        = _enemyOrigin,
+            PositionRect  = _enemySprite,
+            AnimSprite    = _enemyAnimSprite,
+            Data          = EnemyData,
+            FlashMaterial = _enemyAnimSprite.Material as ShaderMaterial,
+        };
+        _enemyParty.Add(enemyCombatant);
+
+        GD.Print($"[BattleTest] Combatants built — " +
+                 $"player: {playerCombatant.Name} (HP={playerCombatant.CurrentHp}/{playerCombatant.MaxHp}, " +
+                 $"MP={playerCombatant.CurrentMp}/{playerCombatant.MaxMp}); " +
+                 $"enemy: {enemyCombatant.Name} (HP={enemyCombatant.CurrentHp}/{enemyCombatant.MaxHp}).");
+    }
+
     private void BuildEnemyPanel(CanvasLayer layer)
     {
         // Anchored to the top-right corner of the viewport, grows leftward.
@@ -2437,56 +2883,47 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Plays the hop-in animation: attacker lunges to close stance, camera zooms in.
-    /// Sets <see cref="_attacker"/>, <see cref="_defender"/>, and
-    /// <see cref="_attackerClosePos"/> before starting the tween, so
+    /// Sets <see cref="_sequenceAttacker"/>, <see cref="_sequenceDefender"/>, and
+    /// <see cref="_sequenceAttackerClosePos"/> before starting the tween, so
     /// <see cref="ComputeCameraMidpoint"/> and <see cref="ComputeSlamPosition"/> are
     /// usable immediately after this call returns. <paramref name="onComplete"/> fires
     /// when the tween finishes; safe to pass null.
     /// </summary>
     /// <param name="attackerOffset">
     /// Optional offset for hop-in melee attacks. Only the X component is added to
-    /// <see cref="_attackerClosePos"/> — this keeps the camera midpoint and slam
+    /// <see cref="_sequenceAttackerClosePos"/> — this keeps the camera midpoint and slam
     /// positions unaffected by vertical adjustment. The Y component is applied solely
-    /// to the enemy AnimatedSprite2D tween destination so the sprite moves vertically
-    /// without shifting the camera or target zone.
+    /// to the enemy-side attacker's AnimatedSprite2D tween destination so the sprite
+    /// moves vertically without shifting the camera or target zone. No Y-offset applies
+    /// when the attacker is player-side.
     /// </param>
-    private void PlayHopIn(ColorRect attacker, ColorRect defender, Action onComplete,
+    private void PlayHopIn(Combatant attacker, Combatant defender, Action onComplete,
                            Vector2 attackerOffset = default)
     {
-        _attacker         = attacker;
-        _defender         = defender;
-        _attackerClosePos = ComputeClosePosition() + new Vector2(attackerOffset.X, 0f);
+        _sequenceAttacker         = attacker;
+        _sequenceDefender         = defender;
+        _sequenceAttackerClosePos = ComputeClosePosition(attacker, defender) + new Vector2(attackerOffset.X, 0f);
 
         // Raise the attacker's sprite ZIndex so it renders in front of the defender
         // during the hop-in overlap. Restored to 0 in PlayTeardown.
-        if (attacker == _playerSprite)
-        {
-            _playerAnimSprite.ZIndex = 1;
-            _enemyAnimSprite.ZIndex  = 0;
-        }
-        else if (attacker == _enemySprite)
-        {
-            _enemyAnimSprite.ZIndex  = 1;
-            _playerAnimSprite.ZIndex = 0;
-        }
+        attacker.AnimSprite.ZIndex = 1;
+        defender.AnimSprite.ZIndex = 0;
 
-        // Hop-in footstep sound for both player and enemy.
-        if (attacker == _playerSprite && !_playerDead)
-            PlaySound("short_quick_steps.wav", volumeDb: 6f);
-        if (attacker == _enemySprite && !_enemyDead)
+        // Hop-in footstep sound.
+        if (!attacker.IsDead)
             PlaySound("short_quick_steps.wav", volumeDb: 6f);
 
-        // Play run at double speed while the player hops in — snappy charge feel.
-        // Guard: only call Play("run") if the animation has frames. A 0-frame animation
-        // (caused by a missing .import file for _Run.png) hides the sprite entirely.
-        if (attacker == _playerSprite)
+        // Player-side attacker: play run at double speed on the player sprite via the guard
+        // helper. Guard helper operates on the single-player sprite in the current UI; at
+        // multi-character density the run-animation call routes through a per-unit helper.
+        if (attacker.Side == CombatantSide.Player)
         {
             // OWNER: PlayHopIn (player turn, charge begins).
-            int runFrames = _playerAnimSprite.SpriteFrames?.GetFrameCount("run") ?? 0;
+            int runFrames = attacker.AnimSprite.SpriteFrames?.GetFrameCount("run") ?? 0;
             if (runFrames > 0)
             {
-                _playerAnimSprite.SpeedScale = 2f;
-                PlayPlayer("run");   // OWNER: player turn, hop-in charge
+                attacker.AnimSprite.SpeedScale = 2f;
+                PlayAnim(_playerParty[0], "run");   // OWNER: player turn, hop-in charge
             }
             else
             {
@@ -2498,47 +2935,48 @@ public partial class BattleTest : Node2D
         var tween = CreateTween();
         tween.SetParallel(true);
         // Hop in — ease-out (fast start, decelerates on arrival = lunge).
-        tween.TweenProperty(attacker, "position", _attackerClosePos, SetupDuration)
+        tween.TweenProperty(attacker.PositionRect, "position", _sequenceAttackerClosePos, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        // When the player is the attacker, the visible AnimatedSprite2D must move with the
-        // ColorRect. Compute the same X delta and apply it to the sprite's floor-anchored origin.
-        if (attacker == _playerSprite)
+
+        // Move the attacker's AnimatedSprite2D by the same X delta as the ColorRect hop.
+        // The AnimatedSprite2D origin differs from Combatant.Origin (the C-category
+        // deferred note on the two-origin gap still applies — _playerAnimSpriteOrigin /
+        // _enemyAnimSpriteOrigin are separate scene-setup snapshots).
+        float   hopDeltaX        = _sequenceAttackerClosePos.X - attacker.Origin.X;
+        Vector2 animSpriteOrigin = attacker.Side == CombatantSide.Player
+            ? _playerAnimSpriteOrigin
+            : _enemyAnimSpriteOrigin;
+        // Y-offset applies only to enemy-side attackers (see parameter doc). Preserves
+        // the pre-refactor asymmetric behavior.
+        float   animTargetY      = attacker.Side == CombatantSide.Player
+            ? animSpriteOrigin.Y
+            : animSpriteOrigin.Y + attackerOffset.Y;
+        Vector2 animTarget       = new Vector2(animSpriteOrigin.X + hopDeltaX, animTargetY);
+        tween.TweenProperty(attacker.AnimSprite, "position", animTarget, SetupDuration)
+             .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+
+        // Enemy-side attacker: play run at double speed if alive (mirrors player pattern
+        // above, but routed through the PlayAnim guard helper on the enemy sprite).
+        if (attacker.Side == CombatantSide.Enemy && !attacker.IsDead)
         {
-            float   hopDeltaX  = _attackerClosePos.X - _playerOrigin.X;
-            Vector2 animTarget = new Vector2(_playerAnimSpriteOrigin.X + hopDeltaX,
-                                             _playerAnimSpriteOrigin.Y);
-            tween.TweenProperty(_playerAnimSprite, "position", animTarget, SetupDuration)
-                 .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+            attacker.AnimSprite.SpeedScale = 2f;
+            PlayAnim(_enemyParty[0], "run");
         }
-        // When the enemy is the attacker, play run at double speed during hop-in (mirrors player pattern).
-        if (attacker == _enemySprite && !_enemyDead)
-        {
-            _enemyAnimSprite.SpeedScale = 2f;
-            PlayEnemy("run");
-        }
-        // Move the enemy AnimatedSprite2D by the same X delta plus the full attackerOffset
-        // (X already in _attackerClosePos; Y applied here only so the sprite moves vertically
-        // without affecting the camera or target zone).
-        if (attacker == _enemySprite)
-        {
-            float   hopDeltaX  = _attackerClosePos.X - _enemyOrigin.X;
-            Vector2 animTarget = new Vector2(_enemyAnimSpriteOrigin.X + hopDeltaX,
-                                             _enemyAnimSpriteOrigin.Y + attackerOffset.Y);
-            tween.TweenProperty(_enemyAnimSprite, "position", animTarget, SetupDuration)
-                 .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        }
+
         // Camera zooms in centered between the two combatants.
-        tween.TweenProperty(_camera, "position", ComputeCameraMidpoint(), SetupDuration)
+        tween.TweenProperty(_camera, "position", ComputeCameraMidpoint(attacker, defender), SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         tween.TweenProperty(_camera, "zoom", CameraZoomIn, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         tween.Finished += () =>
         {
-            // Reset enemy SpeedScale after hop-in and hold idle until melee_attack starts.
-            if (attacker == _enemySprite && !_enemyDead)
+            // Reset enemy-side attacker SpeedScale after hop-in and hold idle until
+            // melee_attack starts. Player-side doesn't need this reset because the
+            // player's wind-up pose is set explicitly in BeginAttack's hop-in callback.
+            if (attacker.Side == CombatantSide.Enemy && !attacker.IsDead)
             {
-                _enemyAnimSprite.SpeedScale = 1f;
-                PlayEnemy("idle");
+                attacker.AnimSprite.SpeedScale = 1f;
+                PlayAnim(_enemyParty[0], "idle");
             }
             onComplete?.Invoke();
         };
@@ -2550,8 +2988,8 @@ public partial class BattleTest : Node2D
     /// the animation completes (so the first input is only possible after the hop-in).
     /// </summary>
     private void BeginAttack(
-        ColorRect attacker,
-        ColorRect defender,
+        Combatant attacker,
+        Combatant defender,
         TimingPrompt.PromptType promptType,
         TimingPrompt.PromptCompletedEventHandler onComplete)
     {
@@ -2567,7 +3005,7 @@ public partial class BattleTest : Node2D
         // Player hop-in overlaps the enemy similarly to how the enemy overlaps the player
         // via warrior_melee_combo.tres's Offset = Vector2(-200, 0). Positive X pushes the
         // left-side attacker (player) further right toward the enemy's body.
-        Vector2 playerHopInOffset = (attacker == _playerSprite)
+        Vector2 playerHopInOffset = attacker.Side == CombatantSide.Player
             ? new Vector2(200f, 0f)
             : Vector2.Zero;
         PlayHopIn(attacker, defender, () =>
@@ -2575,17 +3013,17 @@ public partial class BattleTest : Node2D
             // Hop-in finished — freeze on frame 0 (wind-up pose) without playing.
             // The slash fires from frame 1 only after the timing circle resolves,
             // so the pose reads as intent-to-strike while the player waits for input.
-            if (attacker == _playerSprite)
+            if (attacker.Side == CombatantSide.Player)
             {
                 // OWNER: BeginAttack hop-in callback (player turn, awaiting input).
                 // "combo" frame 0 = first wind-up pose for both single and combo attacks.
-                _playerAnimSprite.SpeedScale = 1f;
-                _playerAnimSprite.Animation  = "combo";
-                SetPlayerFrame(0);  // OWNER: player turn, wind-up pose (sheet frame 0)
-                StopPlayer();
+                attacker.AnimSprite.SpeedScale = 1f;
+                attacker.AnimSprite.Animation  = "combo";
+                SetAnimFrame(_playerParty[0], 0);  // OWNER: player turn, wind-up pose (sheet frame 0)
+                StopAnim(_playerParty[0]);
             }
-            // Position is set here so ComputeCameraMidpoint() reflects the final close stance.
-            prompt.Position      = ComputeCameraMidpoint();
+            // Position is set here so ComputeCameraMidpoint reflects the final close stance.
+            prompt.Position      = ComputeCameraMidpoint(attacker, defender);
             _targetZone.Position = prompt.Position;
             _targetZone.Visible  = true;
             prompt.ZIndex = 20;
@@ -2601,11 +3039,12 @@ public partial class BattleTest : Node2D
     private void OnAttackPassEvaluated(int result, int passIndex)
     {
         // Slam tween on every pass — attacker lunges forward then snaps back to close stance.
-        Vector2 slamPos = ComputeSlamPosition();
+        var attacker = _sequenceAttacker;
+        Vector2 slamPos = ComputeSlamPosition(attacker, _sequenceDefender);
         var tween = CreateTween();
-        tween.TweenProperty(_attacker, "position", slamPos, SlamInDuration)
+        tween.TweenProperty(attacker.PositionRect, "position", slamPos, SlamInDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        tween.TweenProperty(_attacker, "position", _attackerClosePos, SlamOutDuration)
+        tween.TweenProperty(attacker.PositionRect, "position", _sequenceAttackerClosePos, SlamOutDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
 
         if (!_isComboAttack) return;  // single: animation driven entirely in OnPlayerPromptCompleted
@@ -2621,14 +3060,14 @@ public partial class BattleTest : Node2D
         {
             case 0:
                 PlaySound("player_attack_swing.wav");
-                SafeDisconnectPlayerAnim(OnComboPass0SlashFinished);
-                PlayPlayer("combo_slash1");  // OWNER: combo pass 0, first strike (frames 1–3)
+                SafeDisconnectAnim(_playerParty[0], OnComboPass0SlashFinished);
+                PlayAnim(_playerParty[0], "combo_slash1");  // OWNER: combo pass 0, first strike (frames 1–3)
                 _playerAnimSprite.AnimationFinished += OnComboPass0SlashFinished;
                 break;
             case 1:
                 PlaySound("player_attack_swing.wav");
-                SafeDisconnectPlayerAnim(OnComboPass1SlashFinished);
-                PlayPlayer("combo_slash2");  // OWNER: combo pass 1, second strike (frames 6–9)
+                SafeDisconnectAnim(_playerParty[0], OnComboPass1SlashFinished);
+                PlayAnim(_playerParty[0], "combo_slash2");  // OWNER: combo pass 1, second strike (frames 6–9)
                 _playerAnimSprite.AnimationFinished += OnComboPass1SlashFinished;
                 break;
             case 2:
@@ -2637,8 +3076,8 @@ public partial class BattleTest : Node2D
                 // the same frame as the last PassEvaluated) for the all-hits case, or here when
                 // the miss branch runs.
                 PlaySound("player_attack_swing.wav");
-                SafeDisconnectPlayerAnim(OnFinalSlashFinished);
-                PlayPlayer("combo_slash1");  // OWNER: combo pass 2, final strike (frames 1–3)
+                SafeDisconnectAnim(_playerParty[0], OnFinalSlashFinished);
+                PlayAnim(_playerParty[0], "combo_slash1");  // OWNER: combo pass 2, final strike (frames 1–3)
                 _playerAnimSprite.AnimationFinished += OnFinalSlashFinished;
                 break;
         }
@@ -2662,13 +3101,14 @@ public partial class BattleTest : Node2D
         };
         if (comboDmgResult == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);
-        _enemyHP = Mathf.Max(0, _enemyHP - comboDamage);
+        var comboTarget = _enemyParty[0];  // single target in the current UI
+        comboTarget.TakeDamage(comboDamage);
         GD.Print($"[BattleTest] Combo pass {passIndex + 1} {comboDmgResult}: {comboDamage} damage. " +
-                 $"Enemy HP: {_enemyHP}/{_enemyMaxHP}");
+                 $"Enemy HP: {comboTarget.CurrentHp}/{comboTarget.MaxHp}");
         PlaySound("enemy_hit.wav");
-        SpawnDamageNumber(EnemyDamageOrigin, comboDamage, comboDmgColor);
+        SpawnDamageNumber(ComputeDamageOrigin(comboTarget), comboDamage, comboDmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
-        PlayEnemyHurtFlash();
+        PlayCombatantHurtFlash(comboTarget);
         UpdateHPBars();
 
         if (comboDmgResult == TimingPrompt.InputResult.Miss)
@@ -2688,56 +3128,70 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void PlayTeardown(Action onComplete)
     {
+        // Read the sequence-scoped attacker set in PlayHopIn (or by the non-hop-in /
+        // magic-attack paths that write it directly in BeginEnemyAttack /
+        // BeginPlayerMagicAttack). PlayTeardown is called from animation-callback
+        // continuations that can't naturally receive the attacker as a parameter, so
+        // the field is the right plumbing here.
+        var attacker = _sequenceAttacker;
+        bool attackerMoved = _sequenceAttackerClosePos != attacker.Origin;
+
         var tween = CreateTween();
         tween.SetParallel(true);
         // Hop out — ease-in (slow start, accelerates = snapping away).
-        tween.TweenProperty(_attacker, "position", GetOrigin(_attacker), TeardownDuration)
+        tween.TweenProperty(attacker.PositionRect, "position", attacker.Origin, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
-        // Return the visible player sprite to its scene origin alongside the ColorRect.
-        if (_attacker == _playerSprite)
+
+        // Return the attacker's AnimatedSprite2D to its scene origin alongside the ColorRect.
+        // The AnimatedSprite2D origin is still tracked in the singleton snapshots
+        // _playerAnimSpriteOrigin / _enemyAnimSpriteOrigin — see the C-category-deferred
+        // note on the two-origin gap in BuildInitialParties.
+        Vector2 animSpriteOrigin = attacker.Side == CombatantSide.Player
+            ? _playerAnimSpriteOrigin
+            : _enemyAnimSpriteOrigin;
+        // Player-side footstep + position tween play unconditionally on teardown —
+        // attackerMoved below gates only the enemy-side run-backwards animation (and its
+        // paired footstep), not the position tween. Preserved asymmetry from pre-refactor:
+        // player retreat animation (PlayAnimBackwards) is driven by animation handlers
+        // elsewhere (OnFinalSlashFinished, etc.), not by PlayTeardown.
+        if (attacker.Side == CombatantSide.Player && !attacker.IsDead)
+            PlaySound("short_quick_steps.wav", volumeDb: 0f);
+        tween.TweenProperty(attacker.AnimSprite, "position", animSpriteOrigin, TeardownDuration)
+             .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
+
+        // Enemy-side attacker: play run backwards at double speed during hop-back, only
+        // if the attacker actually moved from origin (hop-in melee). Cast attacks stay at
+        // origin so _sequenceAttackerClosePos == attacker.Origin; skip the run animation then.
+        if (attacker.Side == CombatantSide.Enemy && !attacker.IsDead && attackerMoved)
         {
-            if (!_playerDead)
-                PlaySound("short_quick_steps.wav", volumeDb: 0f);
-            tween.TweenProperty(_playerAnimSprite, "position", _playerAnimSpriteOrigin, TeardownDuration)
-                 .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
+            PlaySound("short_quick_steps.wav", volumeDb: 0f);
+            attacker.AnimSprite.SpeedScale = 2f;
+            attacker.AnimSprite.PlayBackwards("run");
         }
-        // Return the visible enemy sprite to its scene origin alongside the ColorRect.
-        if (_attacker == _enemySprite)
-        {
-            tween.TweenProperty(_enemyAnimSprite, "position", _enemyAnimSpriteOrigin, TeardownDuration)
-                 .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
-            // Play run backwards at double speed during hop-back — only if the enemy
-            // actually moved from origin (hop-in melee). Cast attacks stay at origin
-            // so _attackerClosePos == origin; skip the run animation in that case.
-            bool enemyMoved = _attackerClosePos != GetOrigin(_enemySprite);
-            if (!_enemyDead && enemyMoved)
-            {
-                PlaySound("short_quick_steps.wav", volumeDb: 0f);
-                _enemyAnimSprite.SpeedScale = 2f;
-                _enemyAnimSprite.PlayBackwards("run");
-            }
-        }
+
         // Camera zooms back out to default.
         tween.TweenProperty(_camera, "position", CameraDefaultPos, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
         tween.TweenProperty(_camera, "zoom", CameraDefaultZoom, TeardownDuration)
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
-        bool enemyDidMove = _attacker == _enemySprite && _attackerClosePos != GetOrigin(_enemySprite);
         tween.Finished += () =>
         {
-            // Reset enemy SpeedScale and return to idle after hop-back (only if enemy moved).
-            if (enemyDidMove && !_enemyDead)
+            // Enemy-side attacker that moved: reset SpeedScale and return to idle after hop-back.
+            if (attacker.Side == CombatantSide.Enemy && attackerMoved && !attacker.IsDead)
             {
-                _enemyAnimSprite.SpeedScale = 1f;
-                PlayEnemy("idle");
+                attacker.AnimSprite.SpeedScale = 1f;
+                PlayAnim(_enemyParty[0], "idle");
             }
             // Restore default ZIndex on both sprites now that the attack is over.
             // Exception: if the enemy is dying (phase transition in progress), leave
             // its ZIndex alone — SpawnBossReveal bumped it up so the reveal stays
             // strictly behind, and SwapToPhase2 restores the original snapshot value.
-            _playerAnimSprite.ZIndex = 0;
-            if (!_enemyDead)
-                _enemyAnimSprite.ZIndex = 0;
+            // Single-player prototype: these ZIndex resets reach into _playerParty[0] /
+            // _enemyParty[0] directly; at multi-character density the reset iterates both
+            // parties.
+            _playerParty[0].AnimSprite.ZIndex = 0;
+            if (!_enemyParty[0].IsDead)
+                _enemyParty[0].AnimSprite.ZIndex = 0;
             onComplete?.Invoke();
         };
     }
@@ -2746,54 +3200,54 @@ public partial class BattleTest : Node2D
     // Animation position helpers
     // =========================================================================
 
-    /// <summary>Returns the stored world-space origin for the given sprite.</summary>
-    private Vector2 GetOrigin(ColorRect sprite) =>
-        sprite == _playerSprite ? _playerOrigin : _enemyOrigin;
-
     /// <summary>
     /// Returns the position where the attacker stands in the close stance —
     /// <see cref="AttackGap"/> pixels from the defender's near edge, same Y as origin.
-    /// Calculated from stored origins so it is independent of any animation in progress.
+    /// Calculated from the combatants' stored origins so it is independent of any
+    /// animation in progress.
     /// </summary>
-    private Vector2 ComputeClosePosition()
+    private Vector2 ComputeClosePosition(Combatant attacker, Combatant defender)
     {
-        Vector2 attackerOrigin = GetOrigin(_attacker);
-        Vector2 defenderOrigin = GetOrigin(_defender);
+        Vector2 attackerOrigin = attacker.Origin;
+        Vector2 defenderOrigin = defender.Origin;
         bool    onLeft         = attackerOrigin.X < defenderOrigin.X;
 
         float closeX = onLeft
-            ? defenderOrigin.X - _attacker.Size.X - AttackGap   // attacker right edge = defender left - gap
-            : defenderOrigin.X + _defender.Size.X + AttackGap;  // attacker left edge  = defender right + gap
+            ? defenderOrigin.X - attacker.PositionRect.Size.X - AttackGap   // attacker right edge = defender left - gap
+            : defenderOrigin.X + defender.PositionRect.Size.X + AttackGap;  // attacker left edge  = defender right + gap
 
         return new Vector2(closeX, attackerOrigin.Y);
     }
 
     /// <summary>
     /// Returns the slam position — attacker overlaps the defender by <see cref="SlamOverlap"/> pixels.
-    /// Also calculated from stored origins so slam depth is always the same regardless of
-    /// where the attacker currently is.
+    /// Reads <see cref="_sequenceAttackerClosePos"/> for the slam's Y (so slam stays on the
+    /// close-stance horizontal line regardless of any Y-offset applied during hop-in).
     /// </summary>
-    private Vector2 ComputeSlamPosition()
+    private Vector2 ComputeSlamPosition(Combatant attacker, Combatant defender)
     {
-        Vector2 attackerOrigin = GetOrigin(_attacker);
-        Vector2 defenderOrigin = GetOrigin(_defender);
+        Vector2 attackerOrigin = attacker.Origin;
+        Vector2 defenderOrigin = defender.Origin;
         bool    onLeft         = attackerOrigin.X < defenderOrigin.X;
 
         float slamX = onLeft
-            ? defenderOrigin.X - _attacker.Size.X + SlamOverlap   // right edge overlaps defender by SlamOverlap
-            : defenderOrigin.X + _defender.Size.X - SlamOverlap;  // left edge overlaps defender by SlamOverlap
+            ? defenderOrigin.X - attacker.PositionRect.Size.X + SlamOverlap   // right edge overlaps defender by SlamOverlap
+            : defenderOrigin.X + defender.PositionRect.Size.X - SlamOverlap;  // left edge overlaps defender by SlamOverlap
 
-        return new Vector2(slamX, _attackerClosePos.Y);
+        return new Vector2(slamX, _sequenceAttackerClosePos.Y);
     }
 
     /// <summary>
     /// Returns the world-space midpoint between the attacker's close stance center
     /// and the defender's center — the point the camera zooms in on.
+    /// Reads <see cref="_sequenceAttackerClosePos"/> for the attacker's current
+    /// close-stance position (which differs from its rest origin when the attacker
+    /// has hopped in).
     /// </summary>
-    private Vector2 ComputeCameraMidpoint()
+    private Vector2 ComputeCameraMidpoint(Combatant attacker, Combatant defender)
     {
-        Vector2 attackerCenter = _attackerClosePos    + _attacker.Size / 2f;
-        Vector2 defenderCenter = GetOrigin(_defender) + _defender.Size / 2f;
+        Vector2 attackerCenter = _sequenceAttackerClosePos + attacker.PositionRect.Size / 2f;
+        Vector2 defenderCenter = defender.Origin           + defender.PositionRect.Size / 2f;
         return (attackerCenter + defenderCenter) / 2f;
     }
 }
