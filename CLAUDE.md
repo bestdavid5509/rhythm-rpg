@@ -237,7 +237,8 @@ Source of truth for per-unit state. Scene-tree nodes (`ColorRect`, `AnimatedSpri
 | `Name`, `Side` | identity; `Side` is `CombatantSide.Player`/`.Enemy` |
 | `CurrentHp`, `MaxHp`, `IsDead` | combat state; mutate via `TakeDamage(int)` / `Heal(int)` |
 | `Origin`, `PositionRect`, `AnimSprite` | scene-tree node refs |
-| `CurrentMp`, `MaxMp`, `IsDefending`, `IsBeckoning` | player-only; null/default on enemies |
+| `Agility` | turn-order sort key; all combatants share `Agility = 10` in Phase 6, tie-break is players-before-enemies then party-list order |
+| `CurrentMp`, `MaxMp`, `IsDefending`, `BeckoningTarget`, `IsAbsorber` | player-only; null/default on enemies. `BeckoningTarget` is a `Combatant?` reference to the enemy this player has beckoned (null = no active beckon), consumed in `SelectEnemyAttack`. `IsAbsorber` gates absorbed-move learning and Beckon submenu visibility. |
 | `Data`, `HasBeenAbsorbed` | enemy-only; `Data` is `EnemyData` |
 | `FlashMaterial`, `FlashTween` | per-unit flash shader state |
 
@@ -526,7 +527,7 @@ Triggered automatically on Warrior (Phase 1) death when `BattleTest.Phase2EnemyD
 3. `SpawnBossReveal()` constructs a single `"default"` animation **in code** from two textures: 12 frames from `8_sword_warrior__red_boss_reveal.png` (row 0, 160×160) **followed by 3 cycles of the 8 Sword Warrior idle** (row 0 of `8_sword_warrior_red-Sheet.png`, 14 frames × 3 = 42 frames). Total 54 frames @ 12 fps, `loop = false`. `FlipH = true` to mirror-match the 8 Sword Warrior's gameplay orientation. Position = warrior's local position − `(0, 10)` (10px lift to align visually with the Phase 2 idle).
 4. Reveal plays through concurrently with the warrior's slowed death. Warrior AnimationFinished fires `OnEnemyDeathFinished`.
 5. `OnEnemyDeathFinished` calls `ApplyPhase2Sprite()` which: sets `_phaseTransitionConsumed = true`, frees the reveal, reassigns `EnemyData = Phase2EnemyData`, disconnects every stale enemy `AnimationFinished` handler (`OnEnemyDeathFinished`, `OnCastIntroFinished`, `OnCastEndFinished`, `OnEnemyAttackAnimFinished`, `OnEnemyHurtFlashFinished`), nulls `SpriteFrames` to defeat the `BuildEnemySpriteFrames` early-return, rebuilds frames for the new enemy, repositions via the standard floor-anchored formula, and plays `idle`.
-6. 0.5s pause → `ShowBattleMessage("You've only just begun to suffer.")` → 3s timer → `SwapToPhase2()` finalises state: resets the enemy Combatant (`MaxHp`, `CurrentHp`, `IsDead = false`, reassigns `Data`/`Name`), updates the enemy name label, calls `UpdateHPBars()`, clears per-fight state on the player Combatant (`IsBeckoning`, `IsDefending`) and BattleTest (`_parryClean`, `_pendingGameOver`, hop-in rendezvous flags, `_lastAttackIndex`). `_absorbedMoves` is NOT reset — per-move-type absorb tracking persists across the phase transition so Phase 2's learnable is absorbable regardless of Phase 1 state.
+6. 0.5s pause → `ShowBattleMessage("You've only just begun to suffer.")` → 3s timer → `SwapToPhase2()` finalises state: resets the enemy Combatant (`MaxHp`, `CurrentHp`, `IsDead = false`, reassigns `Data`/`Name`), updates the enemy name label, calls `UpdateHPBars()`, clears per-fight state on the player Combatant (`BeckoningTarget`, `IsDefending`) and BattleTest (`_parryClean`, `_pendingGameOver`, hop-in rendezvous flags, `_lastAttackIndex`). `_absorbedMoves` is NOT reset — per-move-type absorb tracking persists across the phase transition so Phase 2's learnable is absorbable regardless of Phase 1 state.
 7. 0.5s → `ShowMenu()` — Phase 2 begins.
 
 **ZIndex layering** during the reveal sequence (everything ≥ 0 so the default-ZIndex `Background` ColorRect stays at the bottom):

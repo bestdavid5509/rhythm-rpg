@@ -2239,12 +2239,12 @@ public partial class BattleTest : Node2D
         if (LoopAttack && TestEnemyAttack != null)
             return TestEnemyAttack;
 
-        // Beckon forces the learnable move for one turn. Consume the flag whether or
+        // Beckon forces the learnable move for one turn. Consume the redirect whether or
         // not a learnable exists; LoopAttack above still wins in dev test mode.
         var player = _playerParty[0];  // single beckoner in the current UI
-        if (player.IsBeckoning)
+        if (player.BeckoningTarget != null)
         {
-            player.IsBeckoning = false;
+            player.BeckoningTarget = null;
             if (EnemyData?.LearnableAttack != null)
                 return EnemyData.LearnableAttack;
         }
@@ -2290,7 +2290,7 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Beckon ability — if the enemy has an unabsorbed learnable move, sets
-    /// playerCombatant.IsBeckoning so SelectEnemyAttack returns LearnableAttack this turn.
+    /// playerCombatant.BeckoningTarget so SelectEnemyAttack returns LearnableAttack this turn.
     /// Otherwise shows a brief message. Always hands off to the enemy turn immediately (no animation).
     /// </summary>
     /// <summary>
@@ -2304,7 +2304,9 @@ public partial class BattleTest : Node2D
         var player = _playerParty[0];  // single beckoner in the current UI
         player.CurrentMp -= beckonMpCost;
         UpdateMpBar();
-        player.IsBeckoning = true;
+        // Target defaults to _enemyParty[0] — matches the pre-Phase-6 single-enemy assumption.
+        // C10 replaces this with a SelectingTarget flow so the Beckoner picks the redirect target.
+        player.BeckoningTarget = _enemyParty[0];
         GD.Print($"[BattleTest] Player beckons (-{beckonMpCost} MP) — enemy will use learnable move next turn.");
         BeginEnemyAttack();
     }
@@ -2713,6 +2715,7 @@ public partial class BattleTest : Node2D
             Side          = CombatantSide.Player,
             CurrentHp     = PlayerMaxHP,
             MaxHp         = PlayerMaxHP,
+            Agility       = 10,
             IsDead        = false,
             Origin        = _playerOrigin,
             PositionRect  = _playerSprite,
@@ -2720,7 +2723,7 @@ public partial class BattleTest : Node2D
             CurrentMp     = PlayerMaxMp,
             MaxMp         = PlayerMaxMp,
             IsDefending   = false,
-            IsBeckoning   = false,
+            IsAbsorber    = true,  // the sole Absorber in the current UI; non-Absorbers land in C3 + later commits.
             FlashMaterial = _playerAnimSprite.Material as ShaderMaterial,
         };
         _playerParty.Add(playerCombatant);
@@ -2731,6 +2734,7 @@ public partial class BattleTest : Node2D
             Side          = CombatantSide.Enemy,
             CurrentHp     = enemyInitialMaxHp,
             MaxHp         = enemyInitialMaxHp,
+            Agility       = 10,
             IsDead        = false,
             Origin        = _enemyOrigin,
             PositionRect  = _enemySprite,

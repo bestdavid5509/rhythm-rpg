@@ -687,8 +687,8 @@ public partial class BattleTest : Node2D
         // _absorbedMoves. Other flags are one-shot or turn-scoped but are cleared here
         // for defense-in-depth against stale state from the final Phase 1 turn.
         var player = _playerParty[0];
-        player.IsBeckoning = false;
-        player.IsDefending = false;
+        player.BeckoningTarget = null;
+        player.IsDefending     = false;
         _parryClean               = false;
         _pendingGameOver          = false;
         _hopInOver                = false;

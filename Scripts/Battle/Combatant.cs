@@ -37,16 +37,18 @@ public class Combatant
     // ---- Combat-universal state (both sides use these) ----
     public int              CurrentHp;
     public int              MaxHp;
+    public int              Agility = 10; // Turn-order sort key. All combatants share Agility = 10 in Phase 6; tie-break is players-before-enemies then party-list order.
     public bool             IsDead;
     public Vector2          Origin;        // world-space origin for positioning
     public ColorRect        PositionRect;  // existing anchor node (formerly _playerSprite / _enemySprite)
     public AnimatedSprite2D AnimSprite;    // existing animated sprite node (formerly _playerAnimSprite / _enemyAnimSprite)
 
     // ---- Player-only — null/unused/default on enemies ----
-    public int  CurrentMp;
-    public int  MaxMp;
-    public bool IsDefending;
-    public bool IsBeckoning;  // Beckon ability active — consumed on the next SelectEnemyAttack call.
+    public int       CurrentMp;
+    public int       MaxMp;
+    public bool      IsDefending;
+    public Combatant BeckoningTarget;  // Target enemy this combatant has beckoned — consumed on the next SelectEnemyAttack call for that enemy. Null = no active beckon. Target defaults to _enemyParty[0] until C10 wires proper target selection.
+    public bool      IsAbsorber;       // True for the single Absorber on the player side; gates absorbed-move learning and Beckon menu visibility in the Skills submenu.
 
     // ---- Enemy-only — null/unused/default on players ----
     public EnemyData Data;
