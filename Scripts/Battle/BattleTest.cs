@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Godot;
 
 /// <summary>
@@ -176,6 +177,28 @@ public partial class BattleTest : Node2D
     /// Assign via the inspector (e.g. 8_sword_warrior_phase2.tres).
     /// </summary>
     [Export] public EnemyData EnemyData;
+
+    // =========================================================================
+    // Party rosters (Phase 6 C3)
+    // =========================================================================
+
+    /// <summary>
+    /// Number of player combatants to construct at scene start. Default 1 preserves
+    /// the pre-Phase-6 1v1 shape; the tscn-placed PlayerAnimatedSprite/PlayerSprite
+    /// pair serves as slot 0 and additional slots (1..N-1) are spawned at runtime by
+    /// BuildInitialParties. C5 (queue) wires active-player rotation; until then only
+    /// slot 0 receives turns — additional slots are idle scenery.
+    /// </summary>
+    [Export] public int PlayerPartySize = 1;
+
+    /// <summary>
+    /// Number of enemy combatants to construct at scene start. Default 1 preserves
+    /// the pre-Phase-6 1v1 shape. Additional slots are Warrior Phase 1 copies sharing
+    /// slot 0's EnemyData/SpriteFrames reference. At default (1) the Phase 1 → Phase 2
+    /// transition works as today; at multi-enemy rosters (TestFullParty in C4 sets 5)
+    /// the transition is explicitly suppressed.
+    /// </summary>
+    [Export] public int EnemyPartySize = 1;
 
     private BattleMessage  _battleMessage;
     // Flash material and tween live on enemyCombatant (see Combatant.FlashMaterial /
@@ -519,11 +542,13 @@ public partial class BattleTest : Node2D
         _targetPointer = new TargetPointer();
         AddChild(_targetPointer);
 
-        // Construct single-entry party lists before HP init / test-flag overrides.
-        // Combatant fields are now the source of truth; the HP init + test-flag blocks
-        // below write directly into playerCombatant / enemyCombatant, not into retired
-        // singleton fields.
-        BuildInitialParties();
+        // Construct party lists before HP init / test-flag overrides. Combatant fields
+        // are the source of truth; the HP init + test-flag blocks below write directly
+        // into playerCombatant / enemyCombatant, not into retired singleton fields.
+        // C3: loops PlayerPartySize / EnemyPartySize to support multi-unit rosters.
+        // overlayShader threads through so per-slot ShaderMaterial instances share the
+        // shader resource without re-loading from disk.
+        BuildInitialParties(overlayShader);
 
         var playerCombatant = _playerParty[0];
         var enemyCombatant  = _enemyParty[0];
@@ -539,9 +564,15 @@ public partial class BattleTest : Node2D
 
         // Test hooks — applied AFTER EnemyData HP init so they aren't clobbered. MaxHp is
         // preserved so HP bars show the correct scale. Priority order resolved above.
+        // Victory/GameOver flags iterate the full party so the aggregate wipe predicate
+        // fires on the first triggering hit even at multi-unit rosters. At the default
+        // PartySize=1 these loops are single-iteration no-ops. PhaseTransition stays
+        // slot-0-only because its intent is the Phase 1 → Phase 2 transition, not
+        // an aggregate test.
         if (testVictory)
         {
-            enemyCombatant.CurrentHp = 1;
+            foreach (var e in _enemyParty)
+                e.CurrentHp = 1;
             // Consume the phase-transition gate so enemy death goes straight to Victory
             // instead of retriggering the Phase 1 → Phase 2 reveal cutscene.
             _phaseTransitionConsumed = true;
@@ -553,7 +584,8 @@ public partial class BattleTest : Node2D
         }
         if (testGameOver)
         {
-            playerCombatant.CurrentHp = 1;
+            foreach (var p in _playerParty)
+                p.CurrentHp = 1;
         }
 
         BuildMenu();
@@ -1369,25 +1401,32 @@ public partial class BattleTest : Node2D
             ShakeCamera(intensity: 8f, duration: 0.3f);  // shake — player takes a hit
 
             // Immediate death — play the animation now; the sequence continues silently.
-            // SuppressInput blocks all further manual input and auto-miss feedback on circles.
-            // Game Over label is deferred to OnEnemySequenceCompleted so the player can watch
-            // the full attack pattern for future attempts.
+            // SuppressInput (when aggregate wipe) blocks all further manual input and auto-miss
+            // feedback on circles. Game Over label is deferred to OnEnemySequenceCompleted so
+            // the player can watch the full attack pattern for future attempts.
+            //
+            // C3 multi-unit: this combatant really died — mark IsDead + play death anim
+            // unconditionally. The Game Over overlay and SuppressInput only fire if the
+            // aggregate CheckGameOver predicate confirms the whole party is down.
             if (player.CurrentHp <= 0 && !player.IsDead)
             {
-                GD.Print("[BattleTest] Player HP reached zero mid-sequence — death triggered immediately.");
+                GD.Print("[BattleTest] Player HP reached zero mid-sequence.");
                 player.IsDead = true;
-                // _state transition deferred to ShowGameOverOptionsPanel (2.0s later,
-                // matching Victory's pattern). During the beat, player.IsDead and
-                // SuppressInput below already suppress combat-path input and damage;
-                // _state == EnemyAttack routes battle_confirm to TimingPrompt.ConfirmAll
-                // which no-ops under SuppressInput. HandleGameOverInput only routes once
-                // _state actually flips.
-                TimingPrompt.SuppressInput = true;
                 player.AnimSprite.Play("death");
-                // Show Game Over overlay + fade music immediately; enemy sequence continues playing out.
-                // No OnPlayerDeathFinished is wired at this mid-sequence site, so this is the only
-                // place the overlay can be triggered.
-                ShowEndLabel("Game Over");
+                if (CheckGameOver())
+                {
+                    // _state transition deferred to ShowGameOverOptionsPanel (2.0s later,
+                    // matching Victory's pattern). During the beat, player.IsDead and
+                    // SuppressInput below already suppress combat-path input and damage;
+                    // _state == EnemyAttack routes battle_confirm to TimingPrompt.ConfirmAll
+                    // which no-ops under SuppressInput. HandleGameOverInput only routes once
+                    // _state actually flips.
+                    TimingPrompt.SuppressInput = true;
+                    // Show Game Over overlay + fade music immediately; enemy sequence continues playing out.
+                    // No OnPlayerDeathFinished is wired at this mid-sequence site, so this is the only
+                    // place the overlay can be triggered.
+                    ShowEndLabel("Game Over");
+                }
             }
         }
     }
@@ -1564,16 +1603,19 @@ public partial class BattleTest : Node2D
 
         bool isHopIn = ctx.CurrentAttack.IsHopIn;
 
-        // Player died mid-sequence — death animation is already playing.
-        // Clean up the enemy and let the death flow finish (Game Over label).
-        if (_playerParty[0].IsDead)
+        // Defender died mid-sequence — death animation is already playing.
+        // Clean up the enemy and let the death flow finish. At multi-unit, a defender
+        // dying doesn't imply aggregate game-over; the ShowEndLabel below is gated
+        // by CheckGameOver, and the hop-in branch below gates via _hopInOver which is
+        // itself sourced from CheckGameOver.
+        if (_sequenceDefender.IsDead)
         {
             if (isHopIn)
             {
                 // Hop-in path: let ProceedAfterHopInAnim handle teardown.
                 UpdateHPBars();
                 UnsubscribeBouncingHopIn();
-                _hopInOver              = true;
+                _hopInOver              = CheckGameOver();
                 _hopInSequenceCompleted = true;
                 if (_hopInAnimFinished)
                     ProceedAfterHopInAnim();
@@ -1589,7 +1631,8 @@ public partial class BattleTest : Node2D
             }
             else
                 PlayAnim(enemyAttacker, "idle");
-            ShowEndLabel("Game Over");
+            if (CheckGameOver())
+                ShowEndLabel("Game Over");
             return;
         }
 
@@ -2434,10 +2477,12 @@ public partial class BattleTest : Node2D
             0.85f, 0.0f, 0.12f);
     }
 
-    // Single-party prototype: reads party[0] because there's only one combatant per side.
-    // Party-wipe semantics (Any-alive / All-dead) are audit finding A6 — deferred to the
-    // scaffolding phase. For now this retains the 1v1 "either scalar zero → game over"
-    // rule.
+    // Party-wipe semantics (C3): Game Over fires when every player is at 0 HP; Victory
+    // fires when every enemy is at 0 HP. At 1v1 (default PartySize=1) this is equivalent
+    // to the pre-C3 slot-0 check. Callers that subsequently discriminate "which side won"
+    // still pattern-match on slot-0 HP — correct at C3's intermediate state where only
+    // slot 0 takes damage; C5's queue migration re-evaluates those discriminators when
+    // multi-unit damage lands.
     private bool CheckGameOver()
     {
         // Returns whether the battle has ended. Callers drive downstream behaviour
@@ -2448,12 +2493,12 @@ public partial class BattleTest : Node2D
         // handled state timing before the parity refactor and fixes a pre-refactor
         // latent bug where the player-wins branch briefly set _state = GameOver on
         // the Victory path before ShowVictoryOptionsPanel corrected it.
-        if (_playerParty[0].CurrentHp <= 0)
+        if (_playerParty.All(p => p.CurrentHp <= 0))
         {
             GD.Print("[BattleTest] Enemy wins.");
             return true;
         }
-        if (_enemyParty[0].CurrentHp <= 0)
+        if (_enemyParty.All(e => e.CurrentHp <= 0))
         {
             GD.Print("[BattleTest] Player wins.");
             return true;
@@ -2729,68 +2774,208 @@ public partial class BattleTest : Node2D
         BuildPlayerPanel(layer);
     }
 
+    // Horizontal spacing between successive combatant slots at C3. Placeholder formation;
+    // C6 replaces this with a proper staggered 2-2 / 3-2 layout. Players cluster left of
+    // slot 0 (X decreasing); enemies cluster right of slot 0 (X increasing). At
+    // TestFullParty (4v5), slots 3–4 on the enemy side clip off the 1920-wide viewport —
+    // acceptable scaffolding until C6 lands.
+    private const float PlayerSlotSpacing = 140f;
+    private const float EnemySlotSpacing  = 160f;
+
     /// <summary>
-    /// Constructs the single-entry party lists that back the Combatant abstraction.
-    /// Called from <see cref="_Ready"/> after sprites / BattleSystem / Phase2EnemyData
-    /// are all settled, but before the EnemyData HP init and test-flag overrides —
-    /// those blocks write directly into the Combatant fields produced here.
-    ///
-    /// Initial HP/MP values come from constants (<c>PlayerMaxHP</c>, <c>PlayerMaxMp</c>,
-    /// or <c>EnemyData.MaxHp</c> if the resource's MaxHp is set). The caller's
-    /// downstream blocks handle EnemyData-sourced overrides and test-flag overrides.
+    /// Constructs party lists that back the Combatant abstraction. Loops
+    /// <see cref="PlayerPartySize"/> / <see cref="EnemyPartySize"/> so defaults of 1 / 1
+    /// preserve the pre-Phase-6 1v1 scene exactly; larger sizes (e.g. TestFullParty's 4/5)
+    /// spawn additional <c>ColorRect</c> + <c>AnimatedSprite2D</c> pairs for slots > 0.
+    /// Called from <see cref="_Ready"/> after sprites / BattleSystem / Phase2EnemyData are
+    /// all settled, but before the EnemyData HP init and test-flag overrides — those blocks
+    /// write directly into the slot-0 Combatant fields produced here.
     ///
     /// Origin note: the Combatant's single <c>Origin</c> field maps to the ColorRect-based
-    /// origin (<c>_playerOrigin</c> / <c>_enemyOrigin</c>). That is what the positioning
-    /// helpers (<c>ComputeClosePosition</c>, <c>ComputeSlamPosition</c>,
-    /// <c>ComputeCameraMidpoint</c>) read as of Phase 3.4. The separate AnimatedSprite2D
-    /// origin (<c>_playerAnimSpriteOrigin</c>, <c>_enemyAnimSpriteOrigin</c>) is not yet
-    /// modeled on Combatant — PlayHopIn / PlayTeardown still reach into the scene-level
-    /// snapshots via a Side switch. Candidate for a later cleanup (add a second Combatant
-    /// field for the AnimatedSprite2D origin).
+    /// origin. That is what the positioning helpers (<c>ComputeClosePosition</c>,
+    /// <c>ComputeSlamPosition</c>, <c>ComputeCameraMidpoint</c>) read as of Phase 3.4.
+    /// The separate AnimatedSprite2D origin (<c>_playerAnimSpriteOrigin</c>,
+    /// <c>_enemyAnimSpriteOrigin</c>) is not yet modeled on Combatant — PlayHopIn /
+    /// PlayTeardown still reach into the scene-level snapshots via a Side switch. Candidate
+    /// for a later cleanup (add a second Combatant field for the AnimatedSprite2D origin).
     /// </summary>
-    private void BuildInitialParties()
+    private void BuildInitialParties(Shader overlayShader)
     {
         int enemyInitialMaxHp = (EnemyData != null && EnemyData.MaxHp > 0) ? EnemyData.MaxHp : 200;
 
-        var playerCombatant = new Combatant
+        for (int i = 0; i < PlayerPartySize; i++)
         {
-            Name          = "Knight",
+            ColorRect        rect;
+            AnimatedSprite2D sprite;
+            if (i == 0)
+            {
+                // Slot 0 reuses the tscn-placed pair — SpriteFrames / Scale / Material are
+                // already populated by _Ready before BuildInitialParties is invoked.
+                rect   = _playerSprite;
+                sprite = _playerAnimSprite;
+            }
+            else
+            {
+                (rect, sprite) = SpawnPlayerSlot(i, overlayShader);
+            }
+            _playerParty.Add(BuildPlayerCombatantForSlot(i, rect, sprite));
+        }
+
+        for (int i = 0; i < EnemyPartySize; i++)
+        {
+            ColorRect        rect;
+            AnimatedSprite2D sprite;
+            if (i == 0)
+            {
+                rect   = _enemySprite;
+                sprite = _enemyAnimSprite;
+            }
+            else
+            {
+                (rect, sprite) = SpawnEnemySlot(i, overlayShader);
+            }
+            _enemyParty.Add(BuildEnemyCombatantForSlot(i, rect, sprite, enemyInitialMaxHp));
+        }
+
+        GD.Print($"[BattleTest] Parties built — " +
+                 $"player: {_playerParty.Count} combatant(s) (slot 0 HP={_playerParty[0].CurrentHp}/{_playerParty[0].MaxHp}, " +
+                 $"MP={_playerParty[0].CurrentMp}/{_playerParty[0].MaxMp}); " +
+                 $"enemy: {_enemyParty.Count} combatant(s) (slot 0 HP={_enemyParty[0].CurrentHp}/{_enemyParty[0].MaxHp}).");
+    }
+
+    /// <summary>
+    /// Spawns the <c>ColorRect</c> + <c>AnimatedSprite2D</c> pair for player slot
+    /// <paramref name="slotIndex"/> (must be > 0 — slot 0 is the tscn-placed pair).
+    /// SpriteFrames is shared with slot 0 (Godot Resource, safe to reference from
+    /// multiple AnimatedSprite2D nodes). A fresh ShaderMaterial instance is created so
+    /// each combatant's flash/tint uniforms are independent.
+    /// Returns the (rect, sprite) pair ready for <see cref="BuildPlayerCombatantForSlot"/>.
+    /// </summary>
+    private (ColorRect rect, AnimatedSprite2D sprite) SpawnPlayerSlot(int slotIndex,
+                                                                      Shader overlayShader)
+    {
+        // ColorRect — same size/color/visibility as slot 0; X shifted left by slot index.
+        var rect = new ColorRect();
+        rect.Size     = _playerSprite.Size;
+        rect.Color    = _playerSprite.Color;
+        rect.Position = new Vector2(_playerSprite.Position.X - slotIndex * PlayerSlotSpacing,
+                                     _playerSprite.Position.Y);
+        rect.Visible  = false;  // debug-only anchor, same as slot 0
+        AddChild(rect);
+
+        // AnimatedSprite2D — shares slot 0's SpriteFrames, own overlay material.
+        var sprite = new AnimatedSprite2D();
+        sprite.SpriteFrames = _playerAnimSprite.SpriteFrames;
+        sprite.Scale        = _playerAnimSprite.Scale;
+        sprite.Centered     = _playerAnimSprite.Centered;
+        sprite.Position     = new Vector2(_playerAnimSprite.Position.X - slotIndex * PlayerSlotSpacing,
+                                           _playerAnimSprite.Position.Y);
+        sprite.Material     = CreateCombatantOverlayMaterial(overlayShader);
+        AddChild(sprite);
+        sprite.Play("idle");
+
+        return (rect, sprite);
+    }
+
+    /// <summary>
+    /// Spawns the <c>ColorRect</c> + <c>AnimatedSprite2D</c> pair for enemy slot
+    /// <paramref name="slotIndex"/> (must be > 0). Mirrors <see cref="SpawnPlayerSlot"/>
+    /// with enemy-side X shift (rightward), FlipH copied from slot 0, and the shared
+    /// enemy SpriteFrames.
+    /// </summary>
+    private (ColorRect rect, AnimatedSprite2D sprite) SpawnEnemySlot(int slotIndex,
+                                                                     Shader overlayShader)
+    {
+        var rect = new ColorRect();
+        rect.Size     = _enemySprite.Size;
+        rect.Color    = _enemySprite.Color;
+        rect.Position = new Vector2(_enemySprite.Position.X + slotIndex * EnemySlotSpacing,
+                                     _enemySprite.Position.Y);
+        rect.Visible  = false;
+        AddChild(rect);
+
+        var sprite = new AnimatedSprite2D();
+        sprite.SpriteFrames = _enemyAnimSprite.SpriteFrames;
+        sprite.Scale        = _enemyAnimSprite.Scale;
+        sprite.Centered     = _enemyAnimSprite.Centered;
+        sprite.FlipH        = _enemyAnimSprite.FlipH;
+        sprite.Position     = new Vector2(_enemyAnimSprite.Position.X + slotIndex * EnemySlotSpacing,
+                                           _enemyAnimSprite.Position.Y);
+        sprite.Material     = CreateCombatantOverlayMaterial(overlayShader);
+        AddChild(sprite);
+        sprite.Play("idle");
+
+        return (rect, sprite);
+    }
+
+    /// <summary>
+    /// Creates a fresh <see cref="ShaderMaterial"/> bound to the combatant overlay shader
+    /// with both <c>flash_amount</c> and <c>tint_amount</c> uniforms zeroed. Each combatant
+    /// gets its own instance so white-flash (learnable signal) and red-tint (threat reveal)
+    /// tweens do not interfere across combatants.
+    /// </summary>
+    private static ShaderMaterial CreateCombatantOverlayMaterial(Shader overlayShader)
+    {
+        var mat = new ShaderMaterial();
+        mat.Shader = overlayShader;
+        mat.SetShaderParameter("flash_amount", 0.0f);
+        mat.SetShaderParameter("tint_amount",  0.0f);
+        return mat;
+    }
+
+    /// <summary>
+    /// Builds a player <see cref="Combatant"/> around an existing (rect, sprite) pair.
+    /// Slot 0 is the Absorber; additional slots are non-Absorbers. Names:
+    /// slot 0 → "Knight"; slots 1+ → "Knight N+1".
+    /// </summary>
+    private Combatant BuildPlayerCombatantForSlot(int slotIndex,
+                                                   ColorRect rect,
+                                                   AnimatedSprite2D sprite)
+    {
+        return new Combatant
+        {
+            Name          = slotIndex == 0 ? "Knight" : $"Knight {slotIndex + 1}",
             Side          = CombatantSide.Player,
             CurrentHp     = PlayerMaxHP,
             MaxHp         = PlayerMaxHP,
             Agility       = 10,
             IsDead        = false,
-            Origin        = _playerOrigin,
-            PositionRect  = _playerSprite,
-            AnimSprite    = _playerAnimSprite,
+            Origin        = rect.Position,
+            PositionRect  = rect,
+            AnimSprite    = sprite,
             CurrentMp     = PlayerMaxMp,
             MaxMp         = PlayerMaxMp,
             IsDefending   = false,
-            IsAbsorber    = true,  // the sole Absorber in the current UI; non-Absorbers land in C3 + later commits.
-            FlashMaterial = _playerAnimSprite.Material as ShaderMaterial,
+            IsAbsorber    = slotIndex == 0,  // slot 0 is the sole Absorber in Phase 6
+            FlashMaterial = sprite.Material as ShaderMaterial,
         };
-        _playerParty.Add(playerCombatant);
+    }
 
-        var enemyCombatant = new Combatant
+    /// <summary>
+    /// Builds an enemy <see cref="Combatant"/> around an existing (rect, sprite) pair.
+    /// All slots share the same <see cref="EnemyData"/> (identical copies in Phase 6).
+    /// Names: slot 0 → <c>EnemyData.EnemyName</c>; slots 1+ → "<name> N+1".
+    /// </summary>
+    private Combatant BuildEnemyCombatantForSlot(int slotIndex,
+                                                  ColorRect rect,
+                                                  AnimatedSprite2D sprite,
+                                                  int enemyInitialMaxHp)
+    {
+        string baseName = EnemyData?.EnemyName ?? "Enemy";
+        return new Combatant
         {
-            Name          = EnemyData?.EnemyName ?? "Enemy",
+            Name          = slotIndex == 0 ? baseName : $"{baseName} {slotIndex + 1}",
             Side          = CombatantSide.Enemy,
             CurrentHp     = enemyInitialMaxHp,
             MaxHp         = enemyInitialMaxHp,
             Agility       = 10,
             IsDead        = false,
-            Origin        = _enemyOrigin,
-            PositionRect  = _enemySprite,
-            AnimSprite    = _enemyAnimSprite,
+            Origin        = rect.Position,
+            PositionRect  = rect,
+            AnimSprite    = sprite,
             Data          = EnemyData,
-            FlashMaterial = _enemyAnimSprite.Material as ShaderMaterial,
+            FlashMaterial = sprite.Material as ShaderMaterial,
         };
-        _enemyParty.Add(enemyCombatant);
-
-        GD.Print($"[BattleTest] Combatants built — " +
-                 $"player: {playerCombatant.Name} (HP={playerCombatant.CurrentHp}/{playerCombatant.MaxHp}, " +
-                 $"MP={playerCombatant.CurrentMp}/{playerCombatant.MaxMp}); " +
-                 $"enemy: {enemyCombatant.Name} (HP={enemyCombatant.CurrentHp}/{enemyCombatant.MaxHp}).");
     }
 
     private void BuildEnemyPanel(CanvasLayer layer)

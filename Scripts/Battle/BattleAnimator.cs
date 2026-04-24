@@ -440,7 +440,11 @@ public partial class BattleTest : Node2D
         // self-damage → player attacker, etc.).
         SafeDisconnectAnim(_sequenceDeathTarget, OnPlayerDeathFinished);
         GD.Print("[BattleTest] Player died.");
-        ShowEndLabel("Game Over");
+        // Game Over only when aggregate wipe fires, not on any single combatant's death
+        // animation completion. A dead slot 0 at multi-unit still fires this handler but
+        // the battle continues if other players are alive.
+        if (CheckGameOver())
+            ShowEndLabel("Game Over");
     }
 
     /// <summary>
@@ -476,7 +480,11 @@ public partial class BattleTest : Node2D
             return;
         }
         GD.Print("[BattleTest] Enemy defeated.");
-        GetTree().CreateTimer(1.0f).Timeout += () => ShowEndLabel("Victory!");
+        // Victory only when aggregate wipe fires, not on any single enemy's death
+        // animation completion. At multi-unit, dead slot-N enemy still fires this handler
+        // but the battle continues if other enemies are alive.
+        if (CheckGameOver())
+            GetTree().CreateTimer(1.0f).Timeout += () => ShowEndLabel("Victory!");
     }
 
     // =========================================================================
