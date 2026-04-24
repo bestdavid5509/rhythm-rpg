@@ -20,6 +20,10 @@ A timing-based RPG battle system where circular prompts close toward a target zo
 
 The Absorber accumulates a library of absorbed moves over time.
 
+## Workflow conventions
+
+For the human-AI collaboration patterns used on this project — plan mode usage, pre-commit diff review, commit message conventions, Claude Code coordination — see `docs/workflow.md`. This file focuses on codebase architecture and conventions.
+
 ## Tech Stack
 
 - **Engine:** Godot 4
