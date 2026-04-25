@@ -11,11 +11,12 @@ public partial class BattleTest : Node2D
     // Battle menu
     // =========================================================================
 
-    private static readonly string[] MenuOptionLabels  = { "Attack", "Absorbed Moves", "Defend", "Items" };
+    private static readonly string[] MenuOptionLabels  = { "Attack", "Skills", "Defend", "Items" };
     private static readonly bool[]   MenuOptionEnabled = { true,     true,             true,     true   };
 
-    // Absorbed Moves submenu — absorbed attack entries followed by "Back".
-    // Built dynamically; RebuildSubMenu() appends absorbed moves at runtime.
+    // Skills submenu — base skills + Absorber-only entries (Beckon, absorbed
+    // moves) followed by "Back". Built dynamically by RebuildSubMenu(); rebuilt
+    // every time the submenu opens so it reflects the current active player.
     // TODO: submenu population should eventually be driven by the player's persistent move list from the character system
     private System.Collections.Generic.List<string>          _subMenuLabelsData;
     private System.Collections.Generic.List<AttackCategory?> _subMenuCategoriesData;
@@ -33,7 +34,7 @@ public partial class BattleTest : Node2D
     private static readonly Color ColorCategoryPhysical  = new Color(1.00f, 0.50f, 0.00f, 1.00f);  // orange — Physical attacks in submenu
     private static readonly Color ColorCategoryMagic     = new Color(0.60f, 0.30f, 1.00f, 1.00f);  // purple — Magic attacks in submenu
 
-    private bool            _inSubMenu;      // true while the Absorbed Moves submenu is open
+    private bool            _inSubMenu;      // true while the Skills submenu is open
     private bool            _inItemMenu;     // true while the Items submenu is open
     private int             _menuIndex;
     private int             _subMenuIndex;
@@ -55,7 +56,7 @@ public partial class BattleTest : Node2D
         _menuLayer.Name = "BattleMenu";
         AddChild(_menuLayer);
 
-        // Main menu — Attack / Absorbed Moves / Defend / Items.
+        // Main menu — Attack / Skills / Defend / Items.
         _mainMenuPanel = MakeMenuPanel(_menuLayer, out _mainMenuVBox);
         _menuLabels    = new Label[MenuOptionLabels.Length];
         for (int i = 0; i < MenuOptionLabels.Length; i++)
@@ -68,10 +69,9 @@ public partial class BattleTest : Node2D
             _menuLabels[i] = label;
         }
 
-        // Absorbed Moves submenu — built dynamically from _subMenuLabelsData.
+        // Skills submenu — built dynamically from _subMenuLabelsData.
         _subMenuPanel = MakeMenuPanel(_menuLayer, out _subMenuVBox);
-        InitSubMenuData();
-        PopulateSubMenuPanel();
+        RebuildSubMenu();
 
         // Items submenu — built dynamically from _itemMenuLabelsData.
         _itemMenuPanel = MakeMenuPanel(_menuLayer, out _itemMenuVBox);
@@ -92,7 +92,7 @@ public partial class BattleTest : Node2D
     /// Builds a layered Kenney 9-slice panel anchored to the bottom-left of the viewport.
     /// The panel's OffsetBottom is set by <see cref="PositionMenuPanelsAbovePlayerPanel"/>
     /// once the player panel's post-layout height is known. Every menu variant (main,
-    /// absorbed moves, items) uses this same position — only one is visible at a time.
+    /// skills, items) uses this same position — only one is visible at a time.
     /// </summary>
     private PanelContainer MakeMenuPanel(CanvasLayer layer, out VBoxContainer content)
     {
@@ -158,9 +158,14 @@ public partial class BattleTest : Node2D
         if (_endLabelShown)
             return;
 
+        // Active player for this menu invocation. C4.5: always slot 0.
+        // C5's queue rewrites this assignment to source the active player from
+        // the round-order queue; everything downstream already reads _activePlayer.
+        _activePlayer = _playerParty[0];
+
         _state                        = BattleState.PlayerMenu;
         _inputLocked                  = false;  // Unlock input — player can interact with menu.
-        _playerParty[0].IsDefending   = false;  // Defend only lasts one enemy turn.
+        _activePlayer.IsDefending     = false;  // Defend only lasts one enemy turn.
         _inSubMenu                    = false;
         _inItemMenu                   = false;
         _menuIndex                    = 0;
@@ -190,6 +195,12 @@ public partial class BattleTest : Node2D
 
     private void ShowSubMenu()
     {
+        // Rebuild from the active player's skill set every time the submenu opens.
+        // C4.5: the active player is always slot 0 so the rebuild output is stable;
+        // C5's queue can rotate active player between turns, and this rebuild call
+        // ensures the submenu reflects the current active player's IsAbsorber state.
+        RebuildSubMenu();
+
         _inSubMenu              = true;
         _inItemMenu             = false;
         _subMenuIndex           = 0;
@@ -197,7 +208,7 @@ public partial class BattleTest : Node2D
         _subMenuPanel.Visible   = true;
         _itemMenuPanel.Visible  = false;
         RefreshSubMenuLabels();
-        GD.Print("[BattleTest] Absorbed Moves submenu shown.");
+        GD.Print("[BattleTest] Skills submenu shown.");
     }
 
     private void ShowItemMenu()
@@ -245,17 +256,6 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Populates the base submenu data lists (Combo Strike, Comet, Back).
-    /// Called once from BuildMenu.
-    /// </summary>
-    private void InitSubMenuData()
-    {
-        _subMenuLabelsData     = new System.Collections.Generic.List<string>          { "Combo Strike", "Beckon", "Comet", "Cure", "Back" };
-        _subMenuCategoriesData = new System.Collections.Generic.List<AttackCategory?> { AttackCategory.Physical, AttackCategory.Magic, AttackCategory.Magic, AttackCategory.Magic, null };
-        _subMenuAttacksData    = new System.Collections.Generic.List<AttackData>      { null, null, null, null, null };  // resolved in GetSubMenuAttack
-    }
-
-    /// <summary>
     /// Creates Label nodes in the submenu panel to match _subMenuLabelsData, with Kenney
     /// divider TextureRects between entries.
     /// </summary>
@@ -278,19 +278,65 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Rebuilds the Absorbed Moves submenu to include the just-absorbed move.
-    /// Called from TryTriggerAbsorption when _absorbedMoveAttack is loaded.
+    /// Rebuilds the Skills submenu data lists from the active player's skill set:
+    ///   - Base entries (Combo Strike, Magic Comet, Cure) — present for every player.
+    ///   - Absorber-only entries (Beckon, absorbed moves from <c>_absorbedMoves</c>) —
+    ///     gated on <c>_activePlayer.IsAbsorber</c>.
+    ///   - "Back" — always last.
+    /// Idempotent: clears the lists at top so re-entry from BuildMenu, ShowSubMenu,
+    /// or TryTriggerAbsorption doesn't accumulate duplicates. Resolves AttackData
+    /// references at rebuild time so <see cref="GetSubMenuAttack"/> reads
+    /// <c>_subMenuAttacksData[index]</c> directly without index-specific switch logic.
     /// </summary>
     private void RebuildSubMenu()
     {
-        // Insert the absorbed move before "Back" (last entry).
-        int backIndex = _subMenuLabelsData.Count - 1;
-        string label = !string.IsNullOrEmpty(_absorbedMoveAttack.DisplayName)
-            ? _absorbedMoveAttack.DisplayName
-            : "Absorbed Move";
-        _subMenuLabelsData.Insert(backIndex, label);
-        _subMenuCategoriesData.Insert(backIndex, _absorbedMoveAttack.Category);
-        _subMenuAttacksData.Insert(backIndex, _absorbedMoveAttack);
+        _subMenuLabelsData     = new System.Collections.Generic.List<string>();
+        _subMenuCategoriesData = new System.Collections.Generic.List<AttackCategory?>();
+        _subMenuAttacksData    = new System.Collections.Generic.List<AttackData>();
+
+        // Combo Strike — every player has it.
+        _subMenuLabelsData.Add("Combo Strike");
+        _subMenuCategoriesData.Add(AttackCategory.Physical);
+        _subMenuAttacksData.Add(_playerComboStrike);
+
+        // Beckon — Absorber only. Bucketed as Magic for color tinting (it's an
+        // MP-costed magical utility ability, no AttackData backing).
+        if (_activePlayer != null && _activePlayer.IsAbsorber)
+        {
+            _subMenuLabelsData.Add("Beckon");
+            _subMenuCategoriesData.Add(AttackCategory.Magic);
+            _subMenuAttacksData.Add(null);
+        }
+
+        // Magic Comet, Cure — every player has both.
+        _subMenuLabelsData.Add("Magic Comet");
+        _subMenuCategoriesData.Add(AttackCategory.Magic);
+        _subMenuAttacksData.Add(_playerMagicAttack);
+
+        _subMenuLabelsData.Add("Cure");
+        _subMenuCategoriesData.Add(AttackCategory.Magic);
+        _subMenuAttacksData.Add(_playerCureAttack);
+
+        // Absorbed moves — Absorber only. Order is iteration order of the HashSet
+        // (stable enough at Phase 6 scope: at most 1 entry per fight today).
+        if (_activePlayer != null && _activePlayer.IsAbsorber)
+        {
+            foreach (var move in _absorbedMoves)
+            {
+                string label = !string.IsNullOrEmpty(move.DisplayName)
+                    ? move.DisplayName
+                    : "Absorbed Move";
+                _subMenuLabelsData.Add(label);
+                _subMenuCategoriesData.Add(move.Category);
+                _subMenuAttacksData.Add(move);
+            }
+        }
+
+        // Back — always last.
+        _subMenuLabelsData.Add("Back");
+        _subMenuCategoriesData.Add(null);
+        _subMenuAttacksData.Add(null);
+
         PopulateSubMenuPanel();
     }
 
@@ -386,7 +432,7 @@ public partial class BattleTest : Node2D
                 UseEtherItem();
             };
             HideMenu();
-            EnterSelectingTarget(_playerParty[0], MenuContext.Items);
+            EnterSelectingTarget(_activePlayer, MenuContext.Items);
         }
     }
 
@@ -402,9 +448,9 @@ public partial class BattleTest : Node2D
                 HideMenu();
                 EnterSelectingTarget(_enemyParty[0], MenuContext.Main);
                 break;
-            case 1: ShowSubMenu(); break;   // Absorbed Moves
+            case 1: ShowSubMenu(); break;   // Skills
             case 2:                         // Defend — halve miss damage this enemy turn
-                _playerParty[0].IsDefending = true;  // single defender in the current UI
+                _activePlayer.IsDefending = true;
                 GD.Print("[BattleTest] Player defending — incoming miss damage halved this turn.");
                 HideMenu();
                 BeginEnemyAttack();
@@ -445,30 +491,30 @@ public partial class BattleTest : Node2D
             int mpCost = attack?.MpCost ?? 0;
             _pendingActionLauncher = () =>
             {
-                if (mpCost > 0) _playerParty[0].CurrentMp -= mpCost;
+                if (mpCost > 0) _activePlayer.CurrentMp -= mpCost;
                 BeginPlayerAttack();
             };
             HideMenu();
-            EnterSelectingTarget(_enemyParty[0], MenuContext.AbsorbedMoves);
+            EnterSelectingTarget(_enemyParty[0], MenuContext.Skills);
         }
         else if (category == AttackCategory.Magic)
         {
-            // Magic moves (Comet, Comet Barrage, Cure, etc.) — magic attack flow.
+            // Magic moves (Magic Comet, Comet Barrage, Cure, etc.) — magic attack flow.
             // Default-target resolution via the attack-identity dispatch predicate
             // (same split as Phase 3.6): Cure targets self, other magic targets enemy.
             // MP deduction moves into the launcher — deducted on confirm, not on menu
             // pick, so cancel from SelectingTarget is a clean no-cost back-out.
             _activeMagicAttack = attack;
             bool isHealAttack = attack == _playerCureAttack;
-            Combatant defaultTarget = isHealAttack ? _playerParty[0] : _enemyParty[0];
+            Combatant defaultTarget = isHealAttack ? _activePlayer : _enemyParty[0];
             int mpCost = attack?.MpCost ?? 0;
             _pendingActionLauncher = () =>
             {
-                if (mpCost > 0) _playerParty[0].CurrentMp -= mpCost;
+                if (mpCost > 0) _activePlayer.CurrentMp -= mpCost;
                 BeginPlayerMagicAttack();
             };
             HideMenu();
-            EnterSelectingTarget(defaultTarget, MenuContext.AbsorbedMoves);
+            EnterSelectingTarget(defaultTarget, MenuContext.Skills);
         }
     }
 
@@ -487,23 +533,12 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Returns the AttackData associated with a submenu index, or null for non-attack entries (Back).
-    /// Indices 0 and 1 are the hardcoded base moves; further entries come from _subMenuAttacksData.
+    /// Returns the AttackData associated with a submenu index, or null for non-attack
+    /// entries (Beckon — utility ability without AttackData; Back — submenu exit).
+    /// AttackData references are resolved at rebuild time inside <see cref="RebuildSubMenu"/>
+    /// and stored directly in <c>_subMenuAttacksData</c>; this method is just a list read.
     /// </summary>
-    private AttackData GetSubMenuAttack(int index)
-    {
-        // Back (last entry) has no attack.
-        if (index == _subMenuLabelsData.Count - 1) return null;
-
-        // Base hardcoded moves.
-        if (index == 0) return _playerComboStrike;
-        if (index == 1) return null;  // Beckon — utility, no attack data
-        if (index == 2) return _playerMagicAttack;
-        if (index == 3) return _playerCureAttack;
-
-        // Dynamically added absorbed moves.
-        return _subMenuAttacksData[index];
-    }
+    private AttackData GetSubMenuAttack(int index) => _subMenuAttacksData[index];
 
     /// <summary>
     /// Returns whether a submenu option is currently selectable.
@@ -512,7 +547,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private bool IsSubMenuOptionEnabled(int index)
     {
-        var player = _playerParty[0];  // single MP spender in the current UI
+        var player = _activePlayer;  // MP affordability is per-active-player
 
         // Beckon — utility ability with a fixed MP cost (no AttackData backing).
         // Also disabled when there's nothing to draw out: no learnable move, or this

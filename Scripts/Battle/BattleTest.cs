@@ -245,7 +245,7 @@ public partial class BattleTest : Node2D
     // was entered from so Cancel returns to the correct menu (main / Absorbed
     // Moves submenu / Items submenu). All three fields are cleared on confirm
     // and on cancel.
-    private enum MenuContext { Main, AbsorbedMoves, Items }
+    private enum MenuContext { Main, Skills, Items }
     private Combatant     _selectedTarget;
     private System.Action _pendingActionLauncher;
     private MenuContext   _selectingTargetMenuContext;
@@ -287,6 +287,15 @@ public partial class BattleTest : Node2D
     // breaking the SafeDisconnectAnim(_playerParty[0], methodName) reference-equality pattern used
     // throughout. Option Y keeps the existing per-sequence storage pattern; the refactor
     // is the type change (ColorRect → Combatant) and the rename.
+    // Active player whose menu is currently being shown / acted on. At C4.5 this is
+    // always _playerParty[0] (assigned at top of ShowMenu); at C5 the queue rewrites
+    // it on each player turn so menu construction reflects the rotating active player.
+    // Read by RebuildSubMenu (gates Beckon and absorbed moves on IsAbsorber), the
+    // launchers in ConfirmMenuSelection / ConfirmSubMenuSelection (MP deduction,
+    // Defend toggle, default target for Cure / Items), and IsSubMenuOptionEnabled
+    // (per-active-player MP-affordability checks).
+    private Combatant _activePlayer;
+
     private Combatant _sequenceAttacker;
     private Combatant _sequenceDefender;
     private Vector2   _sequenceAttackerClosePos;  // close-but-not-touching stance position for this sequence
@@ -347,7 +356,6 @@ public partial class BattleTest : Node2D
     private AttackData _playerMagicAttack;
     private AttackData _playerBasicAttack;   // player_basic_attack.tres — Physical, BaseDamage 10
     private AttackData _playerComboStrike;   // player_combo_strike.tres — Physical, BaseDamage 6
-    private AttackData _absorbedMoveAttack;  // loaded on absorption; null until then
     private AttackData _playerCureAttack;    // player_cure.tres — Magic, BaseDamage 30 (used as heal amount)
     private AttackData _playerEtherEffect;   // player_ether_combo.tres — active variant for Ether item visual
 
@@ -1861,7 +1869,7 @@ public partial class BattleTest : Node2D
             case MenuContext.Main:
                 ShowMenu();
                 break;
-            case MenuContext.AbsorbedMoves:
+            case MenuContext.Skills:
                 _state             = BattleState.PlayerMenu;
                 _inputLocked       = false;
                 _menuLayer.Visible = true;
@@ -2424,8 +2432,16 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void PerformBeckon()
     {
+        // Defense-in-depth — the menu only renders Beckon for the Absorber, but a
+        // future code path that bypasses the menu would otherwise allow non-Absorbers
+        // to beckon. Reject and log; no MP deducted, no enemy turn started.
+        if (_activePlayer == null || !_activePlayer.IsAbsorber)
+        {
+            GD.PrintErr("[BattleTest] PerformBeckon called on non-Absorber — ignoring.");
+            return;
+        }
         const int beckonMpCost = 10;
-        var player = _playerParty[0];  // single beckoner in the current UI
+        var player = _activePlayer;
         player.CurrentMp -= beckonMpCost;
         UpdateMpBar();
         // Target defaults to _enemyParty[0] — matches the pre-Phase-6 single-enemy assumption.
@@ -2443,6 +2459,15 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void TryTriggerAbsorption(SequenceContext ctx)
     {
+        // Only the Absorber learns moves from a perfect parry. ctx.Target is the
+        // parrying combatant (the player being attacked); the Side check is defensive
+        // (this method is only called from enemy-sequence completion, so Target.Side
+        // should always be Player) and the IsAbsorber check prevents non-Absorber
+        // parries from accidentally enrolling moves into _absorbedMoves once C5's
+        // queue lets non-Absorbers parry.
+        if (ctx.Target.Side != CombatantSide.Player) return;
+        if (!ctx.Target.IsAbsorber) return;
+
         var currentAttack = ctx.CurrentAttack;
         if (EnemyData?.LearnableAttack == null || currentAttack != EnemyData.LearnableAttack) return;
         if (_absorbedMoves.Contains(EnemyData.LearnableAttack)) return;
@@ -2452,7 +2477,6 @@ public partial class BattleTest : Node2D
         // TODO: when player state/character system is built, migrate _absorbedMoves to the
         // Absorber character's persistent skill storage (see Combatant design doc).
 
-        _absorbedMoveAttack = EnemyData.LearnableAttack;
         RebuildSubMenu();
 
         ShowBattleMessage("I've got it.");
