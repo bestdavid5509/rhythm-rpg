@@ -147,6 +147,17 @@ public partial class BattleTest : Node2D
 
     private void ShowMenu()
     {
+        // C3-C4 intermediate-state TODO(C5): when slot 0 player dies at
+        // multi-unit, the post-enemy-turn ShowMenu fires before
+        // ShowGameOverOptionsPanel transitions _state. _endLabelShown
+        // is true at that point (set inside ShowEndLabel), and the menu
+        // must not render. C5's queue-driven turn-loop removes this
+        // scenario by routing turns to live combatants only — at which
+        // point this guard can be removed alongside the
+        // `|| _playerParty[0].IsDead` clauses at A1, A2, A3.
+        if (_endLabelShown)
+            return;
+
         _state                        = BattleState.PlayerMenu;
         _inputLocked                  = false;  // Unlock input — player can interact with menu.
         _playerParty[0].IsDefending   = false;  // Defend only lasts one enemy turn.
