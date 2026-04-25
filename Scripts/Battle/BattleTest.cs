@@ -153,6 +153,17 @@ public partial class BattleTest : Node2D
     // but is overridden by TestVictoryScreen.
     [Export] public bool TestGameOverScreen = false;
 
+    /// <summary>
+    /// Development scaffolding — populates the parties at 4 players
+    /// vs 5 enemies for multi-unit density testing. All players are
+    /// Knight copies; all enemies are Warrior Phase 1 copies. Phase 1
+    /// → Phase 2 transition is suppressed when active because the
+    /// transition assumes a single enemy. Lowest priority among test
+    /// flags: TestVictoryScreen, TestGameOverScreen, TestPhaseTransition
+    /// all override TestFullParty.
+    /// </summary>
+    [Export] public bool TestFullParty = false;
+
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
     private bool             _phase2Finalised;          // guards SwapToPhase2 state-finalisation from running twice
@@ -417,16 +428,19 @@ public partial class BattleTest : Node2D
                 GD.Print("[BattleTest] Phase2EnemyData defaulted to 8_sword_warrior_phase2.tres.");
         }
 
-        // Resolve end-of-battle test flags. Priority: Victory > GameOver > PhaseTransition.
-        // Test flags are forgiving scaffolding — if multiple are set, the higher-priority
-        // one wins and the others are logged-and-ignored rather than erroring out.
+        // Resolve end-of-battle test flags. Priority: Victory > GameOver > PhaseTransition >
+        // FullParty. Test flags are forgiving scaffolding — if multiple are set, the higher-
+        // priority one wins and the others are logged-and-ignored rather than erroring out.
         bool testVictory     = TestVictoryScreen;
         bool testGameOver    = TestGameOverScreen && !testVictory;
         bool testPhaseTrans  = TestPhaseTransition && !testVictory && !testGameOver;
+        bool testFullParty   = TestFullParty && !testVictory && !testGameOver && !testPhaseTrans;
         if (TestVictoryScreen && (TestGameOverScreen || TestPhaseTransition))
             GD.PrintErr("[TEST] TestVictoryScreen overrides TestGameOverScreen and TestPhaseTransition.");
         else if (TestGameOverScreen && TestPhaseTransition)
             GD.PrintErr("[TEST] TestGameOverScreen overrides TestPhaseTransition.");
+        if (TestFullParty && (testVictory || testGameOver || testPhaseTrans))
+            GD.PrintErr("[TEST] Victory/GameOver/PhaseTransition overrides TestFullParty.");
         bool skipIntro = testVictory || testGameOver;
 
         // TestVictoryScreen: swap EnemyData to Phase 2 before sprite build so the
@@ -440,6 +454,18 @@ public partial class BattleTest : Node2D
         else if (testGameOver)
         {
             GD.Print("[TEST] TestGameOverScreen active — skipping intro, player HP set to 1.");
+        }
+        else if (testFullParty)
+        {
+            // Multi-unit roster scaffolding. Override the inspector PartySize values; null
+            // out Phase2EnemyData so the Phase 1 → Phase 2 transition is suppressed at 4v5
+            // (the transition logic assumes a single enemy and would corrupt state when
+            // slots 1-4 are still alive at warrior death).
+            PlayerPartySize = 4;
+            EnemyPartySize  = 5;
+            Phase2EnemyData = null;
+            GD.Print("[TEST] TestFullParty active — 4 players vs 5 enemies.");
+            GD.Print("[TEST] TestFullParty suppresses Phase 1 → Phase 2 transition.");
         }
 
         // Grab character sprites and record their original positions for teardown restoration.
