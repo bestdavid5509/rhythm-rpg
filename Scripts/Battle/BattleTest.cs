@@ -1439,7 +1439,13 @@ public partial class BattleTest : Node2D
                 GD.Print("[BattleTest] Player HP reached zero mid-sequence.");
                 player.IsDead = true;
                 player.AnimSprite.Play("death");
-                if (CheckGameOver())
+                // C3-C4 intermediate-state TODO(C5): slot 0 is the only acting
+                // player until the queue lands; slot 0 death is effectively game
+                // over at this stage because no other player can take turns.
+                // Remove the `|| _playerParty[0].IsDead` clause when C5's queue
+                // replaces the alternation; the queue's IsDead-skip handles the
+                // underlying issue correctly across all party slots.
+                if (CheckGameOver() || _playerParty[0].IsDead)
                 {
                     // _state transition deferred to ShowGameOverOptionsPanel (2.0s later,
                     // matching Victory's pattern). During the beat, player.IsDead and
@@ -1657,7 +1663,13 @@ public partial class BattleTest : Node2D
             }
             else
                 PlayAnim(enemyAttacker, "idle");
-            if (CheckGameOver())
+            // C3-C4 intermediate-state TODO(C5): slot 0 is the only acting
+            // player until the queue lands; slot 0 death is effectively game
+            // over at this stage because no other player can take turns.
+            // Remove the `|| _playerParty[0].IsDead` clause when C5's queue
+            // replaces the alternation; the queue's IsDead-skip handles the
+            // underlying issue correctly across all party slots.
+            if (CheckGameOver() || _playerParty[0].IsDead)
                 ShowEndLabel("Game Over");
             return;
         }

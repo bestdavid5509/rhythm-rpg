@@ -413,6 +413,13 @@ observable verification is folded into C5's acceptance.
 
 ### C5 — Turn-order queue
 
+- **Remove C3-C4 intermediate-state Game Over exception.** Three
+  sites in BattleTest.cs (A1, A2) and BattleAnimator.cs (A3) carry
+  a `|| _playerParty[0].IsDead` clause added as a C4 follow-up to
+  handle slot 0 death before the queue exists. The queue's
+  IsDead-skip in `_queue.Advance()` resolves the underlying issue
+  across all slots. Grep `TODO(C5)` to find the exact removal
+  sites.
 - New `TurnOrderQueue` class. Computes a round's ordering from the two
   party lists by stable sort on `-Agility`, tie-break `Side == Player ? 0
   : 1` then party-list index. `Advance()` pops next alive combatant;

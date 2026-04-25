@@ -443,7 +443,13 @@ public partial class BattleTest : Node2D
         // Game Over only when aggregate wipe fires, not on any single combatant's death
         // animation completion. A dead slot 0 at multi-unit still fires this handler but
         // the battle continues if other players are alive.
-        if (CheckGameOver())
+        // C3-C4 intermediate-state TODO(C5): slot 0 is the only acting
+        // player until the queue lands; slot 0 death is effectively game
+        // over at this stage because no other player can take turns.
+        // Remove the `|| _playerParty[0].IsDead` clause when C5's queue
+        // replaces the alternation; the queue's IsDead-skip handles the
+        // underlying issue correctly across all party slots.
+        if (CheckGameOver() || _playerParty[0].IsDead)
             ShowEndLabel("Game Over");
     }
 
