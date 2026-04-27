@@ -147,22 +147,10 @@ public partial class BattleTest : Node2D
 
     private void ShowMenu()
     {
-        // C3-C4 intermediate-state TODO(C5): when slot 0 player dies at
-        // multi-unit, the post-enemy-turn ShowMenu fires before
-        // ShowGameOverOptionsPanel transitions _state. _endLabelShown
-        // is true at that point (set inside ShowEndLabel), and the menu
-        // must not render. C5's queue-driven turn-loop removes this
-        // scenario by routing turns to live combatants only — at which
-        // point this guard can be removed alongside the
-        // `|| _playerParty[0].IsDead` clauses at A1, A2, A3.
-        if (_endLabelShown)
-            return;
-
-        // Active player for this menu invocation. C4.5: always slot 0.
-        // C5's queue rewrites this assignment to source the active player from
-        // the round-order queue; everything downstream already reads _activePlayer.
-        _activePlayer = _playerParty[0];
-
+        // _activePlayer is set by AdvanceTurn before this method is called.
+        // The queue's IsDead-skip ensures dead combatants never reach here;
+        // CheckGameOver at AdvanceTurn entry catches end-of-battle before any
+        // dispatch.
         _state                        = BattleState.PlayerMenu;
         _inputLocked                  = false;  // Unlock input — player can interact with menu.
         _activePlayer.IsDefending     = false;  // Defend only lasts one enemy turn.
@@ -453,7 +441,7 @@ public partial class BattleTest : Node2D
                 _activePlayer.IsDefending = true;
                 GD.Print("[BattleTest] Player defending — incoming miss damage halved this turn.");
                 HideMenu();
-                BeginEnemyAttack();
+                AdvanceTurn();
                 break;
             case 3: ShowItemMenu(); break;  // Items
         }
@@ -472,11 +460,15 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        // Beckon — utility action, hands off to enemy turn immediately.
+        // Beckon — Absorber-only utility. Routes through SelectingTarget so the
+        // player picks which enemy to redirect onto themselves. The launcher
+        // reads _selectedTarget at confirm time and stores it on the active
+        // player's BeckoningTarget; cancel back-out costs nothing.
         if (label == "Beckon")
         {
+            _pendingActionLauncher = () => PerformBeckon();
             HideMenu();
-            PerformBeckon();
+            EnterSelectingTarget(_enemyParty[0], MenuContext.Skills);
             return;
         }
 

@@ -441,15 +441,9 @@ public partial class BattleTest : Node2D
         SafeDisconnectAnim(_sequenceDeathTarget, OnPlayerDeathFinished);
         GD.Print("[BattleTest] Player died.");
         // Game Over only when aggregate wipe fires, not on any single combatant's death
-        // animation completion. A dead slot 0 at multi-unit still fires this handler but
+        // animation completion. A dead slot at multi-unit still fires this handler but
         // the battle continues if other players are alive.
-        // C3-C4 intermediate-state TODO(C5): slot 0 is the only acting
-        // player until the queue lands; slot 0 death is effectively game
-        // over at this stage because no other player can take turns.
-        // Remove the `|| _playerParty[0].IsDead` clause when C5's queue
-        // replaces the alternation; the queue's IsDead-skip handles the
-        // underlying issue correctly across all party slots.
-        if (CheckGameOver() || _playerParty[0].IsDead)
+        if (CheckGameOver())
             ShowEndLabel("Game Over");
     }
 
@@ -744,8 +738,16 @@ public partial class BattleTest : Node2D
         // Reset attack-pool rotation so the new pool starts fresh.
         _lastAttackIndex = -1;
 
-        // Brief pause before the player regains control in Phase 2.
-        GetTree().CreateTimer(0.5f).Timeout += ShowMenu;
+        // Brief pause before the player regains control in Phase 2. Queue rebuilt
+        // because slot 0 enemy reanimated (HP restored, IsDead=false) — the new
+        // round must reflect post-swap state. AdvanceTurn fires once the queue
+        // has its fresh round.
+        GetTree().CreateTimer(0.5f).Timeout += () =>
+        {
+            _queue.Rebuild(_playerParty, _enemyParty);
+            GD.Print("[BattleTest] Phase 2 — queue rebuilt.");
+            AdvanceTurn();
+        };
         // TODO: Phase 2 music cue goes here.
     }
 
@@ -842,7 +844,7 @@ public partial class BattleTest : Node2D
             SafeDisconnectAnim(attacker, OnRetreatFinished);
             PlayAnimBackwards(attacker, "run");  // OWNER: BeginComboMissRetreat — retreat hop-back
             ConnectAnim(attacker, OnRetreatFinished);
-            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack);
+            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn);
         };
     }
 
@@ -910,7 +912,7 @@ public partial class BattleTest : Node2D
             PlayAnimBackwards(attacker, "run");  // OWNER: player turn, retreat hop-back
             ConnectAnim(attacker, OnRetreatFinished);
 
-            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack);
+            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn);
         };
     }
 

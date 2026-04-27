@@ -162,7 +162,7 @@ public partial class BattleTest : Node2D
     /// flags: TestVictoryScreen, TestGameOverScreen, TestPhaseTransition
     /// all override TestFullParty.
     /// </summary>
-    [Export] public bool TestFullParty = false;
+    [Export] public bool TestFullParty = true;
 
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
@@ -287,14 +287,29 @@ public partial class BattleTest : Node2D
     // breaking the SafeDisconnectAnim(_playerParty[0], methodName) reference-equality pattern used
     // throughout. Option Y keeps the existing per-sequence storage pattern; the refactor
     // is the type change (ColorRect → Combatant) and the rename.
-    // Active player whose menu is currently being shown / acted on. At C4.5 this is
-    // always _playerParty[0] (assigned at top of ShowMenu); at C5 the queue rewrites
-    // it on each player turn so menu construction reflects the rotating active player.
-    // Read by RebuildSubMenu (gates Beckon and absorbed moves on IsAbsorber), the
+    // Active player whose menu is currently being shown / acted on. Assigned by
+    // AdvanceTurn before ShowMenu fires for the player branch. Read by
+    // RebuildSubMenu (gates Beckon and absorbed moves on IsAbsorber), the
     // launchers in ConfirmMenuSelection / ConfirmSubMenuSelection (MP deduction,
     // Defend toggle, default target for Cure / Items), and IsSubMenuOptionEnabled
     // (per-active-player MP-affordability checks).
     private Combatant _activePlayer;
+
+    // Round-order queue (Phase 6 C5). Rebuilt at scene start, on Phase 2
+    // transition, and on round exhaustion inside AdvanceTurn. Owns turn-order
+    // semantics — call sites that previously fired ShowMenu / BeginEnemyAttack
+    // directly now route through AdvanceTurn, which advances the queue and
+    // dispatches to the appropriate side.
+    private TurnOrderQueue _queue = new();
+
+    // Set true at the end of intro dialogue; consumed once by AdvanceTurn to apply
+    // the post-intro menu fade-in (ShowMenuWithFadeIn instead of ShowMenu) on the
+    // first player turn. Avoids carrying a separate fade-aware AdvanceTurn variant.
+    private bool _firstTurnAfterIntro;
+
+    // Random source for enemy target selection (uniform random over alive players
+    // when no Beckon redirect is active). Seeded in _Ready via Randomize().
+    private Godot.RandomNumberGenerator _rng = new();
 
     private Combatant _sequenceAttacker;
     private Combatant _sequenceDefender;
@@ -625,6 +640,12 @@ public partial class BattleTest : Node2D
         BuildMenu();
         UpdateHPBars();
 
+        // Seed the enemy-target RNG and build the first round of the queue.
+        // The queue exists from scene start regardless of intro path; the first
+        // AdvanceTurn invocation moves the cursor to the first combatant.
+        _rng.Randomize();
+        _queue.Rebuild(_playerParty, _enemyParty);
+
         if (skipIntro)
         {
             // Test-flag path — skip the intro dialogue entirely and go straight to the
@@ -632,7 +653,7 @@ public partial class BattleTest : Node2D
             // scene doesn't open silent.
             if (testVictory) StartPhase2Music();
             else             StartPhase1Music();
-            ShowMenu();
+            AdvanceTurn();
         }
         else
         {
@@ -867,7 +888,12 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void OnIntroDialogueCompleted()
     {
-        ShowMenuWithFadeIn(0.5f);
+        // Flag consumed once inside AdvanceTurn — if the first turn goes to a
+        // player, AdvanceTurn applies the post-intro fade-in via
+        // ShowMenuWithFadeIn instead of ShowMenu. Single AdvanceTurn entry
+        // point; no separate fade-aware variant needed.
+        _firstTurnAfterIntro = true;
+        AdvanceTurn();
 
         if (GodotObject.IsInstanceValid(_introDialogue))
         {
@@ -1292,10 +1318,66 @@ public partial class BattleTest : Node2D
     }
 
     // =========================================================================
+    // Turn-order queue dispatch
+    // =========================================================================
+
+    /// <summary>
+    /// Advances the turn-order queue by one and dispatches to the appropriate
+    /// turn entry point: <see cref="ShowMenu"/> for player turns,
+    /// <see cref="BeginEnemyAttack"/> for enemy turns. Wins-out on the
+    /// aggregate <see cref="CheckGameOver"/> predicate at the top — if the
+    /// battle has ended, returns silently (the death-handler / mid-sequence
+    /// path already triggered the end-screen).
+    ///
+    /// On round exhaustion (Advance returns false), rebuilds the queue and
+    /// re-Advances to start a new round.
+    ///
+    /// All turn-transition call sites (post-action, post-Defend, post-magic,
+    /// post-Beckon, etc.) call this method directly with no preceding
+    /// <c>_queue.Advance()</c> — queue advancement is fully encapsulated here.
+    ///
+    /// Initial invocation: <see cref="_Ready"/> (skip-intro path) and
+    /// <see cref="OnIntroDialogueCompleted"/>; both pre-rebuild the queue.
+    /// </summary>
+    private void AdvanceTurn()
+    {
+        if (CheckGameOver()) return;
+
+        if (!_queue.Advance())
+        {
+            _queue.Rebuild(_playerParty, _enemyParty);
+            if (!_queue.Advance())
+            {
+                GD.PrintErr("[BattleTest] AdvanceTurn: empty queue post-rebuild.");
+                return;
+            }
+        }
+
+        var current = _queue.Current;
+        if (current.Side == CombatantSide.Player)
+        {
+            _activePlayer = current;
+            if (_firstTurnAfterIntro)
+            {
+                _firstTurnAfterIntro = false;
+                ShowMenuWithFadeIn(0.5f);
+            }
+            else
+            {
+                ShowMenu();
+            }
+        }
+        else
+        {
+            BeginEnemyAttack(current);
+        }
+    }
+
+    // =========================================================================
     // Enemy attack phase
     // =========================================================================
 
-    private void BeginEnemyAttack()
+    private void BeginEnemyAttack(Combatant enemyAttacker)
     {
         // Reentrancy guard — prevents cascading attack starts from stacked timer callbacks.
         if (_state == BattleState.EnemyAttack)
@@ -1319,7 +1401,12 @@ public partial class BattleTest : Node2D
 
         var selectedAttack = SelectEnemyAttack();
 
-        var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
+        // Resolve the defender for this enemy attack. Beckon redirect wins
+        // when any player has BeckoningTarget == enemyAttacker; otherwise a
+        // uniform-random pick from alive players. Threaded through to
+        // ExecuteEnemyAttack so the threat-reveal flash and the actual
+        // sequence agree on the defender.
+        var playerDefender = SelectEnemyTarget(enemyAttacker);
 
         // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
         // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
@@ -1332,21 +1419,19 @@ public partial class BattleTest : Node2D
             FlashCombatantWhite(enemyAttacker);
         }
 
-        // Phase 5 — threat reveal. Populate the threatened-combatants list (single
-        // entry today: the enemy always targets the single player; AOE-ready via the
-        // list so multi-target attacks can add more entries once AttackData gains
-        // target-pool metadata in Phase 6). Fire FlashCombatantThreatened on each to
-        // run the 0.6s red-tint pulse, then defer the actual attack launch by 0.6s
-        // so the tint fades out exactly as the attack animation begins.
+        // Phase 5 — threat reveal. Populated with the resolved defender post-
+        // redirect so the red-tint flash lands on the correct combatant. AOE-
+        // ready via the list so multi-target attacks can add more entries once
+        // AttackData gains target-pool metadata.
         _threatenedCombatants.Clear();
-        _threatenedCombatants.Add(_playerParty[0]);
+        _threatenedCombatants.Add(playerDefender);
         foreach (var target in _threatenedCombatants)
             FlashCombatantThreatened(target);
 
         GetTree().CreateTimer(0.6f).Timeout += () =>
         {
             if (!GodotObject.IsInstanceValid(this)) return;
-            ExecuteEnemyAttack(selectedAttack);
+            ExecuteEnemyAttack(enemyAttacker, playerDefender, selectedAttack);
         };
     }
 
@@ -1357,10 +1442,8 @@ public partial class BattleTest : Node2D
     /// pre-attack threat-reveal beat doesn't entangle with timer-callback plumbing
     /// on the hop-in branch's early-return.
     /// </summary>
-    private void ExecuteEnemyAttack(AttackData selectedAttack)
+    private void ExecuteEnemyAttack(Combatant enemyAttacker, Combatant playerDefender, AttackData selectedAttack)
     {
-        var enemyAttacker  = _enemyParty[0];  // single enemy in current UI
-        var playerDefender = _playerParty[0];
 
         // Build the sequence context once — the same reference threads through every
         // StepStarted / StepPassEvaluated / SequenceCompleted signal for this sequence.
@@ -1447,13 +1530,7 @@ public partial class BattleTest : Node2D
                 GD.Print("[BattleTest] Player HP reached zero mid-sequence.");
                 player.IsDead = true;
                 player.AnimSprite.Play("death");
-                // C3-C4 intermediate-state TODO(C5): slot 0 is the only acting
-                // player until the queue lands; slot 0 death is effectively game
-                // over at this stage because no other player can take turns.
-                // Remove the `|| _playerParty[0].IsDead` clause when C5's queue
-                // replaces the alternation; the queue's IsDead-skip handles the
-                // underlying issue correctly across all party slots.
-                if (CheckGameOver() || _playerParty[0].IsDead)
+                if (CheckGameOver())
                 {
                     // _state transition deferred to ShowGameOverOptionsPanel (2.0s later,
                     // matching Victory's pattern). During the beat, player.IsDead and
@@ -1577,8 +1654,11 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        // After player death, skip damage and animation reactions — circles continue silently.
-        if (_playerParty[0].IsDead) return;
+        // After the target's death, skip damage and animation reactions — circles
+        // continue silently. ctx.Target is the resolved defender (slot 0 at 1v1,
+        // random/redirected at multi-unit) — only their death should suppress further
+        // hit reactions on this sequence.
+        if (ctx.Target.IsDead) return;
 
         if (ctx.CurrentAttack.IsHopIn || !SkipHopIn)
             OnAttackPassEvaluated(result, passIndex);
@@ -1671,13 +1751,7 @@ public partial class BattleTest : Node2D
             }
             else
                 PlayAnim(enemyAttacker, "idle");
-            // C3-C4 intermediate-state TODO(C5): slot 0 is the only acting
-            // player until the queue lands; slot 0 death is effectively game
-            // over at this stage because no other player can take turns.
-            // Remove the `|| _playerParty[0].IsDead` clause when C5's queue
-            // replaces the alternation; the queue's IsDead-skip handles the
-            // underlying issue correctly across all party slots.
-            if (CheckGameOver() || _playerParty[0].IsDead)
+            if (CheckGameOver())
                 ShowEndLabel("Game Over");
             return;
         }
@@ -1732,7 +1806,7 @@ public partial class BattleTest : Node2D
                     else
                         PlayAnim(attacker, "idle");
                 }
-                PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += ShowMenu);
+                PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn);
                 return;
             }
 
@@ -2093,7 +2167,7 @@ public partial class BattleTest : Node2D
         // point at the just-completed sequence until the next StartSequence overwrites.
         if (_sequenceAttacker.Side == _sequenceDefender.Side)
         {
-            GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
+            GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn;
             return;
         }
 
@@ -2103,7 +2177,7 @@ public partial class BattleTest : Node2D
             // Mirror the physical attack flow: short pause then enemy takes their turn.
             // ShowMenu is intentionally skipped here — magic attacks transition directly
             // to BeginEnemyAttack, matching the behaviour after OnFinalSlashFinished.
-            GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
+            GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn;
             return;
         }
 
@@ -2147,7 +2221,7 @@ public partial class BattleTest : Node2D
     private void UseEtherItem()
     {
         var player = _playerParty[0];  // item user is the single player in the current UI
-        if (player.IsDead) { BeginEnemyAttack(); return; }
+        if (player.IsDead) { AdvanceTurn(); return; }
         _state       = BattleState.PlayerAttack;
         _inputLocked = true;  // block input during item use
 
@@ -2182,7 +2256,7 @@ public partial class BattleTest : Node2D
         SafeDisconnectAnim(attacker, OnEtherAnimationFinished);
         if (attacker.IsDead) return;
         PlayAnim(attacker, "idle");
-        GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack;
+        GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn;
     }
 
     /// <summary>
@@ -2293,7 +2367,7 @@ public partial class BattleTest : Node2D
                 PlayTeardown(() =>
                 {
                     PlayAnim(enemyAttacker, "idle");
-                    GetTree().CreateTimer(0.5f).Timeout += ShowMenu;
+                    GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn;
                 });
             }
             else
@@ -2391,6 +2465,35 @@ public partial class BattleTest : Node2D
         return _enemyAttackData;
     }
 
+    /// <summary>
+    /// Resolves an enemy attacker's defender. Beckon redirect wins when any
+    /// alive player has <c>BeckoningTarget == attacker</c>; otherwise a
+    /// uniform-random pick from alive players (via <see cref="_rng"/>).
+    /// Read-only — does not consume <c>BeckoningTarget</c>; consumption
+    /// happens in <see cref="SelectEnemyAttack"/> when the redirected
+    /// enemy commits to its learnable.
+    /// </summary>
+    private Combatant SelectEnemyTarget(Combatant attacker)
+    {
+        // Beckon redirect — first alive beckoner wins.
+        foreach (var p in _playerParty)
+        {
+            if (p.BeckoningTarget == attacker && !p.IsDead)
+                return p;
+        }
+
+        // Uniform random over alive players.
+        var alive = new List<Combatant>();
+        foreach (var p in _playerParty)
+            if (!p.IsDead) alive.Add(p);
+        if (alive.Count == 0)
+        {
+            GD.PrintErr("[BattleTest] SelectEnemyTarget: no alive players; defaulting to slot 0.");
+            return _playerParty[0];
+        }
+        return alive[_rng.RandiRange(0, alive.Count - 1)];
+    }
+
     public void ShowBattleMessage(string text) => _battleMessage.Show(text);
 
     /// <summary>
@@ -2442,13 +2545,14 @@ public partial class BattleTest : Node2D
         }
         const int beckonMpCost = 10;
         var player = _activePlayer;
+        // Target picked by the Beckoner via SelectingTarget; falls back to
+        // _enemyParty[0] defensively if the launcher fired without a target.
+        var beckonTarget = _selectedTarget ?? _enemyParty[0];
         player.CurrentMp -= beckonMpCost;
         UpdateMpBar();
-        // Target defaults to _enemyParty[0] — matches the pre-Phase-6 single-enemy assumption.
-        // C10 replaces this with a SelectingTarget flow so the Beckoner picks the redirect target.
-        player.BeckoningTarget = _enemyParty[0];
-        GD.Print($"[BattleTest] Player beckons (-{beckonMpCost} MP) — enemy will use learnable move next turn.");
-        BeginEnemyAttack();
+        player.BeckoningTarget = beckonTarget;
+        GD.Print($"[BattleTest] Player beckons {beckonTarget.Name} (-{beckonMpCost} MP) — enemy will use learnable move next turn.");
+        AdvanceTurn();
     }
 
     /// <summary>
