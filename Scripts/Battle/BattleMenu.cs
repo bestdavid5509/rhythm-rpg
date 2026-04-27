@@ -410,6 +410,17 @@ public partial class BattleTest : Node2D
 
         // Absorbed moves — Absorber only. Order is iteration order of the HashSet
         // (stable enough at Phase 6 scope: at most 1 entry per fight today).
+        //
+        // TODO(absorber-skills-overflow): The Absorber's Skills list grows
+        // unboundedly across a playthrough as moves are absorbed. With N absorbed
+        // moves the panel has (4 built-ins + N + Back) entries and at some N the
+        // panel overflows the viewport. Revisit when:
+        //   - typical N range is observed in actual gameplay (likely 5-15)
+        //   - input model for scrolling is decided (page up/down, continuous
+        //     scroll, "more..." entry, etc.)
+        //   - whether scrolling alone is sufficient or the menu wants
+        //     categorization (offensive / defensive / utility)
+        // Not blocking today — current absorbed-moves count is small.
         if (_activePlayer != null && _activePlayer.IsAbsorber)
         {
             foreach (var move in _absorbedMoves)
