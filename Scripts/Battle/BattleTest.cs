@@ -1942,6 +1942,16 @@ public partial class BattleTest : Node2D
         var launcher = _pendingActionLauncher;
         _pendingActionLauncher = null;
         launcher?.Invoke();
+        // C6 follow-up: refresh panels so the post-launcher state transition
+        // (BeginPlayer*Attack sets _state = PlayerAttack) and any MP deduction
+        // inside the launcher are reflected immediately, rather than lagging
+        // until first-circle-resolve fires the next reactive refresh.
+        //
+        // Assumes synchronous launcher execution: all state mutations are
+        // committed by the time launcher.Invoke() returns. Future launchers
+        // that defer state changes (coroutines, timers) would need their own
+        // post-mutation refresh.
+        UpdateHPBars();
     }
 
     private void CancelTargetSelection()
