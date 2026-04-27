@@ -750,8 +750,18 @@ public partial class BattleTest : Node2D
         // has its fresh round.
         GetTree().CreateTimer(0.5f).Timeout += () =>
         {
-            _queue.Rebuild(_playerParty, _enemyParty);
-            GD.Print("[BattleTest] Phase 2 — queue rebuilt.");
+            // Phase 2 transition resets all combatants' AP to 0 (C7-prereq).
+            //
+            // TODO(phase2-boss-ap-tuning): all combatants currently start at AP=0
+            // post-Phase-2, which means the player's fastest combatant (Knight at
+            // Agility=12) acts before the revived boss. Narratively the boss has
+            // just powered up, so them acting first might fit the beat better.
+            // Tunable post-Phase-6 by passing initial-AP overrides into Reset
+            // (e.g. boss starts at AP=80 → acts in 2 ticks vs Knight's 9). Out
+            // of scope for C7-prereq; documenting the decision so future-me
+            // remembers why this is currently uniform-zero.
+            _queue.Reset(_playerParty, _enemyParty);
+            GD.Print("[BattleTest] Phase 2 — queue reset.");
             AdvanceTurn();
         };
         // TODO: Phase 2 music cue goes here.

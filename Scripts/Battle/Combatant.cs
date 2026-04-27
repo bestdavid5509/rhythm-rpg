@@ -37,7 +37,7 @@ public class Combatant
     // ---- Combat-universal state (both sides use these) ----
     public int              CurrentHp;
     public int              MaxHp;
-    public int              Agility = 10; // Turn-order sort key. All combatants share Agility = 10 in Phase 6; tie-break is players-before-enemies then party-list order.
+    public int              Agility = 10; // Per-tick AP gain for the C7-prerequisite tick-based scheduler (TurnOrderQueue). Higher Agility = more turns. Test values are assigned per slot in BuildPlayerCombatantForSlot / BuildEnemyCombatantForSlot; this default (10) is a fallback for any future code path that constructs a Combatant outside the slot-builder. Tie-break at simultaneous threshold-crossings: players-before-enemies, then party-list index.
     public bool             IsDead;
     public Vector2          Origin;        // world-space origin for positioning (ColorRect-based)
     public Vector2          AnimSpriteOrigin;  // AnimatedSprite2D position snapshot at scene-init time, after floor-anchor + per-slot offset. Distinct from Origin (different formulas per side). Read by PlayHopIn / PlayTeardown for the AnimSprite tween's destination so each slot retreats to its own origin instead of slot 0's.

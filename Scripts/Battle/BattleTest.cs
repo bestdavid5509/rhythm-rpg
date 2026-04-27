@@ -650,11 +650,12 @@ public partial class BattleTest : Node2D
         BuildMenu();
         UpdateHPBars();
 
-        // Seed the enemy-target RNG and build the first round of the queue.
-        // The queue exists from scene start regardless of intro path; the first
-        // AdvanceTurn invocation moves the cursor to the first combatant.
+        // Seed the enemy-target RNG and zero the queue's AP state. The queue
+        // exists from scene start regardless of intro path; the first
+        // AdvanceTurn invocation simulates ticks until the highest-Agility
+        // combatant crosses threshold (C7-prerequisite tick-based scheduler).
         _rng.Randomize();
-        _queue.Rebuild(_playerParty, _enemyParty);
+        _queue.Reset(_playerParty, _enemyParty);
 
         if (skipIntro)
         {
@@ -1339,31 +1340,31 @@ public partial class BattleTest : Node2D
     /// battle has ended, returns silently (the death-handler / mid-sequence
     /// path already triggered the end-screen).
     ///
-    /// On round exhaustion (Advance returns false), rebuilds the queue and
-    /// re-Advances to start a new round.
+    /// Tick-based AP scheduler (C7-prerequisite): <c>_queue.Advance</c>
+    /// simulates ticks until a combatant crosses the AP threshold and returns
+    /// that combatant directly. No round-exhaustion / rebuild dance — the
+    /// tick model has no rounds. Defensive null check is the only end-of-
+    /// queue case (would imply all combatants dead, which CheckGameOver
+    /// catches first).
     ///
     /// All turn-transition call sites (post-action, post-Defend, post-magic,
     /// post-Beckon, etc.) call this method directly with no preceding
     /// <c>_queue.Advance()</c> — queue advancement is fully encapsulated here.
     ///
     /// Initial invocation: <see cref="_Ready"/> (skip-intro path) and
-    /// <see cref="OnIntroDialogueCompleted"/>; both pre-rebuild the queue.
+    /// <see cref="OnIntroDialogueCompleted"/>; both pre-Reset the queue.
     /// </summary>
     private void AdvanceTurn()
     {
         if (CheckGameOver()) return;
 
-        if (!_queue.Advance())
+        var current = _queue.Advance();
+        if (current == null)
         {
-            _queue.Rebuild(_playerParty, _enemyParty);
-            if (!_queue.Advance())
-            {
-                GD.PrintErr("[BattleTest] AdvanceTurn: empty queue post-rebuild.");
-                return;
-            }
+            GD.PrintErr("[BattleTest] AdvanceTurn: queue.Advance returned null — all combatants dead?");
+            return;
         }
 
-        var current = _queue.Current;
         if (current.Side == CombatantSide.Player)
         {
             _activePlayer = current;
@@ -3249,13 +3250,25 @@ public partial class BattleTest : Node2D
                                                    ColorRect rect,
                                                    AnimatedSprite2D sprite)
     {
+        // C7-prereq test agility values: divergent so the tick-based scheduler
+        // produces visibly varied turn order at TestFullParty. Slot 0 (Knight,
+        // Absorber) is fastest at 12 to exercise Absorber mechanics frequently
+        // during scaffolding. Final balance values TBD post-Phase-6.
+        int agility = slotIndex switch
+        {
+            0 => 12,  // Knight   (Absorber)        — fastest player
+            1 =>  8,  // Knight 2 (Damage Dealer)   — slowest player
+            2 => 10,  // Knight 3 (Buffer/Debuffer)
+            3 =>  9,  // Knight 4 (Healer)
+            _ => 10,
+        };
         return new Combatant
         {
             Name             = slotIndex == 0 ? "Knight" : $"Knight {slotIndex + 1}",
             Side             = CombatantSide.Player,
             CurrentHp        = PlayerMaxHP,
             MaxHp            = PlayerMaxHP,
-            Agility          = 10,
+            Agility          = agility,
             IsDead           = false,
             Origin           = rect.Position,
             AnimSpriteOrigin = sprite.Position,  // post-floor-anchor + per-slot offset
@@ -3279,6 +3292,18 @@ public partial class BattleTest : Node2D
                                                   AnimatedSprite2D sprite,
                                                   int enemyInitialMaxHp)
     {
+        // C7-prereq test agility values: slot 0 (boss) at 10, mooks varied
+        // 7-11 for visible asymmetry against the player party. Final balance
+        // TBD post-Phase-6.
+        int agility = slotIndex switch
+        {
+            0 => 10,  // Warrior   (boss)
+            1 =>  7,  // Warrior 2 (slowest mook)
+            2 => 11,  // Warrior 3 (fastest mook)
+            3 =>  8,  // Warrior 4
+            4 =>  9,  // Warrior 5
+            _ => 10,
+        };
         string baseName = EnemyData?.EnemyName ?? "Enemy";
         return new Combatant
         {
@@ -3286,7 +3311,7 @@ public partial class BattleTest : Node2D
             Side             = CombatantSide.Enemy,
             CurrentHp        = enemyInitialMaxHp,
             MaxHp            = enemyInitialMaxHp,
-            Agility          = 10,
+            Agility          = agility,
             IsDead           = false,
             Origin           = rect.Position,
             AnimSpriteOrigin = sprite.Position,  // post-floor-anchor + per-slot offset
