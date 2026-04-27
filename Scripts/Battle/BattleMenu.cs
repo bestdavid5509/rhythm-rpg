@@ -55,7 +55,13 @@ public partial class BattleTest : Node2D
     private Label[]         _menuLabels;
     private Label[]         _subMenuLabels;
     private Label[]         _itemMenuLabels;
-    private Label           _menuHeaderLabel;  // "▶ {Name}'s turn" header on the main menu (C6)
+    // Active-player header — "{Name}'s turn" — shown on each panel above its option list.
+    // Main-menu label is created once in BuildMenu and persists. Sub-menu / item-menu labels
+    // are created (and wiped + recreated) on every rebuild via PopulateSubMenuPanel /
+    // RebuildItemMenu, since those rebuilds clear all VBox children.
+    private Label           _mainMenuHeaderLabel;
+    private Label           _subMenuHeaderLabel;
+    private Label           _itemMenuHeaderLabel;
 
     private void BuildMenu()
     {
@@ -67,13 +73,11 @@ public partial class BattleTest : Node2D
         // header label as the first child. The header text is filled in by
         // RefreshMenuHeader (called from AdvanceTurn / ShowMenu). Header sits above
         // a solid divider (not the fade-out variant used between options) so the
-        // header reads as a category label rather than another menu entry.
+        // header reads as a category label rather than another menu entry. The same
+        // header treatment is applied to the sub-menu and item-menu panels via
+        // AddMenuHeader, so the active player's name stays visible while drilling.
         _mainMenuPanel = MakeMenuPanel(_menuLayer, out _mainMenuVBox);
-        _menuHeaderLabel = new Label();
-        StyleLabel(_menuHeaderLabel, fontSize: MenuHeaderFontSize);
-        _menuHeaderLabel.HorizontalAlignment = HorizontalAlignment.Left;
-        _mainMenuVBox.AddChild(_menuHeaderLabel);
-        AddMenuHeaderDivider(_mainMenuVBox);
+        AddMenuHeader(_mainMenuVBox, out _mainMenuHeaderLabel);
 
         _menuLabels    = new Label[MenuOptionLabels.Length];
         for (int i = 0; i < MenuOptionLabels.Length; i++)
@@ -122,24 +126,52 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Updates the action-menu header label with the active player's name. Called
-    /// from AdvanceTurn (after _activePlayer = current) and from ShowMenu (defensive,
-    /// covers the first-turn-after-intro path). Hidden when _activePlayer is null
-    /// (pre-first-turn / transient states).
+    /// Adds the active-player header — a Label sized at <see cref="MenuHeaderFontSize"/>
+    /// followed by an <see cref="AddMenuHeaderDivider"/> — as the first two children of
+    /// a menu panel's <c>VBoxContainer</c>. Used by all three panels (main, sub, item)
+    /// so the active player's name persists while drilling between menus.
+    /// </summary>
+    private void AddMenuHeader(VBoxContainer parent, out Label headerLabel)
+    {
+        headerLabel = new Label();
+        StyleLabel(headerLabel, fontSize: MenuHeaderFontSize);
+        headerLabel.HorizontalAlignment = HorizontalAlignment.Left;
+        parent.AddChild(headerLabel);
+        AddMenuHeaderDivider(parent);
+    }
+
+    /// <summary>
+    /// Updates every menu-panel header with the active player's name. Called from
+    /// AdvanceTurn (after _activePlayer = current), ShowMenu (defensive — covers
+    /// first-turn-after-intro), and the rebuild paths (PopulateSubMenuPanel /
+    /// RebuildItemMenu) so freshly-recreated header labels pick up current text.
+    /// All three labels hide together when _activePlayer is null. Per-label null
+    /// guards because the sub-menu / item-menu labels haven't been built yet on
+    /// the very first BuildMenu call (RebuildSubMenu fires before RebuildItemMenu).
     /// </summary>
     private void RefreshMenuHeader()
     {
-        if (_menuHeaderLabel == null) return;
-        if (_activePlayer == null)
-        {
-            _menuHeaderLabel.Visible = false;
-            return;
-        }
-        _menuHeaderLabel.Visible = true;
+        bool   show = _activePlayer != null;
         // Combatant names are already title-case ("Knight", "Knight 2"); no .ToUpper().
         // No "▶ " prefix — the active option in the option list already carries its
         // own ▶ cursor; two cursors create confusion, not emphasis.
-        _menuHeaderLabel.Text = $"{_activePlayer.Name}'s turn";
+        string text = show ? $"{_activePlayer.Name}'s turn" : string.Empty;
+
+        if (_mainMenuHeaderLabel != null)
+        {
+            _mainMenuHeaderLabel.Visible = show;
+            _mainMenuHeaderLabel.Text    = text;
+        }
+        if (_subMenuHeaderLabel != null)
+        {
+            _subMenuHeaderLabel.Visible = show;
+            _subMenuHeaderLabel.Text    = text;
+        }
+        if (_itemMenuHeaderLabel != null)
+        {
+            _itemMenuHeaderLabel.Visible = show;
+            _itemMenuHeaderLabel.Text    = text;
+        }
     }
 
     /// <summary>
@@ -286,6 +318,11 @@ public partial class BattleTest : Node2D
         foreach (var child in _itemMenuVBox.GetChildren())
             child.QueueFree();
 
+        // Active-player header is recreated on every rebuild because the wipe above
+        // destroyed the previous one. RefreshMenuHeader at the end populates the
+        // text now that the field reference points at the new label.
+        AddMenuHeader(_itemMenuVBox, out _itemMenuHeaderLabel);
+
         _itemMenuLabels = new Label[_itemMenuLabelsData.Count];
         for (int i = 0; i < _itemMenuLabelsData.Count; i++)
         {
@@ -296,6 +333,7 @@ public partial class BattleTest : Node2D
             _itemMenuVBox.AddChild(label);
             _itemMenuLabels[i] = label;
         }
+        RefreshMenuHeader();
     }
 
     private void HideMenu()
@@ -309,9 +347,13 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void PopulateSubMenuPanel()
     {
-        // Clear existing labels and dividers.
+        // Clear existing labels and dividers (including the previous header label,
+        // which is recreated below).
         foreach (var child in _subMenuVBox.GetChildren())
             child.QueueFree();
+
+        // Active-player header — same treatment as the main menu.
+        AddMenuHeader(_subMenuVBox, out _subMenuHeaderLabel);
 
         _subMenuLabels = new Label[_subMenuLabelsData.Count];
         for (int i = 0; i < _subMenuLabelsData.Count; i++)
@@ -323,6 +365,7 @@ public partial class BattleTest : Node2D
             _subMenuVBox.AddChild(label);
             _subMenuLabels[i] = label;
         }
+        RefreshMenuHeader();
     }
 
     /// <summary>
