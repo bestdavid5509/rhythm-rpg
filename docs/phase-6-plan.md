@@ -585,6 +585,15 @@ perfect parry → learnable added to P1's Skills submenu. Non-Absorbers
   (sprite top). No more hardcoded (440, 570) / (1480, 530).
 - Cure target circle (self-targeting visual): same fix; centers on the
   actual sprite, not the ColorRect.
+- Magic-attack timing-circle target position: the closing circle for
+  ranged/magic attacks spawns at `ComputeCameraMidpoint(attacker,
+  defender)` — the midpoint between attacker and defender. At multi-
+  unit this places the circle in arbitrary empty space depending on
+  which slots are involved (e.g. front-row attacker + back-row
+  defender lands the circle off-axis from any combatant). Fix
+  alongside the broader multi-unit positioning work picked up in C6
+  / C7 / C11; pin to the defender's visual center (or a tunable
+  offset above it) rather than the geometric midpoint.
 
 Verification: visual. Pointer above every combatant regardless of
 formation position. Damage numbers float from the hit sprite's actual
