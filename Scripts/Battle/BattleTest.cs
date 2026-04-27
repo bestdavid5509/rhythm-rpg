@@ -60,13 +60,21 @@ public partial class BattleTest : Node2D
     // Type is Control (not ColorRect) because the fill uses 3-part TextureRect children
     // and relies on ClipContents for the drain-from-right visual. The existing
     // `.Size = new Vector2(BarWidth * pct, ...)` update logic continues to work.
-    private Control _playerHPFill;
-    private Control _enemyHPFill;
-    private Control _playerMPFill;
-    private Label     _playerHPLabel;
-    private Label     _enemyHPLabel;
-    private Label     _enemyNameLabel;  // rewritten on phase transition
-    private Label     _playerMPLabel;
+    // Per-combatant HP/MP status panels — one PartyPanel per combatant. Lists are
+    // populated in BuildStatusPanels by looping _playerParty / _enemyParty (built in
+    // BuildInitialParties). Replaces the pre-Phase-6 singleton fields
+    // (_playerHPFill / _playerHPLabel / _playerMPFill / _playerMPLabel /
+    // _enemyHPFill / _enemyHPLabel / _enemyNameLabel) so multi-unit combat
+    // (4 / 5 at TestFullParty) renders each combatant's HP / MP / name independently.
+    //
+    // Player side: each panel is its own PanelContainer (PartyPanel.Panel != null)
+    //              arranged in a count-aware centered strip at the bottom-center.
+    // Enemy side : all enemies share a single combined panel (_enemyCombinedPanel)
+    //              with one row per combatant inside its VBoxContainer. Each enemy's
+    //              PartyPanel has Panel == null and ModulateTarget == the row HBox.
+    private System.Collections.Generic.List<PartyPanel> _playerPanels = new();
+    private System.Collections.Generic.List<PartyPanel> _enemyPanels  = new();
+    private PanelContainer                              _enemyCombinedPanel;  // shared outer panel; rows live inside
 
     // =========================================================================
     // Perfect parry
@@ -157,7 +165,7 @@ public partial class BattleTest : Node2D
     /// flags: TestVictoryScreen, TestGameOverScreen, TestPhaseTransition
     /// all override TestFullParty.
     /// </summary>
-    [Export] public bool TestFullParty = true;
+    [Export] public bool TestFullParty = false;
 
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
@@ -431,7 +439,6 @@ public partial class BattleTest : Node2D
         _timingPromptScene = GD.Load<PackedScene>("res://Scenes/Battle/TimingPrompt.tscn");
 
         ApplyBackgroundGradient();
-        BuildStatusPanels();
         _battleMessage = new BattleMessage(this);
         BuildMusicPlayer();
         // Phase 1 music is deferred — started silent and faded in when the intro dialogue
@@ -636,6 +643,10 @@ public partial class BattleTest : Node2D
                 p.CurrentHp = 1;
         }
 
+        // Status panels iterate _playerParty / _enemyParty (built above) — must run AFTER
+        // BuildInitialParties + EnemyData HP init + test-flag HP overrides so each per-slot
+        // panel binds to a fully-initialised Combatant.
+        BuildStatusPanels();
         BuildMenu();
         UpdateHPBars();
 
@@ -1356,6 +1367,13 @@ public partial class BattleTest : Node2D
         if (current.Side == CombatantSide.Player)
         {
             _activePlayer = current;
+            // Refresh status panels so the new active player's panel picks up the
+            // PanelActiveModulate highlight (and the previous active player's panel
+            // returns to PanelAliveModulate). UpdateHPBars iterates all panels and
+            // calls ApplyDeadOrActiveStyling per panel — single source of truth for
+            // panel-state transitions.
+            UpdateHPBars();
+            RefreshMenuHeader();
             if (_firstTurnAfterIntro)
             {
                 _firstTurnAfterIntro = false;
@@ -1383,6 +1401,11 @@ public partial class BattleTest : Node2D
         // require a reentrancy guard here. The pre-C5 guard mistakenly tripped on
         // legitimate consecutive enemy turns (E1 → E2 in 4v5 rotation).
         _state               = BattleState.EnemyAttack;
+        // Refresh panels so the previous player's PanelActiveModulate highlight
+        // clears now that we're past the player-input phase. ApplyDeadOrActiveStyling
+        // gates the highlight on _state being a player-input state — _state is set
+        // above, so the very next refresh returns the panel to PanelAliveModulate.
+        UpdateHPBars();
         _inputLocked         = false;  // Unlock input — enemy prompts are about to appear.
         _parryClean          = true;
         _isPlayerMagicAttack = false;
@@ -2686,25 +2709,91 @@ public partial class BattleTest : Node2D
         return false;
     }
 
-    // Single-party prototype: the HP bars render the first (and only) combatant on each
-    // side. Multi-unit UI layout is the scaffolding exercise's concern (Phase 6).
+    /// <summary>
+    /// Modulate constants for the active-player highlight + dead-slot grayout. Applied
+    /// to <see cref="PartyPanel.ModulateTarget"/> in <see cref="ApplyDeadOrActiveStyling"/>:
+    /// dead branch dominates; active-player branch only fires for the player whose
+    /// turn is currently in flight (gated on <c>_state in {PlayerMenu, SelectingTarget}</c>).
+    /// </summary>
+    private static readonly Color PanelAliveModulate  = Colors.White;                          // alive, not active
+    private static readonly Color PanelActiveModulate = new(1.5f,  1.5f,  1.2f, 1.0f);         // active — bright white-warm boost (visible at a glance)
+    private static readonly Color PanelDeadModulate   = new(0.5f,  0.5f,  0.5f, 0.6f);         // dead — desaturated + transparent
+
+    /// <summary>
+    /// Refreshes every status panel from its bound combatant. Iterates _playerPanels +
+    /// _enemyPanels (built in BuildStatusPanels per-slot). Reads HP / MP / Name on each
+    /// call — name re-read covers Phase 2 transition (slot-0 enemy combatant.Name is
+    /// reassigned in SwapToPhase2 before this method is called). Active-player +
+    /// dead-slot Modulate also refreshes on every call so the highlight tracks the
+    /// queue advance and dead-state transitions.
+    /// </summary>
     private void UpdateHPBars()
     {
-        var player = _playerParty[0];
-        var enemy  = _enemyParty[0];
-        _playerHPFill.Size  = new Vector2(BarWidth * ((float)player.CurrentHp / player.MaxHp), _playerHPFill.Size.Y);
-        _playerHPLabel.Text = $"{player.CurrentHp}/{player.MaxHp}";
-        _enemyHPFill.Size   = new Vector2(BarWidth * ((float)enemy.CurrentHp  / enemy.MaxHp),  _enemyHPFill.Size.Y);
-        _enemyHPLabel.Text  = $"{enemy.CurrentHp}/{enemy.MaxHp}";
-        UpdateMpBar();
+        foreach (var pp in _playerPanels) RefreshPanel(pp);
+        foreach (var pp in _enemyPanels)  RefreshPanel(pp);
     }
 
-    // Single-party prototype: the MP bar renders the first (and only) player combatant.
+    /// <summary>
+    /// Player-side MP-only refresh — kept as a separate entry-point for the call sites
+    /// that mutate MP without HP (BeckonConfirm, RestoreMp). Iterates only the player
+    /// panels; enemy panels carry no MP bar.
+    /// </summary>
     private void UpdateMpBar()
     {
-        var player = _playerParty[0];
-        _playerMPFill.Size  = new Vector2(BarWidth * ((float)player.CurrentMp / player.MaxMp), _playerMPFill.Size.Y);
-        _playerMPLabel.Text = $"{player.CurrentMp}/{player.MaxMp}";
+        foreach (var pp in _playerPanels) RefreshMp(pp);
+    }
+
+    /// <summary>
+    /// Refreshes a single panel's HP bar + label, name label (re-read to catch Phase 2
+    /// transitions and any future name change), MP bar (player panels only), and
+    /// active-player / dead-slot Modulate styling. Bar width comes from the fill
+    /// Control's existing Size.X — set at construction by BuildStyledBar from the
+    /// barWidth parameter (player = BarWidth=232; enemy row = EnemyRowBarWidth=150).
+    /// </summary>
+    private void RefreshPanel(PartyPanel pp)
+    {
+        var c = pp.BoundCombatant;
+        // Read the bar's authored width from its parent's CustomMinimumSize so the
+        // refresh works for both 232-wide player bars and 150-wide enemy-row bars.
+        float barWidth = pp.HpFill.GetParent<Control>().CustomMinimumSize.X;
+        pp.HpFill.Size = new Vector2(barWidth * ((float)c.CurrentHp / c.MaxHp), pp.HpFill.Size.Y);
+        pp.HpLabel.Text = $"{c.CurrentHp}/{c.MaxHp}";
+        pp.NameLabel.Text = c.Name;
+        if (pp.MpFill != null) RefreshMp(pp);
+        ApplyDeadOrActiveStyling(pp);
+    }
+
+    private void RefreshMp(PartyPanel pp)
+    {
+        var c = pp.BoundCombatant;
+        float barWidth = pp.MpFill.GetParent<Control>().CustomMinimumSize.X;
+        pp.MpFill.Size = new Vector2(barWidth * ((float)c.CurrentMp / c.MaxMp), pp.MpFill.Size.Y);
+        pp.MpLabel.Text = $"{c.CurrentMp}/{c.MaxMp}";
+    }
+
+    /// <summary>
+    /// Applies dead-slot grayout or active-player highlight to <c>pp.ModulateTarget</c>.
+    /// Mutually exclusive: dead branch dominates (the queue's <c>Advance</c> filters
+    /// dead combatants, so active-player + dead is unreachable in steady state, but
+    /// the dead branch wins defensively). Active-player branch fires only during the
+    /// player input phases (<c>PlayerMenu</c> / <c>SelectingTarget</c>) so the highlight
+    /// clears automatically when the enemy turn begins.
+    /// </summary>
+    private void ApplyDeadOrActiveStyling(PartyPanel pp)
+    {
+        if (pp.ModulateTarget == null) return;
+        var c = pp.BoundCombatant;
+        if (c.IsDead)
+        {
+            pp.ModulateTarget.Modulate = PanelDeadModulate;
+            return;
+        }
+        bool playerInputPhase = _state == BattleState.PlayerMenu
+                             || _state == BattleState.SelectingTarget;
+        bool isActivePlayer   = playerInputPhase
+                             && c.Side == CombatantSide.Player
+                             && c == _activePlayer;
+        pp.ModulateTarget.Modulate = isActivePlayer ? PanelActiveModulate : PanelAliveModulate;
     }
 
     private void RestoreMp(int amount)
@@ -2742,6 +2831,14 @@ public partial class BattleTest : Node2D
     internal const float UiEdgeMargin   = 20f;  // distance from viewport edge for status/menu panels
     internal const float UiPanelSpacing = 8f;   // gap between menu panel and player panel
 
+    // Minimum bottom-inset for any UI overlay (BattleMessage / BattleDialogue / future
+    // narrative bubbles) that needs to clear the player panel strip at the bottom.
+    // = UiEdgeMargin (20) + PlayerPanelHeight (104) + UiPanelSpacing (8) + breathing
+    // room (12) = 144. The +12 leaves visible whitespace between the strip's top edge
+    // and the overlay bottom rather than touching at the seam. Shared across
+    // BattleMessage and BattleDialogue so a single change flows to all overlay sites.
+    internal const float OverlayBottomInset = 144f;
+
     // Panel texture picks — const strings so a single swap retunes the whole UI.
     internal const string UiPanelFillPath    = "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Transparent center/panel-transparent-center-000.png";
     internal const string UiPanelBorderPath  = "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Border/panel-border-019.png";
@@ -2768,9 +2865,20 @@ public partial class BattleTest : Node2D
     private const string UiBarBlueMidPath   = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barBlue_horizontalBlue.png";
     private const string UiBarBlueRightPath = "res://Assets/UI/kenney_ui-pack-rpg-expansion/PNG/barBlue_horizontalRight.png";
 
-    // Reference to the player panel node — BattleMenu reads its actual post-layout height
-    // to position the menu panel directly above it, regardless of panel content size.
-    internal PanelContainer _playerPanel;
+    // Per-slot column width + gap for the count-aware centered player strip at the
+    // bottom of the screen. The strip's left edge is recomputed each construction
+    // pass from PlayerPartySize so the group stays centered for any party size.
+    // 1920×1080 logical viewport (project.godot:20-21).
+    private const float PlayerPanelWidth = PanelMinWidthStatus;  // 260f — player panel column width
+    private const float PanelStackGap    =   8f;                 // horizontal gap between adjacent panels
+    private const float ViewportWidth    = 1920f;                // matches project.godot viewport_width
+
+    // Combined enemy panel constants — Octopath-style single panel containing one
+    // compact row per enemy. Bar shrinks from BarWidth (232) to EnemyRowBarWidth
+    // (150) so name + bar + HP text fit inline within the row HBox.
+    private const float EnemyCombinedPanelMinWidth = 320f;       // wider than per-slot 220 to fit row HBox
+    private const float EnemyRowNameWidth          =  90f;       // fixed name-label width so bars line up across rows
+    private const float EnemyRowBarWidth           = 150f;       // compact HP bar (vs player 232)
 
     /// <summary>
     /// Applies the subtle vertical navy gradient shader to the existing Background ColorRect
@@ -2891,23 +2999,24 @@ public partial class BattleTest : Node2D
                                 string backLeft, string backMid, string backRight,
                                 string fillLeft, string fillMid, string fillRight,
                                 out Control fillControl, out Label overlayLabel,
-                                Color? fillTint = null)
+                                Color? fillTint = null,
+                                float  barWidth = BarWidth)
     {
         // Background (always full width, never resized).
-        AddThreePartBarChildren(parent, backLeft, backMid, backRight);
+        AddThreePartBarChildren(parent, backLeft, backMid, backRight, barWidth);
 
         // Fill — resized by HP/MP percentage. ClipContents crops its children when it shrinks.
         fillControl = new Control();
         fillControl.Position     = Vector2.Zero;
-        fillControl.Size         = new Vector2(BarWidth, BarHeight);
+        fillControl.Size         = new Vector2(barWidth, BarHeight);
         fillControl.ClipContents = true;
         if (fillTint.HasValue) fillControl.Modulate = fillTint.Value;
         parent.AddChild(fillControl);
-        AddThreePartBarChildren(fillControl, fillLeft, fillMid, fillRight);
+        AddThreePartBarChildren(fillControl, fillLeft, fillMid, fillRight, barWidth);
 
         // Numeric overlay label centered over the full bar.
         overlayLabel                     = new Label();
-        overlayLabel.Size                = new Vector2(BarWidth, BarHeight);
+        overlayLabel.Size                = new Vector2(barWidth, BarHeight);
         overlayLabel.HorizontalAlignment = HorizontalAlignment.Center;
         overlayLabel.VerticalAlignment   = VerticalAlignment.Center;
         StyleLabel(overlayLabel);
@@ -2920,7 +3029,8 @@ public partial class BattleTest : Node2D
     /// so they stay at fixed pixel locations even when the parent resizes (ClipContents handles crop).
     /// </summary>
     private void AddThreePartBarChildren(Control parent,
-                                         string leftPath, string midPath, string rightPath)
+                                         string leftPath, string midPath, string rightPath,
+                                         float  barWidth = BarWidth)
     {
         var left = new TextureRect();
         left.Texture     = GD.Load<Texture2D>(leftPath);
@@ -2932,26 +3042,43 @@ public partial class BattleTest : Node2D
         var mid = new TextureRect();
         mid.Texture     = GD.Load<Texture2D>(midPath);
         mid.Position    = new Vector2(BarCapDisplayWidth, 0f);
-        mid.Size        = new Vector2(BarWidth - 2f * BarCapDisplayWidth, BarHeight);
+        mid.Size        = new Vector2(barWidth - 2f * BarCapDisplayWidth, BarHeight);
         mid.StretchMode = TextureRect.StretchModeEnum.Scale;
         parent.AddChild(mid);
 
         var right = new TextureRect();
         right.Texture     = GD.Load<Texture2D>(rightPath);
-        right.Position    = new Vector2(BarWidth - BarCapDisplayWidth, 0f);
+        right.Position    = new Vector2(barWidth - BarCapDisplayWidth, 0f);
         right.Size        = new Vector2(BarCapDisplayWidth, BarHeight);
         right.StretchMode = TextureRect.StretchModeEnum.Scale;
         parent.AddChild(right);
     }
 
+    /// <summary>
+    /// Constructs the combined enemy panel (one shared PanelContainer with one row per
+    /// combatant) and a count-aware centered row of player panels at the bottom of the
+    /// screen. At 1v1 the player strip centers a single panel mid-bottom — visual diff
+    /// from the pre-C6 bottom-left anchor (acknowledged design change).
+    ///
+    /// Must run AFTER <see cref="BuildInitialParties"/> populates _playerParty /
+    /// _enemyParty (panels bind to existing combatants), and BEFORE the first
+    /// <see cref="UpdateHPBars"/> call (which iterates the panel lists).
+    /// </summary>
     private void BuildStatusPanels()
     {
         var layer = new CanvasLayer();
         layer.Name = "StatusPanels";
         AddChild(layer);
 
-        BuildEnemyPanel(layer);
-        BuildPlayerPanel(layer);
+        BuildEnemyCombinedPanel(layer);
+
+        // Centered player strip: total width = N panels + (N-1) gaps; left edge =
+        // (viewport - total) / 2 places the group symmetrically.
+        int   n          = _playerParty.Count;
+        float stripWidth = n * PlayerPanelWidth + (n - 1) * PanelStackGap;
+        float stripLeft  = (ViewportWidth - stripWidth) * 0.5f;
+        for (int i = 0; i < n; i++)
+            _playerPanels.Add(BuildPlayerPanelForSlot(layer, _playerParty[i], i, stripLeft));
     }
 
     // Horizontal spacing between successive combatant slots at C3. Placeholder formation;
@@ -3160,10 +3287,17 @@ public partial class BattleTest : Node2D
         };
     }
 
-    private void BuildEnemyPanel(CanvasLayer layer)
+    /// <summary>
+    /// Builds the combined enemy panel — Octopath-style single PanelContainer at the
+    /// top-right with one compact row per enemy inside its VBoxContainer. Stored on
+    /// <see cref="_enemyCombinedPanel"/> for any future direct reference. Each row
+    /// is backed by a <see cref="PartyPanel"/> with <c>Panel = null</c> and
+    /// <c>ModulateTarget = row HBox</c> so per-row dead/alive Modulate styling
+    /// applies independently.
+    /// </summary>
+    private void BuildEnemyCombinedPanel(CanvasLayer layer)
     {
-        // Anchored to the top-right corner of the viewport, grows leftward.
-        var panel = MakeLayeredPanel(PanelMinWidthEnemy, out var content);
+        var panel = MakeLayeredPanel(EnemyCombinedPanelMinWidth, out var content);
         panel.AnchorLeft     = 1f;
         panel.AnchorRight    = 1f;
         panel.AnchorTop      = 0f;
@@ -3172,34 +3306,64 @@ public partial class BattleTest : Node2D
         panel.OffsetRight    = -UiEdgeMargin;
         panel.OffsetTop      = UiEdgeMargin;
         layer.AddChild(panel);
+        _enemyCombinedPanel = panel;
 
-        string enemyName = EnemyData != null ? EnemyData.EnemyName : "Enemy";
-        AddEnemyRow(content, enemyName, out _enemyHPFill, out _enemyHPLabel);
+        for (int i = 0; i < _enemyParty.Count; i++)
+            _enemyPanels.Add(BuildEnemyRow(content, _enemyParty[i]));
     }
 
-    private void AddEnemyRow(VBoxContainer parent, string name,
-                              out Control hpFill, out Label hpLabel)
+    /// <summary>
+    /// Builds one row inside the combined enemy panel — an HBoxContainer of
+    /// [Name Label][HP fill bar][HP overlay text]. The row itself is the
+    /// ModulateTarget so per-enemy dead-state grayout doesn't bleed into siblings.
+    /// </summary>
+    private PartyPanel BuildEnemyRow(VBoxContainer parent, Combatant combatant)
     {
-        // Name above, HP bar below.
-        _enemyNameLabel      = new Label();
-        _enemyNameLabel.Text = name;
-        StyleLabel(_enemyNameLabel, fontSize: 15);
-        parent.AddChild(_enemyNameLabel);
+        var row = new HBoxContainer();
+        row.AddThemeConstantOverride("separation", 8);
+        parent.AddChild(row);
+
+        var nameLabel = new Label();
+        nameLabel.Text                = combatant.Name;
+        nameLabel.CustomMinimumSize   = new Vector2(EnemyRowNameWidth, 0);
+        nameLabel.HorizontalAlignment = HorizontalAlignment.Left;
+        nameLabel.VerticalAlignment   = VerticalAlignment.Center;
+        StyleLabel(nameLabel);
+        row.AddChild(nameLabel);
 
         var barContainer = new Control();
-        barContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
-        parent.AddChild(barContainer);
+        barContainer.CustomMinimumSize = new Vector2(EnemyRowBarWidth, BarHeight);
+        row.AddChild(barContainer);
 
         BuildStyledBar(barContainer,
                        UiBarBackLeftPath, UiBarBackMidPath, UiBarBackRightPath,
                        UiBarRedLeftPath,  UiBarRedMidPath,  UiBarRedRightPath,
-                       out hpFill, out hpLabel,
-                       fillTint: HpFillTint);
+                       out var hpFill, out var hpLabel,
+                       fillTint: HpFillTint,
+                       barWidth: EnemyRowBarWidth);
+
+        return new PartyPanel
+        {
+            Panel          = null,         // combined panel held in _enemyCombinedPanel
+            ModulateTarget = row,          // per-row Modulate so dead-styling is local to one row
+            NameLabel      = nameLabel,
+            HpFill         = hpFill,
+            HpLabel        = hpLabel,
+            MpFill         = null,
+            MpLabel        = null,
+            BoundCombatant = combatant,
+        };
     }
 
-    private void BuildPlayerPanel(CanvasLayer layer)
+    /// <summary>
+    /// Builds a player HP/MP panel for one slot in the count-aware centered strip at the
+    /// bottom of the screen. <paramref name="stripLeft"/> is the X coordinate of the
+    /// strip's left edge (computed once in <see cref="BuildStatusPanels"/> so the group
+    /// stays centered for any party size). Each slot offsets <c>stripLeft + slotIndex *
+    /// (PlayerPanelWidth + PanelStackGap)</c> rightward.
+    /// </summary>
+    private PartyPanel BuildPlayerPanelForSlot(CanvasLayer layer, Combatant combatant, int slotIndex, float stripLeft)
     {
-        // Anchored to the bottom-left corner of the viewport.
         var panel = MakeLayeredPanel(PanelMinWidthStatus, out var content);
         panel.AnchorLeft     = 0f;
         panel.AnchorRight    = 0f;
@@ -3207,25 +3371,28 @@ public partial class BattleTest : Node2D
         panel.AnchorBottom   = 1f;
         panel.GrowHorizontal = Control.GrowDirection.End;
         panel.GrowVertical   = Control.GrowDirection.Begin;
-        panel.OffsetLeft     = UiEdgeMargin;
+        panel.OffsetLeft     = stripLeft + slotIndex * (PlayerPanelWidth + PanelStackGap);
         panel.OffsetBottom   = -UiEdgeMargin;
         layer.AddChild(panel);
-        _playerPanel = panel;
 
-        AddPlayerRow(content, "Knight",
-                     out _playerHPFill, out _playerHPLabel,
-                     out _playerMPFill, out _playerMPLabel);
+        var pp = new PartyPanel
+        {
+            Panel          = panel,
+            ModulateTarget = panel,  // outer panel is the Modulate target — cascades to all children
+            BoundCombatant = combatant,
+        };
+        AddPlayerRow(content, combatant.Name, pp);
+        return pp;
     }
 
-    private void AddPlayerRow(VBoxContainer parent, string name,
-                               out Control hpFill, out Label hpLabel,
-                               out Control mpFill, out Label mpLabel)
+    private void AddPlayerRow(VBoxContainer parent, string name, PartyPanel pp)
     {
         // Name, then HP bar, then MP bar stacked vertically with 4px gap (VBox separation).
         var nameLabel = new Label();
         nameLabel.Text = name;
         StyleLabel(nameLabel, fontSize: 15);
         parent.AddChild(nameLabel);
+        pp.NameLabel = nameLabel;
 
         var hpContainer = new Control();
         hpContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
@@ -3233,8 +3400,10 @@ public partial class BattleTest : Node2D
         BuildStyledBar(hpContainer,
                        UiBarBackLeftPath, UiBarBackMidPath, UiBarBackRightPath,
                        UiBarRedLeftPath,  UiBarRedMidPath,  UiBarRedRightPath,
-                       out hpFill, out hpLabel,
+                       out var hpFill, out var hpLabel,
                        fillTint: HpFillTint);
+        pp.HpFill  = hpFill;
+        pp.HpLabel = hpLabel;
 
         var mpContainer = new Control();
         mpContainer.CustomMinimumSize = new Vector2(BarWidth, BarHeight);
@@ -3242,7 +3411,9 @@ public partial class BattleTest : Node2D
         BuildStyledBar(mpContainer,
                        UiBarBackLeftPath, UiBarBackMidPath, UiBarBackRightPath,
                        UiBarBlueLeftPath, UiBarBlueMidPath, UiBarBlueRightPath,
-                       out mpFill, out mpLabel);
+                       out var mpFill, out var mpLabel);
+        pp.MpFill  = mpFill;
+        pp.MpLabel = mpLabel;
     }
 
     /// <summary>

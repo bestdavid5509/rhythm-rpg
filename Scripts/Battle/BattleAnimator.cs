@@ -735,7 +735,10 @@ public partial class BattleTest : Node2D
         enemyCombatant.MaxHp     = EnemyData.MaxHp;
         enemyCombatant.CurrentHp = EnemyData.MaxHp;
         enemyCombatant.IsDead    = false;
-        if (_enemyNameLabel != null) _enemyNameLabel.Text = EnemyData.EnemyName;
+        // Enemy panel name label is re-read from enemyCombatant.Name on every
+        // RefreshPanel call (UpdateHPBars below); pre-C6 this required an explicit
+        // _enemyNameLabel.Text = ... here, but the per-slot panel binding makes
+        // that redundant.
         UpdateHPBars();
 
         // Reset attack-pool rotation so the new pool starts fresh.

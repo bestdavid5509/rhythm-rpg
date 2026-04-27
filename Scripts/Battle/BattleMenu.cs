@@ -28,6 +28,12 @@ public partial class BattleTest : Node2D
     // MP cost for Beckon (utility ability with no AttackData backing).
     private const int BeckonMpCost = 10;
 
+    // Font sizes for the action menu — header is the largest (category label),
+    // option labels are bumped above the default UiFontSize=14 so they read
+    // clearly alongside the larger header.
+    private const int MenuHeaderFontSize = 20;
+    private const int MenuOptionFontSize = 18;
+
     private static readonly Color ColorMenuSelected      = new Color(1.00f, 0.90f, 0.20f, 1.00f);  // yellow — selected item
     private static readonly Color ColorMenuNormal        = new Color(1.00f, 1.00f, 1.00f, 1.00f);  // white  — unselected, no category
     private static readonly Color ColorMenuDisabled      = new Color(0.45f, 0.45f, 0.45f, 1.00f);  // grey   — disabled item
@@ -49,6 +55,7 @@ public partial class BattleTest : Node2D
     private Label[]         _menuLabels;
     private Label[]         _subMenuLabels;
     private Label[]         _itemMenuLabels;
+    private Label           _menuHeaderLabel;  // "▶ {Name}'s turn" header on the main menu (C6)
 
     private void BuildMenu()
     {
@@ -56,14 +63,24 @@ public partial class BattleTest : Node2D
         _menuLayer.Name = "BattleMenu";
         AddChild(_menuLayer);
 
-        // Main menu — Attack / Skills / Defend / Items.
+        // Main menu — Attack / Skills / Defend / Items, with the active-player
+        // header label as the first child. The header text is filled in by
+        // RefreshMenuHeader (called from AdvanceTurn / ShowMenu). Header sits above
+        // a solid divider (not the fade-out variant used between options) so the
+        // header reads as a category label rather than another menu entry.
         _mainMenuPanel = MakeMenuPanel(_menuLayer, out _mainMenuVBox);
+        _menuHeaderLabel = new Label();
+        StyleLabel(_menuHeaderLabel, fontSize: MenuHeaderFontSize);
+        _menuHeaderLabel.HorizontalAlignment = HorizontalAlignment.Left;
+        _mainMenuVBox.AddChild(_menuHeaderLabel);
+        AddMenuHeaderDivider(_mainMenuVBox);
+
         _menuLabels    = new Label[MenuOptionLabels.Length];
         for (int i = 0; i < MenuOptionLabels.Length; i++)
         {
             if (i > 0) AddMenuDivider(_mainMenuVBox);
             var label = new Label();
-            StyleLabel(label);
+            StyleLabel(label, fontSize: MenuOptionFontSize);
             label.HorizontalAlignment = HorizontalAlignment.Left;
             _mainMenuVBox.AddChild(label);
             _menuLabels[i] = label;
@@ -78,21 +95,14 @@ public partial class BattleTest : Node2D
         RebuildItemMenu();
 
         _menuLayer.Visible = false;
-
-        // Position menu panels directly above the player panel once its size is known.
-        // Runs deferred so the PanelContainer layout pass has completed; also re-fires on resize.
-        if (_playerPanel != null)
-        {
-            _playerPanel.Resized += PositionMenuPanelsAbovePlayerPanel;
-            CallDeferred(MethodName.PositionMenuPanelsAbovePlayerPanel);
-        }
     }
 
     /// <summary>
     /// Builds a layered Kenney 9-slice panel anchored to the bottom-left of the viewport.
-    /// The panel's OffsetBottom is set by <see cref="PositionMenuPanelsAbovePlayerPanel"/>
-    /// once the player panel's post-layout height is known. Every menu variant (main,
-    /// skills, items) uses this same position — only one is visible at a time.
+    /// Position is fixed (does not track the active player's panel) — the player panel
+    /// strip lives at bottom-center post-C6, so the action menu has its own dedicated
+    /// corner at bottom-left. The active player is communicated via the menu header
+    /// label (see RefreshMenuHeader) instead.
     /// </summary>
     private PanelContainer MakeMenuPanel(CanvasLayer layer, out VBoxContainer content)
     {
@@ -104,26 +114,32 @@ public partial class BattleTest : Node2D
         p.GrowHorizontal = Control.GrowDirection.End;
         p.GrowVertical   = Control.GrowDirection.Begin;
         p.OffsetLeft     = UiEdgeMargin;
-        // OffsetBottom populated by PositionMenuPanelsAbovePlayerPanel — default here keeps
-        // the panel visible if the player panel is unavailable for some reason.
-        p.OffsetBottom   = -(UiEdgeMargin + 100f + UiPanelSpacing);
+        // Bottom-aligned with the player strip — both sit at OffsetBottom = -UiEdgeMargin
+        // so the menu and the strip share a baseline. Visually grounded; no floating.
+        p.OffsetBottom   = -UiEdgeMargin;
         layer.AddChild(p);
         return p;
     }
 
     /// <summary>
-    /// Repositions all menu panels so their bottom edge sits exactly
-    /// (UiPanelSpacing + UiEdgeMargin) below the player panel's top edge, using the
-    /// player panel's actual post-layout height.
+    /// Updates the action-menu header label with the active player's name. Called
+    /// from AdvanceTurn (after _activePlayer = current) and from ShowMenu (defensive,
+    /// covers the first-turn-after-intro path). Hidden when _activePlayer is null
+    /// (pre-first-turn / transient states).
     /// </summary>
-    private void PositionMenuPanelsAbovePlayerPanel()
+    private void RefreshMenuHeader()
     {
-        if (_playerPanel == null) return;
-        float playerHeight = _playerPanel.Size.Y;
-        float offsetBottom = -(UiEdgeMargin + playerHeight + UiPanelSpacing);
-        if (_mainMenuPanel != null) _mainMenuPanel.OffsetBottom = offsetBottom;
-        if (_subMenuPanel  != null) _subMenuPanel .OffsetBottom = offsetBottom;
-        if (_itemMenuPanel != null) _itemMenuPanel.OffsetBottom = offsetBottom;
+        if (_menuHeaderLabel == null) return;
+        if (_activePlayer == null)
+        {
+            _menuHeaderLabel.Visible = false;
+            return;
+        }
+        _menuHeaderLabel.Visible = true;
+        // Combatant names are already title-case ("Knight", "Knight 2"); no .ToUpper().
+        // No "▶ " prefix — the active option in the option list already carries its
+        // own ▶ cursor; two cursors create confusion, not emphasis.
+        _menuHeaderLabel.Text = $"{_activePlayer.Name}'s turn";
     }
 
     /// <summary>
@@ -145,6 +161,40 @@ public partial class BattleTest : Node2D
         parent.AddChild(divider);
     }
 
+    /// <summary>
+    /// Adds the action-menu header divider — a Kenney fade-texture variant matching
+    /// the panel's other UI chrome (NinePatch borders use the same family). Distinct
+    /// from the between-options <see cref="AddMenuDivider"/> (fade-000 at 6px)
+    /// in that fade-002 has a stronger center crossbar and renders at the texture's
+    /// natural 10px height, so the active player's name reads as a category label
+    /// rather than another menu entry.
+    /// 4px spacer Controls above and below give the divider visible breathing room
+    /// between the header text and the first option (VBoxContainer separation only
+    /// affects spacing between adjacent children, not above/below specific ones).
+    /// </summary>
+    private void AddMenuHeaderDivider(VBoxContainer parent)
+    {
+        // Top padding before divider.
+        var topPad = new Control();
+        topPad.CustomMinimumSize = new Vector2(0f, 4f);
+        parent.AddChild(topPad);
+
+        // The Kenney fade-002 textured divider (96x10 natural; horizontal stretches
+        // to panel width; vertical stays at natural 10 px to avoid distortion).
+        var divider = new TextureRect();
+        divider.Texture             = GD.Load<Texture2D>(
+            "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Divider Fade/divider-fade-002.png");
+        divider.StretchMode         = TextureRect.StretchModeEnum.Scale;
+        divider.SizeFlagsHorizontal = Control.SizeFlags.Fill;
+        divider.CustomMinimumSize   = new Vector2(0f, 10f);
+        parent.AddChild(divider);
+
+        // Bottom padding after divider.
+        var bottomPad = new Control();
+        bottomPad.CustomMinimumSize = new Vector2(0f, 4f);
+        parent.AddChild(bottomPad);
+    }
+
     private void ShowMenu()
     {
         // _activePlayer is set by AdvanceTurn before this method is called.
@@ -162,6 +212,16 @@ public partial class BattleTest : Node2D
         _itemMenuPanel.Visible        = false;
         _menuLayer.Visible            = true;
         RefreshMenuLabels();
+        // Defensive header refresh — the AdvanceTurn call before this also updates
+        // it, but the first-turn-after-intro path enters via ShowMenuWithFadeIn
+        // which doesn't go through AdvanceTurn for the very first turn.
+        RefreshMenuHeader();
+        // Refresh panels — _state is now PlayerMenu, so the active-player highlight
+        // branch fires for the correct panel. The earlier UpdateHPBars in AdvanceTurn
+        // still covers dead-slot Modulate refresh at queue-advance time, but at that
+        // call _state hasn't transitioned yet (still EnemyAttack from the prior turn);
+        // this second refresh catches the active highlight once the state is right.
+        UpdateHPBars();
         GD.Print("[BattleTest] Player menu shown.");
     }
 
@@ -231,7 +291,7 @@ public partial class BattleTest : Node2D
         {
             if (i > 0) AddMenuDivider(_itemMenuVBox);
             var label = new Label();
-            StyleLabel(label);
+            StyleLabel(label, fontSize: MenuOptionFontSize);
             label.HorizontalAlignment = HorizontalAlignment.Left;
             _itemMenuVBox.AddChild(label);
             _itemMenuLabels[i] = label;
@@ -258,7 +318,7 @@ public partial class BattleTest : Node2D
         {
             if (i > 0) AddMenuDivider(_subMenuVBox);
             var label = new Label();
-            StyleLabel(label);
+            StyleLabel(label, fontSize: MenuOptionFontSize);
             label.HorizontalAlignment = HorizontalAlignment.Left;
             _subMenuVBox.AddChild(label);
             _subMenuLabels[i] = label;
