@@ -39,7 +39,8 @@ public class Combatant
     public int              MaxHp;
     public int              Agility = 10; // Turn-order sort key. All combatants share Agility = 10 in Phase 6; tie-break is players-before-enemies then party-list order.
     public bool             IsDead;
-    public Vector2          Origin;        // world-space origin for positioning
+    public Vector2          Origin;        // world-space origin for positioning (ColorRect-based)
+    public Vector2          AnimSpriteOrigin;  // AnimatedSprite2D position snapshot at scene-init time, after floor-anchor + per-slot offset. Distinct from Origin (different formulas per side). Read by PlayHopIn / PlayTeardown for the AnimSprite tween's destination so each slot retreats to its own origin instead of slot 0's.
     public ColorRect        PositionRect;  // existing anchor node (formerly _playerSprite / _enemySprite)
     public AnimatedSprite2D AnimSprite;    // existing animated sprite node (formerly _playerAnimSprite / _enemyAnimSprite)
 

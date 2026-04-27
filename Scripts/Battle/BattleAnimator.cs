@@ -680,7 +680,10 @@ public partial class BattleTest : Node2D
         _enemyAnimSprite.Scale    = new Vector2(3f, 3f);
         _enemyAnimSprite.Position = new Vector2(_enemyAnimSprite.Position.X,
                                                 FloorY - enemyFh * 3f * 0.6f + enemyOffsetY);
-        _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;
+        // Re-snapshot the per-combatant AnimSpriteOrigin on the slot-0 enemy so
+        // PlayHopIn / PlayTeardown read the new Phase 2 origin (Phase 1's origin
+        // was a different sprite at a different floor anchor).
+        _enemyParty[0].AnimSpriteOrigin = _enemyAnimSprite.Position;
         _enemyAnimSprite.Play("idle");
     }
 

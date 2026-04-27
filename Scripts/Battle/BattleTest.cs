@@ -106,19 +106,14 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Returns the world-space spawn position for a damage number floating above the
-    /// given combatant's sprite. For the 1v1 prototype these are visually-tuned per-side
-    /// constants matching the sprites' rest positions in the current scene.
-    ///
-    /// TODO (audit finding B5 / scaffolding phase): derive at call time from the unit's
-    /// rest-position sprite anchor + frame-size offset so damage numbers track per-unit
-    /// locations at multi-combat density, rather than hardcoded per-side values. Using
-    /// rest position (not live <c>sprite.GlobalPosition</c>) keeps the number anchored
-    /// to the unit's home location, unaffected by slam or hop-in tweens mid-combat.
+    /// given combatant's sprite — top-center of the unit's ColorRect minus a 20px upward
+    /// offset. Reads per-combatant <see cref="Combatant.Origin"/>, so multi-unit combat
+    /// correctly anchors damage numbers to each combatant's home location. Uses rest
+    /// position (not live <c>sprite.GlobalPosition</c>) so the number stays anchored
+    /// even during slam / hop-in tweens.
     /// </summary>
     private static Vector2 ComputeDamageOrigin(Combatant unit) =>
-        unit.Side == CombatantSide.Player
-            ? new Vector2(440f,  570f)
-            : new Vector2(1480f, 530f);
+        unit.Origin + new Vector2(unit.PositionRect.Size.X / 2f, -20f);
 
     // =========================================================================
     // Prompt management
@@ -276,8 +271,10 @@ public partial class BattleTest : Node2D
     private ColorRect _enemySprite;
     private Vector2   _playerOrigin;          // ColorRect position at scene load — positioning math anchor
     private Vector2   _enemyOrigin;
-    private Vector2   _playerAnimSpriteOrigin; // AnimatedSprite2D position after floor-anchoring in _Ready
-    private Vector2   _enemyAnimSpriteOrigin;  // AnimatedSprite2D position after floor-anchoring in _Ready
+    // Per-slot AnimatedSprite2D origins (post-floor-anchor) live on the Combatant
+    // (Combatant.AnimSpriteOrigin), set in BuildPlayerCombatantForSlot /
+    // BuildEnemyCombatantForSlot. The pre-Phase-6 singleton snapshots
+    // _playerAnimSpriteOrigin / _enemyAnimSpriteOrigin only tracked slot 0.
 
     // Per-sequence combat context — set at the start of each attack turn, read by
     // positioning helpers and animation-callback continuations throughout the sequence.
@@ -514,7 +511,9 @@ public partial class BattleTest : Node2D
         _playerAnimSprite.Scale    = new Vector2(3f, 3f);
         _playerAnimSprite.Position = new Vector2(_playerAnimSprite.Position.X,
                                                  FloorY - playerFrameH * 3f * 0.5f);
-        _playerAnimSpriteOrigin    = _playerAnimSprite.Position;  // snapshot for teardown restoration
+        // Per-slot AnimSpriteOrigin snapshots are taken in BuildPlayerCombatantForSlot /
+        // BuildEnemyCombatantForSlot — the slot-0 sprite's snapshot reads the position
+        // set on the line above.
         _playerAnimSprite.Play("idle");  // OWNER: _Ready — scene init, no battle state yet
 
         // Enemy animated sprite — SpriteFrames built programmatically from the sheet.
@@ -528,7 +527,7 @@ public partial class BattleTest : Node2D
         float enemyOffsetY = EnemyData?.SpriteOffsetY ?? 130f;
         _enemyAnimSprite.Position = new Vector2(_enemyAnimSprite.Position.X,
                                                 FloorY - enemyFh * 3f * 0.6f + enemyOffsetY);
-        _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;  // snapshot for teardown restoration
+        // Slot-0 enemy AnimSpriteOrigin snapshot taken in BuildEnemyCombatantForSlot.
         _enemyAnimSprite.Play("idle");
 
         // Combatant-overlay shader — composites two independent effects (white flash
@@ -1379,13 +1378,10 @@ public partial class BattleTest : Node2D
 
     private void BeginEnemyAttack(Combatant enemyAttacker)
     {
-        // Reentrancy guard — prevents cascading attack starts from stacked timer callbacks.
-        if (_state == BattleState.EnemyAttack)
-        {
-            GD.Print("[BattleTest] BeginEnemyAttack skipped — already in EnemyAttack state.");
-            return;
-        }
-
+        // C5: the queue is the single source of turn flow; every AdvanceTurn call
+        // site is explicit, so there's no event-driven double-fire risk that would
+        // require a reentrancy guard here. The pre-C5 guard mistakenly tripped on
+        // legitimate consecutive enemy turns (E1 → E2 in 4v5 rotation).
         _state               = BattleState.EnemyAttack;
         _inputLocked         = false;  // Unlock input — enemy prompts are about to appear.
         _parryClean          = true;
@@ -1399,14 +1395,17 @@ public partial class BattleTest : Node2D
         FreeActivePrompt();
         GD.Print("[BattleTest] Enemy attacks.");
 
-        var selectedAttack = SelectEnemyAttack();
-
-        // Resolve the defender for this enemy attack. Beckon redirect wins
-        // when any player has BeckoningTarget == enemyAttacker; otherwise a
+        // Resolve the defender first (read-only) so SelectEnemyAttack's
+        // BeckoningTarget consumption doesn't clear the field before the
+        // redirect scan runs. Both functions consult the same field for
+        // the same enemyAttacker; SelectEnemyAttack is the single-clear
+        // site, SelectEnemyTarget is read-only. Beckon redirect wins when
+        // any player has BeckoningTarget == enemyAttacker; otherwise a
         // uniform-random pick from alive players. Threaded through to
         // ExecuteEnemyAttack so the threat-reveal flash and the actual
         // sequence agree on the defender.
         var playerDefender = SelectEnemyTarget(enemyAttacker);
+        var selectedAttack = SelectEnemyAttack(enemyAttacker);
 
         // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
         // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
@@ -1506,7 +1505,7 @@ public partial class BattleTest : Node2D
 
         if (r == TimingPrompt.InputResult.Miss)
         {
-            var player = _playerParty[0];  // enemy attack targets the single player in the current UI
+            var player = _sequenceDefender;  // resolved defender — slot 0 at 1v1, random/redirected at multi-unit
             _parryClean   = false;
             int damage    = _battleSystem.GetStepBaseDamage(stepIndex);
             if (player.IsDefending) damage = Mathf.Max(1, damage / 2);
@@ -1752,7 +1751,15 @@ public partial class BattleTest : Node2D
             else
                 PlayAnim(enemyAttacker, "idle");
             if (CheckGameOver())
+            {
                 ShowEndLabel("Game Over");
+                return;
+            }
+            // C5 multi-unit: a defender dying doesn't end the round. Tear down the
+            // enemy's pose and advance the turn queue so the next combatant gets to act.
+            // (Pre-Phase-6, this branch could rely on game-over being the only defender-
+            // death outcome; at 4v5 a single player death leaves the round still in flight.)
+            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn);
             return;
         }
 
@@ -1993,7 +2000,7 @@ public partial class BattleTest : Node2D
         // fallback to _enemyParty[0] is equivalent; the fallback also covers any call
         // path that skips SelectingTarget (none today, but defensive).
         var defender = _selectedTarget ?? _enemyParty[0];
-        BeginAttack(_playerParty[0], defender, promptType, OnPlayerPromptCompleted);
+        BeginAttack(_activePlayer, defender, promptType, OnPlayerPromptCompleted);
     }
 
     /// <summary>
@@ -2023,7 +2030,7 @@ public partial class BattleTest : Node2D
         // (Phase 4); the ?? fallback uses the attack-identity check to keep behaviour
         // correct if any caller skips SelectingTarget (defensive — all current paths
         // route through the target-selection pipeline).
-        var playerAttacker = _playerParty[0];
+        var playerAttacker = _activePlayer;
         var magicDefender  = _selectedTarget ?? (isHealAttack ? playerAttacker : _enemyParty[0]);
         _sequenceAttacker         = playerAttacker;
         _sequenceDefender         = magicDefender;
@@ -2115,7 +2122,7 @@ public partial class BattleTest : Node2D
         // the predicate is friendly-fire-ready without further refactor.
         if (_sequenceAttacker.Side == _sequenceDefender.Side)
         {
-            var player = _playerParty[0];  // heal targets self in the current single-player UI
+            var player = _sequenceDefender;  // heal target (self for Cure; ally-heal in future)
             GD.Print($"[BattleTest] Cure pass {passIndex + 1} resolved: {r}  ({amount} HP).");
             player.Heal(amount);
             GD.Print($"[BattleTest] Cure heals {amount} HP. Player HP: {player.CurrentHp}/{player.MaxHp}");
@@ -2220,7 +2227,7 @@ public partial class BattleTest : Node2D
     /// </summary>
     private void UseEtherItem()
     {
-        var player = _playerParty[0];  // item user is the single player in the current UI
+        var player = _activePlayer;  // item user — the rotating active player (slot 0 at 1v1)
         if (player.IsDead) { AdvanceTurn(); return; }
         _state       = BattleState.PlayerAttack;
         _inputLocked = true;  // block input during item use
@@ -2437,22 +2444,29 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Returns the attack to use for the current enemy turn.
-    /// Priority: LoopAttack+TestEnemyAttack (testing) > EnemyData.AttackPool > _enemyAttackData (fallback).
+    /// Returns the attack to use for the current enemy turn. The
+    /// <paramref name="enemyAttacker"/> parameter scopes the Beckon force-learnable
+    /// scan: only a player whose <c>BeckoningTarget</c> equals the attacking enemy
+    /// triggers the redirect. Priority: LoopAttack+TestEnemyAttack (testing) >
+    /// Beckon force-learnable > EnemyData.AttackPool > _enemyAttackData (fallback).
     /// </summary>
-    private AttackData SelectEnemyAttack()
+    private AttackData SelectEnemyAttack(Combatant enemyAttacker)
     {
         if (LoopAttack && TestEnemyAttack != null)
             return TestEnemyAttack;
 
-        // Beckon forces the learnable move for one turn. Consume the redirect whether or
-        // not a learnable exists; LoopAttack above still wins in dev test mode.
-        var player = _playerParty[0];  // single beckoner in the current UI
-        if (player.BeckoningTarget != null)
+        // Beckon force-learnable: scan all players for one whose BeckoningTarget
+        // matches this attacking enemy. Consume the redirect on match. Single-clear
+        // invariant — this is the consumption site; SelectEnemyTarget reads only.
+        foreach (var p in _playerParty)
         {
-            player.BeckoningTarget = null;
-            if (EnemyData?.LearnableAttack != null)
-                return EnemyData.LearnableAttack;
+            if (p.BeckoningTarget == enemyAttacker && !p.IsDead)
+            {
+                p.BeckoningTarget = null;
+                if (EnemyData?.LearnableAttack != null)
+                    return EnemyData.LearnableAttack;
+                break;  // matched player but no learnable available; fall through to pool
+            }
         }
 
         if (EnemyData != null && EnemyData.AttackPool != null && EnemyData.AttackPool.Length > 0)
@@ -2695,7 +2709,7 @@ public partial class BattleTest : Node2D
 
     private void RestoreMp(int amount)
     {
-        var player = _playerParty[0];  // single MP pool in the current UI
+        var player = _activePlayer;  // MP recipient — the active player (item user, etc.)
         player.CurrentMp = Mathf.Min(player.CurrentMp + amount, player.MaxMp);
         UpdateMpBar();
     }
@@ -2957,13 +2971,13 @@ public partial class BattleTest : Node2D
     /// all settled, but before the EnemyData HP init and test-flag overrides — those blocks
     /// write directly into the slot-0 Combatant fields produced here.
     ///
-    /// Origin note: the Combatant's single <c>Origin</c> field maps to the ColorRect-based
-    /// origin. That is what the positioning helpers (<c>ComputeClosePosition</c>,
-    /// <c>ComputeSlamPosition</c>, <c>ComputeCameraMidpoint</c>) read as of Phase 3.4.
-    /// The separate AnimatedSprite2D origin (<c>_playerAnimSpriteOrigin</c>,
-    /// <c>_enemyAnimSpriteOrigin</c>) is not yet modeled on Combatant — PlayHopIn /
-    /// PlayTeardown still reach into the scene-level snapshots via a Side switch. Candidate
-    /// for a later cleanup (add a second Combatant field for the AnimatedSprite2D origin).
+    /// Origin note: each Combatant carries two origin snapshots — <c>Origin</c> (the
+    /// ColorRect position, read by <c>ComputeClosePosition</c> / <c>ComputeSlamPosition</c>
+    /// / <c>ComputeCameraMidpoint</c>) and <c>AnimSpriteOrigin</c> (the AnimatedSprite2D
+    /// position after floor-anchor + per-slot offset, read by PlayHopIn / PlayTeardown
+    /// for the AnimSprite tween destination). Distinct because the two formulas differ
+    /// per side; per-slot so multi-unit retreats land each slot back at its own origin
+    /// instead of slot 0's.
     /// </summary>
     private void BuildInitialParties(Shader overlayShader)
     {
@@ -3100,20 +3114,21 @@ public partial class BattleTest : Node2D
     {
         return new Combatant
         {
-            Name          = slotIndex == 0 ? "Knight" : $"Knight {slotIndex + 1}",
-            Side          = CombatantSide.Player,
-            CurrentHp     = PlayerMaxHP,
-            MaxHp         = PlayerMaxHP,
-            Agility       = 10,
-            IsDead        = false,
-            Origin        = rect.Position,
-            PositionRect  = rect,
-            AnimSprite    = sprite,
-            CurrentMp     = PlayerMaxMp,
-            MaxMp         = PlayerMaxMp,
-            IsDefending   = false,
-            IsAbsorber    = slotIndex == 0,  // slot 0 is the sole Absorber in Phase 6
-            FlashMaterial = sprite.Material as ShaderMaterial,
+            Name             = slotIndex == 0 ? "Knight" : $"Knight {slotIndex + 1}",
+            Side             = CombatantSide.Player,
+            CurrentHp        = PlayerMaxHP,
+            MaxHp            = PlayerMaxHP,
+            Agility          = 10,
+            IsDead           = false,
+            Origin           = rect.Position,
+            AnimSpriteOrigin = sprite.Position,  // post-floor-anchor + per-slot offset
+            PositionRect     = rect,
+            AnimSprite       = sprite,
+            CurrentMp        = PlayerMaxMp,
+            MaxMp            = PlayerMaxMp,
+            IsDefending      = false,
+            IsAbsorber       = slotIndex == 0,  // slot 0 is the sole Absorber in Phase 6
+            FlashMaterial    = sprite.Material as ShaderMaterial,
         };
     }
 
@@ -3130,17 +3145,18 @@ public partial class BattleTest : Node2D
         string baseName = EnemyData?.EnemyName ?? "Enemy";
         return new Combatant
         {
-            Name          = slotIndex == 0 ? baseName : $"{baseName} {slotIndex + 1}",
-            Side          = CombatantSide.Enemy,
-            CurrentHp     = enemyInitialMaxHp,
-            MaxHp         = enemyInitialMaxHp,
-            Agility       = 10,
-            IsDead        = false,
-            Origin        = rect.Position,
-            PositionRect  = rect,
-            AnimSprite    = sprite,
-            Data          = EnemyData,
-            FlashMaterial = sprite.Material as ShaderMaterial,
+            Name             = slotIndex == 0 ? baseName : $"{baseName} {slotIndex + 1}",
+            Side             = CombatantSide.Enemy,
+            CurrentHp        = enemyInitialMaxHp,
+            MaxHp            = enemyInitialMaxHp,
+            Agility          = 10,
+            IsDead           = false,
+            Origin           = rect.Position,
+            AnimSpriteOrigin = sprite.Position,  // post-floor-anchor + per-slot offset
+            PositionRect     = rect,
+            AnimSprite       = sprite,
+            Data             = EnemyData,
+            FlashMaterial    = sprite.Material as ShaderMaterial,
         };
     }
 
@@ -3321,7 +3337,7 @@ public partial class BattleTest : Node2D
             if (runFrames > 0)
             {
                 attacker.AnimSprite.SpeedScale = 2f;
-                PlayAnim(_playerParty[0], "run");   // OWNER: player turn, hop-in charge
+                PlayAnim(_sequenceAttacker, "run");   // OWNER: player turn, hop-in charge
             }
             else
             {
@@ -3337,13 +3353,11 @@ public partial class BattleTest : Node2D
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
 
         // Move the attacker's AnimatedSprite2D by the same X delta as the ColorRect hop.
-        // The AnimatedSprite2D origin differs from Combatant.Origin (the C-category
-        // deferred note on the two-origin gap still applies — _playerAnimSpriteOrigin /
-        // _enemyAnimSpriteOrigin are separate scene-setup snapshots).
+        // Reads the per-combatant AnimSpriteOrigin snapshot (set in
+        // BuildPlayerCombatantForSlot / BuildEnemyCombatantForSlot) so multi-unit
+        // hop-ins from any slot retreat to their own origin instead of slot 0's.
         float   hopDeltaX        = _sequenceAttackerClosePos.X - attacker.Origin.X;
-        Vector2 animSpriteOrigin = attacker.Side == CombatantSide.Player
-            ? _playerAnimSpriteOrigin
-            : _enemyAnimSpriteOrigin;
+        Vector2 animSpriteOrigin = attacker.AnimSpriteOrigin;
         // Y-offset applies only to enemy-side attackers (see parameter doc). Preserves
         // the pre-refactor asymmetric behavior.
         float   animTargetY      = attacker.Side == CombatantSide.Player
@@ -3541,12 +3555,9 @@ public partial class BattleTest : Node2D
              .SetEase(Tween.EaseType.In).SetTrans(Tween.TransitionType.Quad);
 
         // Return the attacker's AnimatedSprite2D to its scene origin alongside the ColorRect.
-        // The AnimatedSprite2D origin is still tracked in the singleton snapshots
-        // _playerAnimSpriteOrigin / _enemyAnimSpriteOrigin — see the C-category-deferred
-        // note on the two-origin gap in BuildInitialParties.
-        Vector2 animSpriteOrigin = attacker.Side == CombatantSide.Player
-            ? _playerAnimSpriteOrigin
-            : _enemyAnimSpriteOrigin;
+        // Reads the per-combatant AnimSpriteOrigin snapshot so multi-unit retreats land
+        // each slot back at its own origin instead of slot 0's.
+        Vector2 animSpriteOrigin = attacker.AnimSpriteOrigin;
         // Player-side footstep + position tween play unconditionally on teardown —
         // attackerMoved below gates only the enemy-side run-backwards animation (and its
         // paired footstep), not the position tween. Preserved asymmetry from pre-refactor:
@@ -3580,16 +3591,18 @@ public partial class BattleTest : Node2D
                 attacker.AnimSprite.SpeedScale = 1f;
                 PlayAnim(_enemyParty[0], "idle");
             }
-            // Restore default ZIndex on both sprites now that the attack is over.
-            // Exception: if the enemy is dying (phase transition in progress), leave
-            // its ZIndex alone — SpawnBossReveal bumped it up so the reveal stays
+            // Restore default ZIndex on both sequence participants now that the attack
+            // is over. The attacker hopped in and had its ZIndex implicitly involved;
+            // the defender stays put but is reset for symmetry. Skip the dead enemy —
+            // SpawnBossReveal bumped slot 0 enemy's ZIndex up so the reveal stays
             // strictly behind, and SwapToPhase2 restores the original snapshot value.
-            // Single-player prototype: these ZIndex resets reach into _playerParty[0] /
-            // _enemyParty[0] directly; at multi-character density the reset iterates both
-            // parties.
-            _playerParty[0].AnimSprite.ZIndex = 0;
-            if (!_enemyParty[0].IsDead)
-                _enemyParty[0].AnimSprite.ZIndex = 0;
+            // (Player death doesn't bump ZIndex, so the IsDead check only matters for
+            // the enemy-side participant.)
+            foreach (var c in new[] { _sequenceAttacker, _sequenceDefender })
+            {
+                if (c.Side == CombatantSide.Enemy && c.IsDead) continue;
+                c.AnimSprite.ZIndex = 0;
+            }
             onComplete?.Invoke();
         };
     }
