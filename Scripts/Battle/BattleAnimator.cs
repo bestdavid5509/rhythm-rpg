@@ -761,6 +761,10 @@ public partial class BattleTest : Node2D
             // of scope for C7-prereq; documenting the decision so future-me
             // remembers why this is currently uniform-zero.
             _queue.Reset(_playerParty, _enemyParty);
+            // C7: hard-rebind the turn-order strip with the new (Phase 2)
+            // Lookahead. Reset is a "fresh start," not a "turn resolved" —
+            // animating it would semantically misrepresent the transition.
+            RefreshTurnOrderStrip(animate: false);
             GD.Print("[BattleTest] Phase 2 — queue reset.");
             AdvanceTurn();
         };

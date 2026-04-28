@@ -76,6 +76,17 @@ public partial class BattleTest : Node2D
     private System.Collections.Generic.List<PartyPanel> _enemyPanels  = new();
     private PanelContainer                              _enemyCombinedPanel;  // shared outer panel; rows live inside
 
+    // C7 turn-order strip — vertical column at top-left showing the next
+    // LookaheadCount combatants from _queue.Lookahead(). Cards are
+    // instance-bound (persist across Refresh) so the slide animation moves
+    // real card identities between slots. The single in-flight Tween handle
+    // is Killed at the start of any new Refresh(animate:true) so successive
+    // Advances during an in-progress slide fall back to hard-rebind for that
+    // one Advance (no animation overlap).
+    private System.Collections.Generic.List<TurnOrderCard> _turnOrderCards = new();
+    private CanvasLayer                                    _turnOrderLayer;
+    private Tween                                          _turnOrderTween;
+
     // =========================================================================
     // Perfect parry
     // =========================================================================
@@ -656,6 +667,10 @@ public partial class BattleTest : Node2D
         // combatant crosses threshold (C7-prerequisite tick-based scheduler).
         _rng.Randomize();
         _queue.Reset(_playerParty, _enemyParty);
+        // C7: build the turn-order strip from the seeded Lookahead. The first
+        // AdvanceTurn fires Refresh(animate:true), which slides the top card
+        // off as the first turn resolves.
+        BuildTurnOrderStrip();
 
         if (skipIntro)
         {
@@ -1357,6 +1372,23 @@ public partial class BattleTest : Node2D
     private void AdvanceTurn()
     {
         if (CheckGameOver()) return;
+
+        // C7 follow-up: slide the previous turn's card off BEFORE Advance so
+        // the strip's top card matches the actor whose turn is currently
+        // resolving (rather than showing the next-next). On the very first
+        // AdvanceTurn (no previous turn), _queue.Current is null — skip the
+        // slide; the initial BuildTurnOrderStrip put first-to-act at slot 0,
+        // which is already correct.
+        //
+        // After the slide kicks off (non-blocking), Advance returns the new
+        // current actor. By the time the slide's post-callback rotates the
+        // list (t = TurnOrderSlideDur ≈ 180ms), the new actor's card is at
+        // slot 0 — matching what _queue.Advance returned. The slide
+        // animation overlaps with the dispatch below (ShowMenu /
+        // BeginEnemyAttack), which is fine — no input is gated on the
+        // animation.
+        if (_queue.Current != null)
+            RefreshTurnOrderStrip(animate: true);
 
         var current = _queue.Advance();
         if (current == null)
@@ -2891,6 +2923,22 @@ public partial class BattleTest : Node2D
     private const float EnemyRowNameWidth          =  90f;       // fixed name-label width so bars line up across rows
     private const float EnemyRowBarWidth           = 150f;       // compact HP bar (vs player 232)
 
+    // C7 turn-order strip constants. Vertical column at top-left, 8 cards
+    // visible at all times (full Lookahead width). Cards are compact (36 px
+    // tall) so 8 stacked + 7 gaps fit in 330 px from y=20. "Warrior 5" still
+    // fits at fontSize 13. Slide animation runs at 0.18s — JRPG-snappy;
+    // tunable in interactive review. Side-coded fill tints mirror PanelFillTint
+    // navy at similar brightness so player and enemy cards have equal visual
+    // weight, only hue differs.
+    private const int   LookaheadCount         = 8;
+    private const float TurnOrderCardWidth     = 130f;
+    private const float TurnOrderCardHeight    =  36f;
+    private const float TurnOrderCardGap       =   6f;
+    private const float TurnOrderSlideDur      =   0.18f;        // slide-out / slide-up / slide-in animation duration
+    private const float TurnOrderSlideOffset   = 200f;           // slide-out distance to the right
+    internal static readonly Color PlayerCardFillTint = new Color(0.22f, 0.28f, 0.65f, 1.0f);  // cool blue
+    internal static readonly Color EnemyCardFillTint  = new Color(0.55f, 0.28f, 0.22f, 1.0f);  // warm burgundy
+
     /// <summary>
     /// Applies the subtle vertical navy gradient shader to the existing Background ColorRect
     /// defined in BattleTest.tscn. The ColorRect's own `color` property still contributes —
@@ -2917,7 +2965,7 @@ public partial class BattleTest : Node2D
     /// Returns the outer PanelContainer (for anchoring/positioning) and the VBoxContainer
     /// where content should be added.
     /// </summary>
-    internal static PanelContainer MakeLayeredPanel(float minWidth, out VBoxContainer content, float minHeight = 0f)
+    internal static PanelContainer MakeLayeredPanel(float minWidth, out VBoxContainer content, float minHeight = 0f, Color? fillTint = null, int? contentPad = null)
     {
         var panel = new PanelContainer();
         panel.CustomMinimumSize = new Vector2(minWidth, minHeight);
@@ -2926,9 +2974,11 @@ public partial class BattleTest : Node2D
         var empty = new StyleBoxEmpty();
         panel.AddThemeStyleboxOverride("panel", empty);
 
-        // Fill layer: NinePatchRect of the transparent-center texture, tinted by PanelFillTint.
+        // Fill layer: NinePatchRect of the transparent-center texture. Tinted by
+        // PanelFillTint by default (navy); callers can pass fillTint to override
+        // — used by C7 turn-order cards for side-coded blue / burgundy.
         var fill = MakeNinePatch(UiPanelFillPath);
-        fill.Modulate = PanelFillTint;
+        fill.Modulate = fillTint ?? PanelFillTint;
 
         var border = MakeNinePatch(UiPanelBorderPath);
 
@@ -2936,11 +2986,18 @@ public partial class BattleTest : Node2D
         panel.AddChild(fill);
         panel.AddChild(border);
 
+        // contentPad defaults to PanelContentPad (18) for all chrome panels.
+        // Callers needing a smaller card (C7 turn-order strip) can override
+        // to shrink vertical content height, since PanelContainer treats
+        // CustomMinimumSize as a floor — it auto-sizes to fit MarginContainer
+        // + content. Smaller contentPad → smaller min content height → the
+        // panel can actually honor a smaller minHeight.
+        int pad = contentPad ?? PanelContentPad;
         var margin = new MarginContainer();
-        margin.AddThemeConstantOverride("margin_left",   PanelContentPad);
-        margin.AddThemeConstantOverride("margin_right",  PanelContentPad);
-        margin.AddThemeConstantOverride("margin_top",    PanelContentPad);
-        margin.AddThemeConstantOverride("margin_bottom", PanelContentPad);
+        margin.AddThemeConstantOverride("margin_left",   pad);
+        margin.AddThemeConstantOverride("margin_right",  pad);
+        margin.AddThemeConstantOverride("margin_top",    pad);
+        margin.AddThemeConstantOverride("margin_bottom", pad);
         panel.AddChild(margin);
 
         content = new VBoxContainer();
@@ -3451,10 +3508,211 @@ public partial class BattleTest : Node2D
         pp.MpLabel = mpLabel;
     }
 
+    // =========================================================================
+    // Turn-order strip (C7) — vertical column at top-left, top = next-to-act
+    // =========================================================================
+
     /// <summary>
-    /// Spawns a floating damage number at <paramref name="position"/> that drifts upward
-    /// 80px and fades to transparent over 1 second, then frees itself.
+    /// First-time setup of the C7 turn-order strip. Creates the dedicated
+    /// CanvasLayer and instantiates the initial <see cref="LookaheadCount"/>
+    /// cards from the queue's first Lookahead. Called once from
+    /// <see cref="_Ready"/> after <c>_queue.Reset(...)</c>.
     /// </summary>
+    private void BuildTurnOrderStrip()
+    {
+        _turnOrderLayer = new CanvasLayer { Name = "TurnOrderStrip" };
+        AddChild(_turnOrderLayer);
+
+        var preview = _queue.Lookahead(LookaheadCount);
+        for (int i = 0; i < preview.Count; i++)
+            _turnOrderCards.Add(BuildTurnOrderCard(_turnOrderLayer, preview[i], i));
+        RefreshTopCardHighlight();
+    }
+
+    /// <summary>
+    /// Builds one mini-card at the given vertical slot index. Side-coded fill
+    /// tint (player blue / enemy burgundy) routes through <see cref="MakeLayeredPanel"/>'s
+    /// fillTint parameter so the existing chrome family is preserved with only
+    /// the fill layer recolored. Card height is fixed via <c>CustomMinimumSize.Y</c>
+    /// so slot offsets are predictable.
+    /// </summary>
+    private TurnOrderCard BuildTurnOrderCard(CanvasLayer layer, Combatant combatant, int slotIndex)
+    {
+        Color fillTint = combatant.Side == CombatantSide.Player
+            ? PlayerCardFillTint
+            : EnemyCardFillTint;
+        // contentPad: 9 (vs default 18) shrinks the card vertically so the
+        // rendered height matches TurnOrderCardHeight = 36. The PanelContainer
+        // auto-sizes to content; without the override, default padding (18) +
+        // label height (~18) + padding (18) = 54 px, which would overlap
+        // neighboring slots at the 42-px stride (TurnOrderCardHeight + Gap).
+        // 9 + 18 + 9 = 36 matches the constant exactly.
+        var panel = MakeLayeredPanel(TurnOrderCardWidth, out var content,
+                                      minHeight: TurnOrderCardHeight,
+                                      fillTint: fillTint,
+                                      contentPad: 9);
+        panel.AnchorLeft     = 0f;
+        panel.AnchorRight    = 0f;
+        panel.AnchorTop      = 0f;
+        panel.AnchorBottom   = 0f;
+        panel.GrowHorizontal = Control.GrowDirection.End;
+        panel.OffsetLeft     = UiEdgeMargin;
+        panel.OffsetTop      = UiEdgeMargin + slotIndex * (TurnOrderCardHeight + TurnOrderCardGap);
+        layer.AddChild(panel);
+
+        var nameLabel = new Label();
+        nameLabel.Text                = combatant.Name;
+        nameLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        StyleLabel(nameLabel, fontSize: 13);
+        content.AddChild(nameLabel);
+
+        return new TurnOrderCard
+        {
+            Panel          = panel,
+            NameLabel      = nameLabel,
+            BoundCombatant = combatant,
+        };
+    }
+
+    /// <summary>
+    /// Wipes existing cards and rebuilds from scratch via the latest
+    /// <c>_queue.Lookahead</c>. No animation. Used by Reset paths
+    /// (<see cref="_Ready"/>'s initial render via <see cref="BuildTurnOrderStrip"/>,
+    /// Phase 2 transition's <c>SwapToPhase2</c>) and as the fallback when an
+    /// in-flight slide gets interrupted by a successive Advance.
+    /// </summary>
+    private void HardRebindStrip()
+    {
+        foreach (var card in _turnOrderCards) card.Panel.QueueFree();
+        _turnOrderCards.Clear();
+
+        var preview = _queue.Lookahead(LookaheadCount);
+        for (int i = 0; i < preview.Count; i++)
+            _turnOrderCards.Add(BuildTurnOrderCard(_turnOrderLayer, preview[i], i));
+        RefreshTopCardHighlight();
+    }
+
+    /// <summary>
+    /// Applies <see cref="PanelActiveModulate"/> to the top card and
+    /// <see cref="PanelAliveModulate"/> to all others. Called from
+    /// <see cref="BuildTurnOrderStrip"/>, <see cref="HardRebindStrip"/>, and
+    /// the post-callback inside <see cref="AnimateSlide"/> after the list
+    /// rotation. The active boost makes the next-to-act card visibly
+    /// distinct beyond the positional convention. During slide-out the
+    /// ex-top card's alpha tweens to 0 so the boost is washed out anyway —
+    /// no special handling needed for the in-flight slide.
+    /// </summary>
+    private void RefreshTopCardHighlight()
+    {
+        for (int i = 0; i < _turnOrderCards.Count; i++)
+            _turnOrderCards[i].Panel.Modulate =
+                (i == 0) ? PanelActiveModulate : PanelAliveModulate;
+    }
+
+    /// <summary>
+    /// Refreshes the turn-order strip after a queue mutation. <paramref name="animate"/>
+    /// = true triggers the slide animation (top card slides off right + fades, cards
+    /// 1..N-1 shift up one slot, new card slides in from below). animate = false is a
+    /// hard rebuild — used by Reset paths since "fresh start" should not visually
+    /// suggest "turn resolved." If a slide is already in flight, kill it and fall
+    /// back to hard rebuild for this Advance (no animation overlap).
+    /// </summary>
+    private void RefreshTurnOrderStrip(bool animate)
+    {
+        if (_turnOrderLayer == null) return;  // pre-_Ready safety
+
+        if (_turnOrderTween != null && _turnOrderTween.IsValid() && _turnOrderTween.IsRunning())
+        {
+            _turnOrderTween.Kill();
+            animate = false;  // slide interrupted; rebuild atomically
+        }
+
+        if (!animate)
+        {
+            HardRebindStrip();
+            return;
+        }
+
+        AnimateSlide();
+    }
+
+    /// <summary>
+    /// Slide animation triggered by an Advance: top card (the turn that just
+    /// resolved) slides off to the right + fades; cards 1..N-1 shift up by one
+    /// slot via parallel OffsetTop tweens; a new card spawns at slot N's would-be
+    /// position with opacity 0 and slides up + fades into slot N-1. After
+    /// 0.18 s, a callback rotates <see cref="_turnOrderCards"/> (RemoveAt(0) +
+    /// Add(newCard)) so card identities for slots 1..N-1 persist across the
+    /// animation — that's what produces the "slide" feel rather than a rebuild
+    /// flash. All tweens run in parallel via <see cref="Tween.SetParallel"/>.
+    /// </summary>
+    private void AnimateSlide()
+    {
+        var preview = _queue.Lookahead(LookaheadCount);
+
+        _turnOrderTween = CreateTween();
+        _turnOrderTween.SetParallel(true);
+
+        // 1. Slide-out top card: tween rightward + fade to transparent.
+        TurnOrderCard slideOut = _turnOrderCards.Count > 0 ? _turnOrderCards[0] : null;
+        if (slideOut != null)
+        {
+            float targetX = slideOut.Panel.OffsetLeft + TurnOrderSlideOffset;
+            _turnOrderTween.TweenProperty(slideOut.Panel, "offset_left", targetX, TurnOrderSlideDur)
+                           .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+            _turnOrderTween.TweenProperty(slideOut.Panel, "modulate:a", 0f, TurnOrderSlideDur)
+                           .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+        }
+
+        // 2. Shift cards 1..N-1 up by one slot (each by CardHeight + Gap).
+        // Cards 1..N-1 of _turnOrderCards correspond to combatants
+        // preview[0..N-2] — Lookahead is deterministic from the post-Advance
+        // AP state, and no other mutator has fired since. Names match
+        // positions implicitly through this correspondence; no per-card name
+        // update needed.
+        for (int i = 1; i < _turnOrderCards.Count; i++)
+        {
+            var card = _turnOrderCards[i];
+            float newTop = card.Panel.OffsetTop - (TurnOrderCardHeight + TurnOrderCardGap);
+            _turnOrderTween.TweenProperty(card.Panel, "offset_top", newTop, TurnOrderSlideDur)
+                           .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+        }
+
+        // 3. Spawn new bottom card at slot N's would-be position; tween up to
+        // slot N-1's position (its post-shift home) + fade in.
+        TurnOrderCard newCard = null;
+        if (preview.Count >= LookaheadCount)
+        {
+            var newCombatant = preview[LookaheadCount - 1];
+            newCard = BuildTurnOrderCard(_turnOrderLayer, newCombatant, LookaheadCount);
+            newCard.Panel.Modulate = new Color(1f, 1f, 1f, 0f);
+
+            float homeTop = UiEdgeMargin + (LookaheadCount - 1) * (TurnOrderCardHeight + TurnOrderCardGap);
+            _turnOrderTween.TweenProperty(newCard.Panel, "offset_top", homeTop, TurnOrderSlideDur)
+                           .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+            _turnOrderTween.TweenProperty(newCard.Panel, "modulate:a", 1f, TurnOrderSlideDur);
+        }
+        // If preview.Count < LookaheadCount, all combatants are dead
+        // (CheckGameOver should have caught this). Defensive — no new card
+        // spawns, strip shrinks visibly until the end-screen fires.
+
+        // 4. After parallel tweens complete: free the slid-out card and
+        // rotate the list (RemoveAt(0) + Add(newCard)). Captures locals so
+        // the callback works even if more state changes between schedule and fire.
+        var slideOutCapture = slideOut;
+        var newCardCapture  = newCard;
+        _turnOrderTween.TweenCallback(Callable.From(() =>
+        {
+            if (slideOutCapture != null && IsInstanceValid(slideOutCapture.Panel))
+                slideOutCapture.Panel.QueueFree();
+            if (_turnOrderCards.Count > 0) _turnOrderCards.RemoveAt(0);
+            if (newCardCapture != null) _turnOrderCards.Add(newCardCapture);
+            // Apply the active-card boost to the new top after the rotation —
+            // before the rotation, slot 0 is the ex-top (already alpha-faded).
+            RefreshTopCardHighlight();
+        })).SetDelay(TurnOrderSlideDur);
+    }
+
     private void SpawnDamageNumber(Vector2 position, int amount, Color color)
     {
         SpawnDamageNumber(position, amount, color, parent: null);
