@@ -1584,6 +1584,7 @@ public partial class BattleTest : Node2D
             {
                 GD.Print("[BattleTest] Player HP reached zero mid-sequence.");
                 player.IsDead = true;
+                FadeDeadCombatantFromStrip(player);
                 player.AnimSprite.Play("death");
                 if (CheckGameOver())
                 {
@@ -1893,6 +1894,7 @@ public partial class BattleTest : Node2D
                         PlayAnim(attacker, "idle");
                 }
                 player.IsDead = true;
+                FadeDeadCombatantFromStrip(player);
                 _sequenceDeathTarget = player;
                 SafeDisconnectAnim(player, OnPlayerDeathFinished);
                 player.AnimSprite.Play("death");
@@ -2272,6 +2274,7 @@ public partial class BattleTest : Node2D
             // Player died from a self-damage magic sequence (hypothetical; no current
             // attack does self-damage that can reach 0 HP, but the branch stays defensive).
             magicAttacker.IsDead = true;
+            FadeDeadCombatantFromStrip(magicAttacker);
             _sequenceDeathTarget = magicAttacker;
             SafeDisconnectAnim(magicAttacker, OnPlayerDeathFinished);
             magicAttacker.AnimSprite.Play("death");
@@ -2457,6 +2460,7 @@ public partial class BattleTest : Node2D
                 if (player.CurrentHp <= 0 && !player.IsDead)
                 {
                     player.IsDead = true;
+                    FadeDeadCombatantFromStrip(player);
                     _sequenceDeathTarget = player;
                     SafeDisconnectAnim(player, OnPlayerDeathFinished);
                     player.AnimSprite.Play("death");
@@ -3575,19 +3579,47 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Wipes existing cards and rebuilds from scratch via the latest
-    /// <c>_queue.Lookahead</c>. No animation. Used by Reset paths
-    /// (<see cref="_Ready"/>'s initial render via <see cref="BuildTurnOrderStrip"/>,
-    /// Phase 2 transition's <c>SwapToPhase2</c>) and as the fallback when an
+    /// Wipes existing cards and rebuilds from scratch. No animation. Used by
+    /// Reset paths (<see cref="_Ready"/>'s initial render via
+    /// <see cref="BuildTurnOrderStrip"/>, Phase 2 transition's
+    /// <c>SwapToPhase2</c>), the post-fade callback inside
+    /// <see cref="FadeDeadCombatantFromStrip"/>, and the fallback when an
     /// in-flight slide gets interrupted by a successive Advance.
+    ///
+    /// Strip convention (per C7 follow-up): top card = currently-active actor
+    /// (<c>_queue.Current</c>) when one exists and is still alive; otherwise
+    /// (initial Build, Phase 2 Reset) the top is the first-to-act from
+    /// <c>Lookahead</c>. Without the prepend, post-FadeDeadCombatantFromStrip
+    /// rebuilds would show the next-to-act at the top instead of the
+    /// still-acting current combatant — desyncing the strip from the menu
+    /// header for the rest of the fight.
     /// </summary>
     private void HardRebindStrip()
     {
+        if (_turnOrderLayer == null) return;
+
         foreach (var card in _turnOrderCards) card.Panel.QueueFree();
         _turnOrderCards.Clear();
 
-        var preview = _queue.Lookahead(LookaheadCount);
-        for (int i = 0; i < preview.Count; i++)
+        var preview = new System.Collections.Generic.List<Combatant>();
+        if (_queue.Current != null && !_queue.Current.IsDead)
+        {
+            // Mid-fight rebuild while a turn is in flight (e.g. ally death
+            // post-fade). Top stays pinned to the still-acting combatant;
+            // remaining N-1 slots come from upcoming-turn Lookahead.
+            preview.Add(_queue.Current);
+            preview.AddRange(_queue.Lookahead(LookaheadCount - 1));
+        }
+        else
+        {
+            // Initial Build (Current is null pre-first-Advance) or Phase 2
+            // Reset (Reset wipes Current to null). Use full Lookahead — the
+            // first AdvanceTurn after this paints Current at the top via
+            // the slide animation in normal flow.
+            preview.AddRange(_queue.Lookahead(LookaheadCount));
+        }
+
+        for (int i = 0; i < preview.Count && i < LookaheadCount; i++)
             _turnOrderCards.Add(BuildTurnOrderCard(_turnOrderLayer, preview[i], i));
         RefreshTopCardHighlight();
     }
@@ -3710,6 +3742,64 @@ public partial class BattleTest : Node2D
             // Apply the active-card boost to the new top after the rotation —
             // before the rotation, slot 0 is the ex-top (already alpha-faded).
             RefreshTopCardHighlight();
+        })).SetDelay(TurnOrderSlideDur);
+    }
+
+    /// <summary>
+    /// Fades all strip cards bound to <paramref name="deadCombatant"/> off the
+    /// right (same slide-out treatment as <see cref="AnimateSlide"/>'s top card),
+    /// then hard-rebinds the strip from the new <c>_queue.Lookahead</c> — which
+    /// excludes the dead combatant because the queue's tick simulation skips
+    /// IsDead. Called from every site that flips <c>player.IsDead = true</c>.
+    /// Caller must set IsDead BEFORE invoking so the post-fade Lookahead
+    /// reflects the new state.
+    ///
+    /// Enemy-side death-handling deferred (enemies currently keep acting after
+    /// HP reaches zero — slated for C9 / later); this helper is gated by call
+    /// sites only firing it for player deaths today.
+    /// </summary>
+    private void FadeDeadCombatantFromStrip(Combatant deadCombatant)
+    {
+        if (_turnOrderLayer == null) return;
+        if (deadCombatant == null)   return;
+
+        var matchingCards = _turnOrderCards
+            .Where(c => c.BoundCombatant == deadCombatant)
+            .ToList();
+
+        if (matchingCards.Count == 0) return;
+
+        // Kill any in-flight slide tween — death-fade takes precedence over
+        // a turn-resolution slide that may still be running.
+        if (_turnOrderTween != null && _turnOrderTween.IsValid()
+            && _turnOrderTween.IsRunning())
+            _turnOrderTween.Kill();
+
+        _turnOrderTween = CreateTween();
+        _turnOrderTween.SetParallel(true);
+
+        // Slide each matching card right + fade, mirroring AnimateSlide's
+        // slide-out treatment for the top card.
+        foreach (var card in matchingCards)
+        {
+            float targetX = card.Panel.OffsetLeft + TurnOrderSlideOffset;
+            _turnOrderTween.TweenProperty(card.Panel, "offset_left",
+                                           targetX, TurnOrderSlideDur)
+                           .SetEase(Tween.EaseType.Out)
+                           .SetTrans(Tween.TransitionType.Quad);
+            _turnOrderTween.TweenProperty(card.Panel, "modulate:a",
+                                           0f, TurnOrderSlideDur)
+                           .SetEase(Tween.EaseType.Out)
+                           .SetTrans(Tween.TransitionType.Quad);
+        }
+
+        // After fade completes, hard-rebind from the new Lookahead (which now
+        // excludes the dead combatant). HardRebindStrip's wipe pass QueueFrees
+        // the faded cards along with the rest. RefreshTopCardHighlight is
+        // already called inside HardRebindStrip.
+        _turnOrderTween.TweenCallback(Callable.From(() =>
+        {
+            HardRebindStrip();
         })).SetDelay(TurnOrderSlideDur);
     }
 
