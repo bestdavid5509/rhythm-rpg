@@ -10,7 +10,7 @@ FrameWidth = 112
 FrameHeight = 224
 ImpactFrames = PackedInt32Array(11)
 CircleType = 2
-Offset = Vector2(-15, -310)
+Offset = Vector2(-15, -230)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(10, 11)
 

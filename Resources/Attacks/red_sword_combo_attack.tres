@@ -10,7 +10,7 @@ FrameWidth = 320
 FrameHeight = 256
 Fps = 8.0
 ImpactFrames = PackedInt32Array(6, 7, 8)
-Offset = Vector2(-15, -336)
+Offset = Vector2(-15, -256)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_impact.wav", "res://Assets/Audio/SFX/magic_impact.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(5, 6, 7, 6, 7, 8)
 
@@ -21,7 +21,7 @@ FrameWidth = 192
 FrameHeight = 256
 ImpactFrames = PackedInt32Array(6)
 StartOffsetMs = -200
-Offset = Vector2(-15, -369)
+Offset = Vector2(-15, -289)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(5, 6)
 

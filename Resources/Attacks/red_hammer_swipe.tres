@@ -11,7 +11,7 @@ FrameHeight = 96
 ImpactFrames = PackedInt32Array(6)
 FlipH = true
 Scale = Vector2(4, 4)
-Offset = Vector2(50, -100)
+Offset = Vector2(50, -20)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(6)
 
@@ -23,7 +23,7 @@ FrameHeight = 96
 ImpactFrames = PackedInt32Array(6)
 StartOffsetMs = -500
 Scale = Vector2(4, 4)
-Offset = Vector2(-100, -100)
+Offset = Vector2(-100, -20)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(6)
 
@@ -36,7 +36,7 @@ ImpactFrames = PackedInt32Array(6)
 StartOffsetMs = -500
 FlipH = true
 Scale = Vector2(4, 4)
-Offset = Vector2(50, -100)
+Offset = Vector2(50, -20)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(6)
 

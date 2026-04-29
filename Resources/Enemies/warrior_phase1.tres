@@ -14,6 +14,7 @@ MaxHp = 150
 SpritesheetPath = "res://Assets/Enemies/Warrior/Warrior_Red_Sword_Silver_White_Armor/Warrior_sprite_red_sword_silver_white_armor_sheet.png"
 FrameWidth = 130
 FrameHeight = 130
+FeetAnchorY = 112.0
 SpriteOffsetY = 90.0
 AnimationConfig = ExtResource("6_animconfig")
 AttackPool = [ExtResource("3_triple"), ExtResource("4_hammer"), ExtResource("5_ice"), ExtResource("7_meleecombo")]

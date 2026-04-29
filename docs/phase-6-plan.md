@@ -510,6 +510,57 @@ dialogue runs at both configs; menu appears below the dialogue slot.
 Verification: visual inspection at both 1v1 and 4v5. Log shows current-
 turn index aligns with queue state.
 
+### C7-extra — Combat sprite layout cleanup
+
+This chunk was identified during C7 interactive verification — the
+strip lookahead surfaced the underlying multi-character sprite layout
+as untenable at 4v5 density (sprites trailing off-screen with the
+`PlayerSlotSpacing=140` / `EnemySlotSpacing=160` single-row math from
+the C3 scaffolding). Inserted as a C8 prerequisite — sprites must be
+visible to be highlighted.
+
+- FF-style mirrored diagonal columns. Player diagonal slopes ↘ (slot 0
+  at top-right, "leader confronting"; slots 1-3 step down-left at
+  partySize=4). Enemy diagonal mirrors ↙ (slot 0 at top-left; slots
+  1-N step down-right).
+- Anchors per side: legacy slot-0 tscn position is the front anchor
+  (preserves 1v1 bit-identical visual). Linear interpolation to a
+  back anchor for slots 1..N-1.
+- Constant scale `(3, 3)` across all slots — no depth scaling. Hop-in
+  tweens stay pure-translate (critical for animation simplicity at
+  multi-character density).
+- Two-column extension when enemy partySize > 4: slots 0-3 in the
+  front column (lerp 0..1 over up to 4 slots); slots 4-7 in a back
+  column offset outward (right) and up by `EnemyBackColumnOffset`.
+  Edge counts 7-8 acceptable to look crowded.
+- Player party caps at 4 in Phase 6 scope — no two-column extension
+  needed on the player side.
+- HP/MP panels at bottom-center reorder so slot 0 sits at the
+  RIGHTMOST panel position via `(partySize - 1 - slotIndex)`
+  inversion. Spatial correlation: damage on sprite → eye drops →
+  matching panel directly below.
+- Position-consuming code (`PlayHopIn`, `PlayTeardown`,
+  `ComputeClosePosition`, `ComputeSlamPosition`,
+  `ComputeCameraMidpoint`, `ComputeDamageOrigin`,
+  `BattleSystem.SpawnEffectSprite`) all read per-combatant
+  `Origin` / `AnimSpriteOrigin`. New diagonal positions flow through
+  automatically; no migration needed at consumer sites.
+- Per-encounter override system — out of scope. JRPG genre convention
+  is hand-placed positions per encounter for set-piece fights;
+  C7-extra ships only a universal default formula. A future override
+  mechanism (e.g. via `EnemyData` per-slot offsets) is post-Phase-6
+  work.
+- Magic timing-circle off-axis (already C11 scope): diagonal layout
+  amplifies the `ComputeCameraMidpoint`-vs-sprite-positions mismatch
+  for cross-formation magic attacks. Flagged for C11 priority.
+
+Verification: visual at 1v1 (single Knight + Warrior at exact legacy
+positions, panel at legacy left-anchored slot-0 position) and 4v5
+(diagonal columns visible, all 9 sprites in-frame, 4 player panels
+reordered so leader = rightmost). Optional 4v8 stress: temp constant
+override to verify two-column formula renders coherently; slot 7
+right-edge clip acceptable.
+
 ### C8 — Active-combatant sprite highlight
 
 - Reuse the existing `CombatantOverlay.gdshader` `tint_amount` uniform
@@ -635,6 +686,9 @@ location. Cure circle centers on the recipient.
 - **C6 before C7, C8** — UI layers depend on the final layout.
 - **C7 parallel to C8** — both pure UI, no dependency. Either order
   fine.
+- **C7-extra before C8** — sprites must be visible at multi-character
+  density to be highlighted. C7-extra was identified during C7
+  interactive verification, after the original chunk plan.
 - **C9 before C10** — Beckon's target-redirect reuses target-selection
   UI.
 - **C11 can land anywhere after C6** — positioning fixes benefit most
@@ -790,5 +844,6 @@ On ExitPlanMode approval:
 1. First execution commit copies this plan's content (sans the top note)
    to `docs/phase-6-plan.md` and removes the plan-mode scratch file.
 2. Subsequent commits follow C1 → C2 → C3 → C4 → C4.5 → C5 → C6 → C7 →
-   C8 → C9 → C10 → C11 in §4, with per-commit diff review per
-   `docs/workflow.md`.
+   C7-extra → C8 → C9 → C10 → C11 in §4, with per-commit diff review
+   per `docs/workflow.md`. (C7-extra was inserted post-C7 during
+   interactive verification — see §4 C7-extra.)

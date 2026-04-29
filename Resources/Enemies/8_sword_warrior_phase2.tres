@@ -13,6 +13,7 @@ MaxHp = 200
 SpritesheetPath = "res://Assets/Enemies/8_Sword_Warrior/8_Sword_Warrior_Red/8_sword_warrior_red-Sheet.png"
 FrameWidth = 160
 FrameHeight = 160
+FeetAnchorY = 136.0
 SpriteOffsetY = 130.0
 AnimationConfig = ExtResource("5_animconfig")
 AttackPool = [ExtResource("2_attack1"), ExtResource("3_attack2"), ExtResource("4_attack3")]

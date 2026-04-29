@@ -11,8 +11,8 @@ FrameHeight = 224
 ImpactFrames = PackedInt32Array(11)
 CircleType = 2
 BounceCount = 4
-Offset = Vector2(-15, -310)
-PlayerOffset = Vector2(0, -310)
+Offset = Vector2(-15, -230)
+PlayerOffset = Vector2(0, -210)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(10, 11)
 
@@ -25,8 +25,8 @@ ImpactFrames = PackedInt32Array(11)
 BounceCount = 0
 StartOffsetMs = -250
 FlipH = true
-Offset = Vector2(-30, -320)
-PlayerOffset = Vector2(-15, -320)
+Offset = Vector2(-30, -240)
+PlayerOffset = Vector2(-15, -220)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(9, 11)
 
@@ -38,8 +38,8 @@ FrameHeight = 232
 ImpactFrames = PackedInt32Array(11)
 BounceCount = 0
 StartOffsetMs = 500
-Offset = Vector2(0, -320)
-PlayerOffset = Vector2(15, -320)
+Offset = Vector2(0, -240)
+PlayerOffset = Vector2(15, -220)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(9, 11)
 
@@ -52,8 +52,8 @@ ImpactFrames = PackedInt32Array(11)
 BounceCount = 0
 StartOffsetMs = 500
 FlipH = true
-Offset = Vector2(-30, -320)
-PlayerOffset = Vector2(-15, -320)
+Offset = Vector2(-30, -240)
+PlayerOffset = Vector2(-15, -220)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(9, 11)
 
@@ -65,8 +65,8 @@ FrameHeight = 232
 ImpactFrames = PackedInt32Array(11)
 BounceCount = 0
 StartOffsetMs = 500
-Offset = Vector2(0, -320)
-PlayerOffset = Vector2(15, -320)
+Offset = Vector2(0, -240)
+PlayerOffset = Vector2(15, -220)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/magic_impact.wav")
 SoundTriggerFrames = PackedInt32Array(9, 11)
 

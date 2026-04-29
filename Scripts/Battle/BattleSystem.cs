@@ -506,12 +506,18 @@ public partial class BattleSystem : Node
             spriteFrames.AddFrame("default", atlas);
         }
 
-        // Baseline position is the floor line. The active offset is step.Offset for
-        // attackers on the right (canonical enemy side) or step.PlayerOffset for attackers
-        // on the left (canonical player side) — the flip is derived from attacker-vs-target
-        // X coordinates rather than a per-sequence flag. Offset.Y < 0 moves the effect up,
-        // Offset.Y > 0 moves it down.
-        const float FloorY = 750f;
+        // Baseline position is the target's body center. The active offset is step.Offset
+        // for attackers on the right (canonical enemy side) or step.PlayerOffset for
+        // attackers on the left (canonical player side) — the flip is derived from
+        // attacker-vs-target X coordinates rather than a per-sequence flag. Offset.Y < 0
+        // moves the effect up, Offset.Y > 0 moves it down.
+        //
+        // C7-extra: previously this used a hardcoded `FloorY = 750f` for the Y baseline,
+        // which only matched slot 0's floor in the legacy single-row layout. With diagonal
+        // columns each slot has its own Y; slots below slot 0 had effects spawning above
+        // their bodies. Switching the baseline to <c>targetCenter</c> makes the offset
+        // target-relative so each slot's effects align with its own body regardless of
+        // slot position.
         var     attacker         = _sequenceContext.Attacker;
         var     target           = _sequenceContext.Target;
         Vector2 targetCenter     = target.Origin + target.PositionRect.Size / 2f;
@@ -535,7 +541,7 @@ public partial class BattleSystem : Node
         // same .tres file works in both directions without a separate PlayerFlipH field.
         sprite.FlipH        = attackerOnRight ? step.FlipH : !step.FlipH;
         sprite.Scale        = step.Scale;
-        sprite.Position     = new Vector2(targetCenter.X, FloorY) + activeOffset;
+        sprite.Position     = targetCenter + activeOffset;
         // Effect sprites (explosions, slashes, smoke, comet trails, etc.) must render
         // on top of the combatants they hit. During the Phase 1 → Phase 2 transition
         // the reveal sprite is at ZIndex 1 and the bumped warrior is at ZIndex 2, so

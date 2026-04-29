@@ -9,7 +9,7 @@ SpritesheetPath = "res://Assets/Effects/Sword_Effects/Red_Sword_Plunge_Sheet.png
 FrameWidth = 192
 FrameHeight = 256
 ImpactFrames = PackedInt32Array(6)
-Offset = Vector2(-15, -369)
+Offset = Vector2(-15, -289)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/magic_launch_heavy.wav", "res://Assets/Audio/SFX/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(5, 6)
 

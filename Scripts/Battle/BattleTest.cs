@@ -3145,21 +3145,111 @@ public partial class BattleTest : Node2D
         BuildEnemyCombinedPanel(layer);
 
         // Centered player strip: total width = N panels + (N-1) gaps; left edge =
-        // (viewport - total) / 2 places the group symmetrically.
+        // (viewport - total) / 2 places the group symmetrically. C7-extra inverts the
+        // slot-to-panel mapping inside BuildPlayerPanelForSlot so slot 0 lands at the
+        // RIGHTMOST panel — matching the diagonal sprite layout where slot 0 is the
+        // "leader confronting" position at top-right of the player formation.
         int   n          = _playerParty.Count;
         float stripWidth = n * PlayerPanelWidth + (n - 1) * PanelStackGap;
         float stripLeft  = (ViewportWidth - stripWidth) * 0.5f;
         for (int i = 0; i < n; i++)
-            _playerPanels.Add(BuildPlayerPanelForSlot(layer, _playerParty[i], i, stripLeft));
+            _playerPanels.Add(BuildPlayerPanelForSlot(layer, _playerParty[i], i, stripLeft, n));
     }
 
-    // Horizontal spacing between successive combatant slots at C3. Placeholder formation;
-    // C6 replaces this with a proper staggered 2-2 / 3-2 layout. Players cluster left of
-    // slot 0 (X decreasing); enemies cluster right of slot 0 (X increasing). At
-    // TestFullParty (4v5), slots 3–4 on the enemy side clip off the 1920-wide viewport —
-    // acceptable scaffolding until C6 lands.
-    private const float PlayerSlotSpacing = 140f;
-    private const float EnemySlotSpacing  = 160f;
+    // C7-extra mirrored-diagonal layout anchors. Each side's slot 0 lives at the legacy
+    // tscn position (preserves 1v1 bit-identical visual). Slots 1..N-1 step linearly along
+    // the diagonal toward the back anchor. The ColorRect anchors offset from the AnimSprite
+    // anchors by the legacy ColorRect-vs-AnimSprite delta (player: -50,-40; enemy: -60,-120).
+    //
+    // Player diagonal slopes ↘ (slot 0 top-right "leader confronting"; slots 1-3 step
+    // down-left). Enemy diagonal mirrors ↙ (slot 0 top-left; slots 1-N step down-right).
+    // No depth scaling — scale stays (3, 3) across all slots so hop-in tweens are pure
+    // translate.
+    private static readonly Vector2 PlayerFrontAnchor     = new Vector2( 440f, 630f);  // AnimSprite slot 0 (legacy)
+    private static readonly Vector2 PlayerBackAnchor      = new Vector2( 230f, 720f);  // AnimSprite slot N-1
+    private static readonly Vector2 PlayerFrontAnchorRect = new Vector2( 390f, 590f);  // ColorRect slot 0 (legacy)
+    private static readonly Vector2 PlayerBackAnchorRect  = new Vector2( 180f, 680f);  // ColorRect slot N-1
+    private static readonly Vector2 EnemyFrontAnchor      = new Vector2(1480f, 670f);  // AnimSprite slot 0 (legacy)
+    private static readonly Vector2 EnemyBackAnchor       = new Vector2(1780f, 760f);  // AnimSprite slot N-1 (front column) — widened from 1700 for breathing room
+    private static readonly Vector2 EnemyFrontAnchorRect  = new Vector2(1420f, 550f);  // ColorRect slot 0 (legacy)
+    private static readonly Vector2 EnemyBackAnchorRect   = new Vector2(1720f, 640f);  // ColorRect slot N-1 (front column) — matches AnimSprite widening
+    // Two-column extension at enemy partySize > 5: slots 5-7 sit in a back column offset
+    // outward (right) and up. Tightened from X=50 to X=30 to compensate for the wider
+    // EnemyBackAnchor — keeps the partySize=8 right-edge clip in line with design intent
+    // ("edge counts 7-8 acceptable to look crowded"; ~85px clip at slot 7 worst case).
+    //
+    // TODO(c7-extra-followup-formation-redesign): the linear-Lerp-with-back-column model
+    // gets crowded at partySize 6-8. Redesign discussed with chat-Claude this session
+    // (locked-in spec deferred to next session): two even rows of 4 max, with empty
+    // slots between enemies for visual breathing room. When the redesign lands, the
+    // back-column helpers + EnemyBackAnchor / EnemyBackColumnOffset get replaced by
+    // the new row-based formula.
+    private static readonly Vector2 EnemyBackColumnOffset = new Vector2(  30f, -40f);
+
+    // Knight (player) feet-anchor metadata for hop-in feet-to-feet alignment (C7-extra).
+    // PlayerFeetAnchorY = "Y-pixel offset from top of 80-px frame to ground line" — for
+    // the Knight the feet sit at the bottom of the frame so this equals FrameHeight.
+    // PlayerFrameHeight cached for the centering math (frame is centered, so the runtime
+    // formula subtracts FrameHeight/2). Knight-only at Phase 6 scope; if a future
+    // PlayerData.tres lands per-character, these constants migrate to the resource.
+    private const float PlayerFeetAnchorY = 80f;
+    private const float PlayerFrameHeight = 80f;
+
+    // Returns the AnimSprite world-space position for player slot `slotIndex` at a party
+    // of size `partySize`. partySize=1 returns the front anchor (legacy slot-0 position),
+    // preserving 1v1 visual identity. partySize 2-4: linear interpolation between front
+    // and back anchors. Phase 6 caps PlayerPartySize at 4 (TestFullParty); larger sizes
+    // would benefit from a two-column extension matching the enemy side, but that's not
+    // exercised today.
+    private static Vector2 ComputePlayerSpriteSlotPosition(int slotIndex, int partySize)
+    {
+        if (partySize <= 1) return PlayerFrontAnchor;
+        float t = slotIndex / (float)(partySize - 1);
+        return PlayerFrontAnchor.Lerp(PlayerBackAnchor, t);
+    }
+
+    private static Vector2 ComputePlayerColorRectSlotPosition(int slotIndex, int partySize)
+    {
+        if (partySize <= 1) return PlayerFrontAnchorRect;
+        float t = slotIndex / (float)(partySize - 1);
+        return PlayerFrontAnchorRect.Lerp(PlayerBackAnchorRect, t);
+    }
+
+    // Enemy version mirrors player but supports two-column extension at partySize > 5.
+    // Slots 0..4 fill the front column (lerp 0..1 over up to 5 slots); slots 5..7 fill
+    // a back column offset by EnemyBackColumnOffset. partySize=1 returns front anchor.
+    // Single column at the 4v5 default (TestFullParty); two-column extension only kicks
+    // in at partySize 6-8 (acceptable to look crowded per design intent).
+    private static Vector2 ComputeEnemySpriteSlotPosition(int slotIndex, int partySize)
+    {
+        if (partySize <= 1) return EnemyFrontAnchor;
+        int frontSize = Mathf.Min(partySize, 5);
+        if (slotIndex < frontSize)
+        {
+            float t = (frontSize == 1) ? 0f : slotIndex / (float)(frontSize - 1);
+            return EnemyFrontAnchor.Lerp(EnemyBackAnchor, t);
+        }
+        // Back column: re-base slotIndex to 0..backSize-1, lerp the same diagonal, add offset.
+        int backSize = Mathf.Max(1, partySize - 5);
+        int backIdx  = slotIndex - 5;
+        float tBack  = (backSize == 1) ? 0f : backIdx / (float)(backSize - 1);
+        return EnemyFrontAnchor.Lerp(EnemyBackAnchor, tBack) + EnemyBackColumnOffset;
+    }
+
+    private static Vector2 ComputeEnemyColorRectSlotPosition(int slotIndex, int partySize)
+    {
+        if (partySize <= 1) return EnemyFrontAnchorRect;
+        int frontSize = Mathf.Min(partySize, 5);
+        if (slotIndex < frontSize)
+        {
+            float t = (frontSize == 1) ? 0f : slotIndex / (float)(frontSize - 1);
+            return EnemyFrontAnchorRect.Lerp(EnemyBackAnchorRect, t);
+        }
+        int backSize = Mathf.Max(1, partySize - 5);
+        int backIdx  = slotIndex - 5;
+        float tBack  = (backSize == 1) ? 0f : backIdx / (float)(backSize - 1);
+        return EnemyFrontAnchorRect.Lerp(EnemyBackAnchorRect, tBack) + EnemyBackColumnOffset;
+    }
 
     /// <summary>
     /// Constructs party lists that back the Combatant abstraction. Loops
@@ -3195,7 +3285,7 @@ public partial class BattleTest : Node2D
             }
             else
             {
-                (rect, sprite) = SpawnPlayerSlot(i, overlayShader);
+                (rect, sprite) = SpawnPlayerSlot(i, PlayerPartySize, overlayShader);
             }
             _playerParty.Add(BuildPlayerCombatantForSlot(i, rect, sprite));
         }
@@ -3211,7 +3301,7 @@ public partial class BattleTest : Node2D
             }
             else
             {
-                (rect, sprite) = SpawnEnemySlot(i, overlayShader);
+                (rect, sprite) = SpawnEnemySlot(i, EnemyPartySize, overlayShader);
             }
             _enemyParty.Add(BuildEnemyCombatantForSlot(i, rect, sprite, enemyInitialMaxHp));
         }
@@ -3225,30 +3315,28 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Spawns the <c>ColorRect</c> + <c>AnimatedSprite2D</c> pair for player slot
     /// <paramref name="slotIndex"/> (must be > 0 — slot 0 is the tscn-placed pair).
+    /// Position derived from <see cref="ComputePlayerSpriteSlotPosition"/> /
+    /// <see cref="ComputePlayerColorRectSlotPosition"/> — diagonal-column layout (C7-extra).
     /// SpriteFrames is shared with slot 0 (Godot Resource, safe to reference from
     /// multiple AnimatedSprite2D nodes). A fresh ShaderMaterial instance is created so
     /// each combatant's flash/tint uniforms are independent.
-    /// Returns the (rect, sprite) pair ready for <see cref="BuildPlayerCombatantForSlot"/>.
     /// </summary>
     private (ColorRect rect, AnimatedSprite2D sprite) SpawnPlayerSlot(int slotIndex,
+                                                                      int partySize,
                                                                       Shader overlayShader)
     {
-        // ColorRect — same size/color/visibility as slot 0; X shifted left by slot index.
         var rect = new ColorRect();
         rect.Size     = _playerSprite.Size;
         rect.Color    = _playerSprite.Color;
-        rect.Position = new Vector2(_playerSprite.Position.X - slotIndex * PlayerSlotSpacing,
-                                     _playerSprite.Position.Y);
+        rect.Position = ComputePlayerColorRectSlotPosition(slotIndex, partySize);
         rect.Visible  = false;  // debug-only anchor, same as slot 0
         AddChild(rect);
 
-        // AnimatedSprite2D — shares slot 0's SpriteFrames, own overlay material.
         var sprite = new AnimatedSprite2D();
         sprite.SpriteFrames = _playerAnimSprite.SpriteFrames;
         sprite.Scale        = _playerAnimSprite.Scale;
         sprite.Centered     = _playerAnimSprite.Centered;
-        sprite.Position     = new Vector2(_playerAnimSprite.Position.X - slotIndex * PlayerSlotSpacing,
-                                           _playerAnimSprite.Position.Y);
+        sprite.Position     = ComputePlayerSpriteSlotPosition(slotIndex, partySize);
         sprite.Material     = CreateCombatantOverlayMaterial(overlayShader);
         AddChild(sprite);
         sprite.Play("idle");
@@ -3259,17 +3347,18 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Spawns the <c>ColorRect</c> + <c>AnimatedSprite2D</c> pair for enemy slot
     /// <paramref name="slotIndex"/> (must be > 0). Mirrors <see cref="SpawnPlayerSlot"/>
-    /// with enemy-side X shift (rightward), FlipH copied from slot 0, and the shared
+    /// with enemy-side diagonal anchors (slot 0 top-left, slots 1-N step down-right;
+    /// two-column extension at partySize > 4), FlipH copied from slot 0, and the shared
     /// enemy SpriteFrames.
     /// </summary>
     private (ColorRect rect, AnimatedSprite2D sprite) SpawnEnemySlot(int slotIndex,
+                                                                     int partySize,
                                                                      Shader overlayShader)
     {
         var rect = new ColorRect();
         rect.Size     = _enemySprite.Size;
         rect.Color    = _enemySprite.Color;
-        rect.Position = new Vector2(_enemySprite.Position.X + slotIndex * EnemySlotSpacing,
-                                     _enemySprite.Position.Y);
+        rect.Position = ComputeEnemyColorRectSlotPosition(slotIndex, partySize);
         rect.Visible  = false;
         AddChild(rect);
 
@@ -3278,8 +3367,7 @@ public partial class BattleTest : Node2D
         sprite.Scale        = _enemyAnimSprite.Scale;
         sprite.Centered     = _enemyAnimSprite.Centered;
         sprite.FlipH        = _enemyAnimSprite.FlipH;
-        sprite.Position     = new Vector2(_enemyAnimSprite.Position.X + slotIndex * EnemySlotSpacing,
-                                           _enemyAnimSprite.Position.Y);
+        sprite.Position     = ComputeEnemySpriteSlotPosition(slotIndex, partySize);
         sprite.Material     = CreateCombatantOverlayMaterial(overlayShader);
         AddChild(sprite);
         sprite.Play("idle");
@@ -3335,6 +3423,9 @@ public partial class BattleTest : Node2D
             AnimSpriteOrigin = sprite.Position,  // post-floor-anchor + per-slot offset
             PositionRect     = rect,
             AnimSprite       = sprite,
+            FeetAnchorY      = PlayerFeetAnchorY,   // C7-extra: feet at bottom of 80-px frame
+            FrameHeight      = PlayerFrameHeight,
+            AnimSpriteScale  = sprite.Scale,        // (3, 3) at Phase 6 scope
             CurrentMp        = PlayerMaxMp,
             MaxMp            = PlayerMaxMp,
             IsDefending      = false,
@@ -3378,6 +3469,9 @@ public partial class BattleTest : Node2D
             AnimSpriteOrigin = sprite.Position,  // post-floor-anchor + per-slot offset
             PositionRect     = rect,
             AnimSprite       = sprite,
+            FeetAnchorY      = EnemyData?.FeetAnchorY ?? EnemyData?.FrameHeight ?? 160f,  // C7-extra: per-enemy authored from .tres; default = FrameHeight (feet at bottom)
+            FrameHeight      = EnemyData?.FrameHeight ?? 160,
+            AnimSpriteScale  = sprite.Scale,                                              // (3, 3) at Phase 6 scope
             Data             = EnemyData,
             FlashMaterial    = sprite.Material as ShaderMaterial,
         };
@@ -3455,10 +3549,13 @@ public partial class BattleTest : Node2D
     /// Builds a player HP/MP panel for one slot in the count-aware centered strip at the
     /// bottom of the screen. <paramref name="stripLeft"/> is the X coordinate of the
     /// strip's left edge (computed once in <see cref="BuildStatusPanels"/> so the group
-    /// stays centered for any party size). Each slot offsets <c>stripLeft + slotIndex *
-    /// (PlayerPanelWidth + PanelStackGap)</c> rightward.
+    /// stays centered for any party size). C7-extra: slot 0 lands at the RIGHTMOST panel
+    /// position via the <c>(partySize - 1 - slotIndex)</c> inversion — matches the
+    /// diagonal sprite layout where slot 0 is the front-anchor position (rightmost in
+    /// the player formation). Spatial correlation: damage on a sprite → eye drops down
+    /// → matching panel directly below.
     /// </summary>
-    private PartyPanel BuildPlayerPanelForSlot(CanvasLayer layer, Combatant combatant, int slotIndex, float stripLeft)
+    private PartyPanel BuildPlayerPanelForSlot(CanvasLayer layer, Combatant combatant, int slotIndex, float stripLeft, int partySize)
     {
         var panel = MakeLayeredPanel(PanelMinWidthStatus, out var content);
         panel.AnchorLeft     = 0f;
@@ -3467,7 +3564,11 @@ public partial class BattleTest : Node2D
         panel.AnchorBottom   = 1f;
         panel.GrowHorizontal = Control.GrowDirection.End;
         panel.GrowVertical   = Control.GrowDirection.Begin;
-        panel.OffsetLeft     = stripLeft + slotIndex * (PlayerPanelWidth + PanelStackGap);
+        // C7-extra: slot 0 lands at the RIGHTMOST panel position so panel-X correlates
+        // with sprite-X (sprite slot 0 is at the front-anchor X = rightmost in the
+        // player diagonal column). At partySize=1, (1-1-0)*step = 0 → leftmost = same as
+        // slot-0-only legacy. Bit-identical 1v1.
+        panel.OffsetLeft     = stripLeft + (partySize - 1 - slotIndex) * (PlayerPanelWidth + PanelStackGap);
         panel.OffsetBottom   = -UiEdgeMargin;
         layer.AddChild(panel);
 
@@ -3906,27 +4007,37 @@ public partial class BattleTest : Node2D
         tween.TweenProperty(attacker.PositionRect, "position", _sequenceAttackerClosePos, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
 
-        // Move the attacker's AnimatedSprite2D by the same X delta as the ColorRect hop.
-        // Reads the per-combatant AnimSpriteOrigin snapshot (set in
-        // BuildPlayerCombatantForSlot / BuildEnemyCombatantForSlot) so multi-unit
-        // hop-ins from any slot retreat to their own origin instead of slot 0's.
+        // Move the attacker's AnimatedSprite2D to the feet-aligned close-stance position.
+        // ComputeAnimSpriteCloseY anchors the attacker's feet to the defender's feet
+        // world Y — accounting for per-character FeetAnchorY (frame padding below feet
+        // for animation effects). The X delta still derives from the ColorRect close
+        // position (X math is unchanged from the diagonal-layout fix).
+        //
+        // C7-extra: previously this used `_sequenceAttackerClosePos.Y - attacker.Origin.Y`
+        // for hopDeltaY, which assumed `Origin.Y + PositionRect.Size.Y == feet` — an
+        // assumption broken by sprites with empty pixels below the feet. Using
+        // ComputeAnimSpriteCloseY directly is the correct feet-anchored target. The
+        // enemy-side attackerOffset.Y term is preserved on top of that for legacy
+        // .tres-authored offsets.
         float   hopDeltaX        = _sequenceAttackerClosePos.X - attacker.Origin.X;
         Vector2 animSpriteOrigin = attacker.AnimSpriteOrigin;
-        // Y-offset applies only to enemy-side attackers (see parameter doc). Preserves
-        // the pre-refactor asymmetric behavior.
         float   animTargetY      = attacker.Side == CombatantSide.Player
-            ? animSpriteOrigin.Y
-            : animSpriteOrigin.Y + attackerOffset.Y;
+            ? ComputeAnimSpriteCloseY(attacker, defender)
+            : ComputeAnimSpriteCloseY(attacker, defender) + attackerOffset.Y;
         Vector2 animTarget       = new Vector2(animSpriteOrigin.X + hopDeltaX, animTargetY);
         tween.TweenProperty(attacker.AnimSprite, "position", animTarget, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
 
         // Enemy-side attacker: play run at double speed if alive (mirrors player pattern
         // above, but routed through the PlayAnim guard helper on the enemy sprite).
+        // C7-extra: routed through `attacker` (per-slot reference) so non-slot-0 enemies
+        // get their own run animation rather than slot 0's. Pre-fix this was hardcoded
+        // to `_enemyParty[0]` — the slot-0-singleton bug pattern that earlier Phase 6
+        // chunks repeatedly addressed.
         if (attacker.Side == CombatantSide.Enemy && !attacker.IsDead)
         {
             attacker.AnimSprite.SpeedScale = 2f;
-            PlayAnim(_enemyParty[0], "run");
+            PlayAnim(attacker, "run");
         }
 
         // Camera zooms in centered between the two combatants.
@@ -3939,10 +4050,11 @@ public partial class BattleTest : Node2D
             // Reset enemy-side attacker SpeedScale after hop-in and hold idle until
             // melee_attack starts. Player-side doesn't need this reset because the
             // player's wind-up pose is set explicitly in BeginAttack's hop-in callback.
+            // C7-extra: per-slot `attacker` reference — fixes slot-0-singleton bug.
             if (attacker.Side == CombatantSide.Enemy && !attacker.IsDead)
             {
                 attacker.AnimSprite.SpeedScale = 1f;
-                PlayAnim(_enemyParty[0], "idle");
+                PlayAnim(attacker, "idle");
             }
             onComplete?.Invoke();
         };
@@ -4140,10 +4252,12 @@ public partial class BattleTest : Node2D
         tween.Finished += () =>
         {
             // Enemy-side attacker that moved: reset SpeedScale and return to idle after hop-back.
+            // C7-extra: per-slot `attacker` reference (was `_enemyParty[0]`) so non-slot-0
+            // enemies return to idle on their own sprite, not slot 0's.
             if (attacker.Side == CombatantSide.Enemy && attackerMoved && !attacker.IsDead)
             {
                 attacker.AnimSprite.SpeedScale = 1f;
-                PlayAnim(_enemyParty[0], "idle");
+                PlayAnim(attacker, "idle");
             }
             // Restore default ZIndex on both sequence participants now that the attack
             // is over. The attacker hopped in and had its ZIndex implicitly involved;
@@ -4166,10 +4280,43 @@ public partial class BattleTest : Node2D
     // =========================================================================
 
     /// <summary>
+    /// Returns the world-space Y where the combatant's feet meet the ground. Computed
+    /// from <c>FeetAnchorY</c> (Y-pixel offset from frame top to ground line, authored
+    /// per-character) plus a half-frame correction (the AnimSprite is Centered=true so
+    /// AnimSpriteOrigin.Y is the sprite center, not the top). C7-extra hop-in feet-to-
+    /// feet alignment uses this — attackers land at the defender's feet world Y minus
+    /// their own feet offset, so both characters appear to stand on the same ground.
+    /// </summary>
+    private static float ComputeFeetWorldY(Combatant c)
+    {
+        return c.AnimSpriteOrigin.Y + (c.FeetAnchorY - c.FrameHeight / 2f) * c.AnimSpriteScale.Y;
+    }
+
+    /// <summary>
+    /// Returns the AnimSprite-target Y for the attacker's close-stance position. Aligns
+    /// the attacker's feet to the defender's feet world Y. Used by both
+    /// <see cref="ComputeClosePosition"/> (which derives the ColorRect Y from this) and
+    /// <see cref="PlayHopIn"/>'s AnimSprite tween (which sets the AnimSprite destination
+    /// directly). Single source of truth for the feet-anchored Y math.
+    /// </summary>
+    private static float ComputeAnimSpriteCloseY(Combatant attacker, Combatant defender)
+    {
+        float defenderFeetWorldY = ComputeFeetWorldY(defender);
+        return defenderFeetWorldY
+             - (attacker.FeetAnchorY - attacker.FrameHeight / 2f) * attacker.AnimSpriteScale.Y;
+    }
+
+    /// <summary>
     /// Returns the position where the attacker stands in the close stance —
-    /// <see cref="AttackGap"/> pixels from the defender's near edge, same Y as origin.
-    /// Calculated from the combatants' stored origins so it is independent of any
-    /// animation in progress.
+    /// <see cref="AttackGap"/> pixels from the defender's near edge, at a Y that puts
+    /// the attacker's feet aligned with the defender's feet (C7-extra feet-anchor
+    /// correction; supersedes the prior "defenderOrigin.Y" approximation which assumed
+    /// `Origin.Y + PositionRect.Size.Y == feet`, an assumption broken by spritesheets
+    /// with empty pixels below the feet for animation effects).
+    ///
+    /// The returned Y is the ColorRect target — derived from the AnimSprite target
+    /// (<see cref="ComputeAnimSpriteCloseY"/>) plus the legacy ColorRect-vs-AnimSprite
+    /// Y delta (constant per slot from the diagonal-column layout helpers).
     /// </summary>
     private Vector2 ComputeClosePosition(Combatant attacker, Combatant defender)
     {
@@ -4181,7 +4328,15 @@ public partial class BattleTest : Node2D
             ? defenderOrigin.X - attacker.PositionRect.Size.X - AttackGap   // attacker right edge = defender left - gap
             : defenderOrigin.X + defender.PositionRect.Size.X + AttackGap;  // attacker left edge  = defender right + gap
 
-        return new Vector2(closeX, attackerOrigin.Y);
+        // Feet-to-feet Y. Compute attacker's target AnimSprite Y, then derive ColorRect Y
+        // via the per-slot ColorRect-vs-AnimSprite delta (the legacy -50,-40 / -60,-120
+        // constants from the diagonal-column anchors, captured here as the difference
+        // between the attacker's stored Origin.Y and AnimSpriteOrigin.Y).
+        float attackerTargetAnimY      = ComputeAnimSpriteCloseY(attacker, defender);
+        float colorRectDelta           = attacker.Origin.Y - attacker.AnimSpriteOrigin.Y;
+        float attackerTargetColorRectY = attackerTargetAnimY + colorRectDelta;
+
+        return new Vector2(closeX, attackerTargetColorRectY);
     }
 
     /// <summary>

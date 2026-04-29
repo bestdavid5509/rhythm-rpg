@@ -24,7 +24,7 @@ ImpactFrames = PackedInt32Array(10)
 CircleType = 1
 StartOffsetMs = -500
 FlipH = true
-Offset = Vector2(25, -218)
+Offset = Vector2(25, -138)
 BaseDamageOverride = 25
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/ice_conjure.wav", "res://Assets/Audio/SFX/ice_impact.wav")
 SoundTriggerFrames = PackedInt32Array(0, 10)
@@ -37,7 +37,7 @@ FrameHeight = 96
 ImpactFrames = PackedInt32Array(6)
 StartOffsetMs = -2000
 Scale = Vector2(4, 4)
-Offset = Vector2(-100, -100)
+Offset = Vector2(-100, -20)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(6)
 
@@ -50,7 +50,7 @@ ImpactFrames = PackedInt32Array(6)
 StartOffsetMs = -500
 FlipH = true
 Scale = Vector2(4, 4)
-Offset = Vector2(50, -100)
+Offset = Vector2(50, -20)
 SoundEffects = PackedStringArray("res://Assets/Audio/SFX/fire_hammer.wav")
 SoundTriggerFrames = PackedInt32Array(6)
 

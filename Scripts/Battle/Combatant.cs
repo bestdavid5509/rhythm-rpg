@@ -44,6 +44,18 @@ public class Combatant
     public ColorRect        PositionRect;  // existing anchor node (formerly _playerSprite / _enemySprite)
     public AnimatedSprite2D AnimSprite;    // existing animated sprite node (formerly _playerAnimSprite / _enemyAnimSprite)
 
+    // C7-extra feet-anchor metadata for hop-in feet-to-feet alignment. Cached at slot
+    // construction (BuildPlayerCombatantForSlot / BuildEnemyCombatantForSlot) — never
+    // mutated during gameplay. FeetAnchorY is the Y-pixel offset from the TOP of the
+    // sprite frame to the character's ground line (where their feet meet the floor);
+    // the centering math (Centered=true puts AnimSpriteOrigin at sprite center) is done
+    // at use time via `(FeetAnchorY - FrameHeight/2) * AnimSpriteScale.Y`. AnimSpriteScale
+    // is uniform (3, 3) at Phase 6 scope but cached here so future per-character scaling
+    // doesn't require touching the close-stance helpers.
+    public float            FeetAnchorY;
+    public float            FrameHeight;
+    public Vector2          AnimSpriteScale;
+
     // ---- Player-only — null/unused/default on enemies ----
     public int       CurrentMp;
     public int       MaxMp;
