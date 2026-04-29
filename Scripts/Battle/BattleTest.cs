@@ -3457,7 +3457,7 @@ public partial class BattleTest : Node2D
             _ => 10,
         };
         string baseName = EnemyData?.EnemyName ?? "Enemy";
-        return new Combatant
+        var combatant = new Combatant
         {
             Name             = slotIndex == 0 ? baseName : $"{baseName} {slotIndex + 1}",
             Side             = CombatantSide.Enemy,
@@ -3469,12 +3469,36 @@ public partial class BattleTest : Node2D
             AnimSpriteOrigin = sprite.Position,  // post-floor-anchor + per-slot offset
             PositionRect     = rect,
             AnimSprite       = sprite,
-            FeetAnchorY      = EnemyData?.FeetAnchorY ?? EnemyData?.FrameHeight ?? 160f,  // C7-extra: per-enemy authored from .tres; default = FrameHeight (feet at bottom)
-            FrameHeight      = EnemyData?.FrameHeight ?? 160,
-            AnimSpriteScale  = sprite.Scale,                                              // (3, 3) at Phase 6 scope
-            Data             = EnemyData,
             FlashMaterial    = sprite.Material as ShaderMaterial,
         };
+        // FeetAnchorY / FrameHeight / AnimSpriteScale / Data come from EnemyData and
+        // must also refresh if EnemyData changes mid-fight (Phase 2 transition).
+        // Single helper keeps both call sites (this builder + ApplyPhase2Sprite)
+        // mechanically identical so a stale-cache divergence can't recur.
+        RefreshCombatantFromEnemyData(combatant, EnemyData, sprite);
+        return combatant;
+    }
+
+    /// <summary>
+    /// Caches EnemyData-derived fields onto a Combatant. Called from
+    /// <see cref="BuildEnemyCombatantForSlot"/> at scene init AND from
+    /// <c>ApplyPhase2Sprite</c> at Phase 2 transition (where the EnemyData reference
+    /// flips from Phase 1 Warrior to Phase 2 Boss). Any new per-EnemyData field cached
+    /// on Combatant must be added here so both call sites stay in sync — this helper
+    /// is the single source of truth for the EnemyData → Combatant cache mapping.
+    ///
+    /// Defensive null-fallbacks for FeetAnchorY (default = FrameHeight = legacy
+    /// "feet at bottom of frame") and FrameHeight (default 160) preserve the
+    /// pre-FeetAnchorY behaviour for any future EnemyData asset that omits the field.
+    /// </summary>
+    private static void RefreshCombatantFromEnemyData(Combatant combatant,
+                                                      EnemyData data,
+                                                      AnimatedSprite2D sprite)
+    {
+        combatant.FeetAnchorY     = data?.FeetAnchorY ?? data?.FrameHeight ?? 160f;
+        combatant.FrameHeight     = data?.FrameHeight ?? 160;
+        combatant.AnimSpriteScale = sprite.Scale;
+        combatant.Data            = data;
     }
 
     /// <summary>

@@ -684,6 +684,14 @@ public partial class BattleTest : Node2D
         // PlayHopIn / PlayTeardown read the new Phase 2 origin (Phase 1's origin
         // was a different sprite at a different floor anchor).
         _enemyParty[0].AnimSpriteOrigin = _enemyAnimSprite.Position;
+        // C7-extra-followup-phase2-feet: refresh the EnemyData-derived cache on the
+        // slot-0 Combatant. Without this, FeetAnchorY / FrameHeight / Data hold the
+        // Phase 1 Warrior values (FeetAnchorY=112, FrameHeight=130) so hop-in feet-
+        // alignment math computes the boss's feet world Y using stale Phase 1
+        // numbers — Knight lands ~27 px above the Phase 2 boss's actual feet line.
+        // RefreshCombatantFromEnemyData is the single source of truth for the cache
+        // mapping (also called from BuildEnemyCombatantForSlot at scene init).
+        RefreshCombatantFromEnemyData(_enemyParty[0], EnemyData, _enemyAnimSprite);
         _enemyAnimSprite.Play("idle");
     }
 
@@ -728,9 +736,11 @@ public partial class BattleTest : Node2D
         // above, so reading EnemyData.MaxHp here pulls the Phase 2 value. AnimSprite,
         // PositionRect, and FlashMaterial references stay valid — same node instances,
         // just new SpriteFrames via ApplyPhase2Sprite. Origin (ColorRect-based) is
-        // unchanged by phase transition.
+        // unchanged by phase transition. The EnemyData-derived cache on the Combatant
+        // (FeetAnchorY / FrameHeight / AnimSpriteScale / Data) was already refreshed
+        // in ApplyPhase2Sprite via RefreshCombatantFromEnemyData; this block only
+        // resets the runtime HP/Name/IsDead for the new round.
         var enemyCombatant       = _enemyParty[0];
-        enemyCombatant.Data      = EnemyData;
         enemyCombatant.Name      = EnemyData.EnemyName;
         enemyCombatant.MaxHp     = EnemyData.MaxHp;
         enemyCombatant.CurrentHp = EnemyData.MaxHp;
