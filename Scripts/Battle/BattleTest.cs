@@ -3157,34 +3157,59 @@ public partial class BattleTest : Node2D
     }
 
     // C7-extra mirrored-diagonal layout anchors. Each side's slot 0 lives at the legacy
-    // tscn position (preserves 1v1 bit-identical visual). Slots 1..N-1 step linearly along
-    // the diagonal toward the back anchor. The ColorRect anchors offset from the AnimSprite
-    // anchors by the legacy ColorRect-vs-AnimSprite delta (player: -50,-40; enemy: -60,-120).
+    // tscn position (preserves 1v1 bit-identical visual). Player slots 1..N-1 step
+    // linearly along the diagonal toward the back anchor. The player ColorRect anchors
+    // offset from the AnimSprite anchors by the legacy -50, -40 delta.
     //
     // Player diagonal slopes ↘ (slot 0 top-right "leader confronting"; slots 1-3 step
-    // down-left). Enemy diagonal mirrors ↙ (slot 0 top-left; slots 1-N step down-right).
-    // No depth scaling — scale stays (3, 3) across all slots so hop-in tweens are pure
-    // translate.
+    // down-left). No depth scaling — scale stays (3, 3) across all slots so hop-in
+    // tweens are pure translate.
+    //
+    // The enemy side does NOT use Front/Back/BackColumnOffset anchors — see the
+    // staggered two-row diagonal grid block below.
     private static readonly Vector2 PlayerFrontAnchor     = new Vector2( 440f, 630f);  // AnimSprite slot 0 (legacy)
     private static readonly Vector2 PlayerBackAnchor      = new Vector2( 230f, 720f);  // AnimSprite slot N-1
     private static readonly Vector2 PlayerFrontAnchorRect = new Vector2( 390f, 590f);  // ColorRect slot 0 (legacy)
     private static readonly Vector2 PlayerBackAnchorRect  = new Vector2( 180f, 680f);  // ColorRect slot N-1
-    private static readonly Vector2 EnemyFrontAnchor      = new Vector2(1480f, 670f);  // AnimSprite slot 0 (legacy)
-    private static readonly Vector2 EnemyBackAnchor       = new Vector2(1780f, 760f);  // AnimSprite slot N-1 (front column) — widened from 1700 for breathing room
-    private static readonly Vector2 EnemyFrontAnchorRect  = new Vector2(1420f, 550f);  // ColorRect slot 0 (legacy)
-    private static readonly Vector2 EnemyBackAnchorRect   = new Vector2(1720f, 640f);  // ColorRect slot N-1 (front column) — matches AnimSprite widening
-    // Two-column extension at enemy partySize > 5: slots 5-7 sit in a back column offset
-    // outward (right) and up. Tightened from X=50 to X=30 to compensate for the wider
-    // EnemyBackAnchor — keeps the partySize=8 right-edge clip in line with design intent
-    // ("edge counts 7-8 acceptable to look crowded"; ~85px clip at slot 7 worst case).
+
+    // Staggered two-row diagonal grid for enemy formation (post-C7-extra follow-up —
+    // replaces the linear-Lerp + back-column model). Both rows are parallel diagonals
+    // sloping down-right at +EnemyColumnXStep X, +EnemyRowYStep Y per column. Back row
+    // sits BELOW (positive Y) and to the LEFT (negative X) of the corresponding front-
+    // row column — reads as a "second wave below" depth-staggered formation rather
+    // than a "depth-receding behind" layout.
     //
-    // TODO(c7-extra-followup-formation-redesign): the linear-Lerp-with-back-column model
-    // gets crowded at partySize 6-8. Redesign discussed with chat-Claude this session
-    // (locked-in spec deferred to next session): two even rows of 4 max, with empty
-    // slots between enemies for visual breathing room. When the redesign lands, the
-    // back-column helpers + EnemyBackAnchor / EnemyBackColumnOffset get replaced by
-    // the new row-based formula.
-    private static readonly Vector2 EnemyBackColumnOffset = new Vector2(  30f, -40f);
+    // The front-row anchor is NOT a constant — each helper takes its OWN slot 0 runtime
+    // position as a parameter (AnimSprite helper receives _enemyAnimSprite.Position;
+    // ColorRect helper receives _enemySprite.Position). Both run the same diagonal-grid
+    // offset math, applied independently to their respective slot 0 reference. This
+    // makes the front row automatically track per-EnemyData frame geometry on the
+    // AnimSprite side (Warrior: (1480, 606); Phase 2 boss: (1480, 592)) while the
+    // ColorRect stays at its tscn-set (1420, 550) — and preserves the implicit
+    // AnimSprite-vs-ColorRect delta at every slot without coupling the two helpers
+    // via a shared constant.
+    //
+    // 1v1 bit-identity at slot 0: EnemySlotToGridPosition[0] = (0, 0) → helper returns
+    // slot0Runtime + (0, 0) = slot0Runtime. Same value as the existing floor-anchor
+    // produces, for any EnemyData.
+    private const float EnemyColumnXStep    =  80f;  // X step per column within a row
+    private const float EnemyRowYStep       =  24f;  // Y step per column within a row (diagonal slope)
+    private const float EnemyBackRowXOffset = -40f;  // back row X relative to front row same-column
+    private const float EnemyBackRowYOffset =  96f;  // back row Y relative to front row same-column (BELOW)
+
+    // Slot-to-grid mapping. Pattern: alternate front/back, fill outer columns
+    // (col 0, col 2) before inner column (col 1) before far-outer column (col 3).
+    // (row 0 = front, row 1 = back.) Slot 0 lands at FC0 (front-col-0) — boss / lead.
+    private static readonly (int row, int col)[] EnemySlotToGridPosition = {
+        (0, 0),  // slot 0 → FC0  (boss / lead — anchored to slot 0 runtime)
+        (1, 0),  // slot 1 → BC0  (below-left of FC0)
+        (0, 2),  // slot 2 → FC2
+        (1, 2),  // slot 3 → BC2
+        (0, 1),  // slot 4 → FC1
+        (1, 1),  // slot 5 → BC1
+        (0, 3),  // slot 6 → FC3
+        (1, 3),  // slot 7 → BC3
+    };
 
     // Knight (player) feet-anchor metadata for hop-in feet-to-feet alignment (C7-extra).
     // PlayerFeetAnchorY = "Y-pixel offset from top of 80-px frame to ground line" — for
@@ -3215,40 +3240,43 @@ public partial class BattleTest : Node2D
         return PlayerFrontAnchorRect.Lerp(PlayerBackAnchorRect, t);
     }
 
-    // Enemy version mirrors player but supports two-column extension at partySize > 5.
-    // Slots 0..4 fill the front column (lerp 0..1 over up to 5 slots); slots 5..7 fill
-    // a back column offset by EnemyBackColumnOffset. partySize=1 returns front anchor.
-    // Single column at the 4v5 default (TestFullParty); two-column extension only kicks
-    // in at partySize 6-8 (acceptable to look crowded per design intent).
-    private static Vector2 ComputeEnemySpriteSlotPosition(int slotIndex, int partySize)
+    // Enemy version uses the staggered two-row diagonal grid (see constants block above).
+    // Slot index → (row, col) via EnemySlotToGridPosition; grid offsets are applied to a
+    // caller-supplied slot 0 reference so the formation tracks slot 0's runtime position
+    // automatically. Both helpers are pure functions of (slotIndex, slot0Runtime) — the
+    // partySize parameter is retained for signature symmetry with the player helpers
+    // but is not consulted (the slot-to-grid lookup alone determines the position).
+    //
+    // Slot 0 returns slot0Runtime unchanged (col=0, row=0 → +0 X, +0 Y), so 1v1 stays
+    // bit-identical to ship state for any EnemyData. Defensive fallback at out-of-range
+    // slots also returns slot0Runtime — keeps the formation collapsing to slot 0 if the
+    // mapping table and partySize ever diverge.
+    private static Vector2 ComputeEnemySpriteSlotPosition(int slotIndex, int partySize,
+                                                          Vector2 slot0AnimSpriteRuntime)
     {
-        if (partySize <= 1) return EnemyFrontAnchor;
-        int frontSize = Mathf.Min(partySize, 5);
-        if (slotIndex < frontSize)
-        {
-            float t = (frontSize == 1) ? 0f : slotIndex / (float)(frontSize - 1);
-            return EnemyFrontAnchor.Lerp(EnemyBackAnchor, t);
-        }
-        // Back column: re-base slotIndex to 0..backSize-1, lerp the same diagonal, add offset.
-        int backSize = Mathf.Max(1, partySize - 5);
-        int backIdx  = slotIndex - 5;
-        float tBack  = (backSize == 1) ? 0f : backIdx / (float)(backSize - 1);
-        return EnemyFrontAnchor.Lerp(EnemyBackAnchor, tBack) + EnemyBackColumnOffset;
+        if (slotIndex < 0 || slotIndex >= EnemySlotToGridPosition.Length)
+            return slot0AnimSpriteRuntime;
+        var (row, col) = EnemySlotToGridPosition[slotIndex];
+        float frontX = slot0AnimSpriteRuntime.X + col * EnemyColumnXStep;
+        float frontY = slot0AnimSpriteRuntime.Y + col * EnemyRowYStep;
+        if (row == 0)
+            return new Vector2(frontX, frontY);
+        return new Vector2(frontX + EnemyBackRowXOffset,
+                           frontY + EnemyBackRowYOffset);
     }
 
-    private static Vector2 ComputeEnemyColorRectSlotPosition(int slotIndex, int partySize)
+    private static Vector2 ComputeEnemyColorRectSlotPosition(int slotIndex, int partySize,
+                                                             Vector2 slot0ColorRectRuntime)
     {
-        if (partySize <= 1) return EnemyFrontAnchorRect;
-        int frontSize = Mathf.Min(partySize, 5);
-        if (slotIndex < frontSize)
-        {
-            float t = (frontSize == 1) ? 0f : slotIndex / (float)(frontSize - 1);
-            return EnemyFrontAnchorRect.Lerp(EnemyBackAnchorRect, t);
-        }
-        int backSize = Mathf.Max(1, partySize - 5);
-        int backIdx  = slotIndex - 5;
-        float tBack  = (backSize == 1) ? 0f : backIdx / (float)(backSize - 1);
-        return EnemyFrontAnchorRect.Lerp(EnemyBackAnchorRect, tBack) + EnemyBackColumnOffset;
+        if (slotIndex < 0 || slotIndex >= EnemySlotToGridPosition.Length)
+            return slot0ColorRectRuntime;
+        var (row, col) = EnemySlotToGridPosition[slotIndex];
+        float frontX = slot0ColorRectRuntime.X + col * EnemyColumnXStep;
+        float frontY = slot0ColorRectRuntime.Y + col * EnemyRowYStep;
+        if (row == 0)
+            return new Vector2(frontX, frontY);
+        return new Vector2(frontX + EnemyBackRowXOffset,
+                           frontY + EnemyBackRowYOffset);
     }
 
     /// <summary>
@@ -3358,7 +3386,8 @@ public partial class BattleTest : Node2D
         var rect = new ColorRect();
         rect.Size     = _enemySprite.Size;
         rect.Color    = _enemySprite.Color;
-        rect.Position = ComputeEnemyColorRectSlotPosition(slotIndex, partySize);
+        rect.Position = ComputeEnemyColorRectSlotPosition(slotIndex, partySize,
+                                                          _enemySprite.Position);
         rect.Visible  = false;
         AddChild(rect);
 
@@ -3367,7 +3396,8 @@ public partial class BattleTest : Node2D
         sprite.Scale        = _enemyAnimSprite.Scale;
         sprite.Centered     = _enemyAnimSprite.Centered;
         sprite.FlipH        = _enemyAnimSprite.FlipH;
-        sprite.Position     = ComputeEnemySpriteSlotPosition(slotIndex, partySize);
+        sprite.Position     = ComputeEnemySpriteSlotPosition(slotIndex, partySize,
+                                                             _enemyAnimSprite.Position);
         sprite.Material     = CreateCombatantOverlayMaterial(overlayShader);
         AddChild(sprite);
         sprite.Play("idle");

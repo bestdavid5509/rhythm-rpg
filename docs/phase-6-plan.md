@@ -521,20 +521,37 @@ visible to be highlighted.
 
 - FF-style mirrored diagonal columns. Player diagonal slopes ↘ (slot 0
   at top-right, "leader confronting"; slots 1-3 step down-left at
-  partySize=4). Enemy diagonal mirrors ↙ (slot 0 at top-left; slots
-  1-N step down-right).
-- Anchors per side: legacy slot-0 tscn position is the front anchor
-  (preserves 1v1 bit-identical visual). Linear interpolation to a
-  back anchor for slots 1..N-1.
+  partySize=4). Player anchors: legacy slot-0 tscn position is the
+  front anchor (preserves 1v1 bit-identical visual); linear
+  interpolation to a back anchor for slots 1..N-1. Player party caps
+  at 4 in Phase 6 scope — no two-row extension needed on the player
+  side.
 - Constant scale `(3, 3)` across all slots — no depth scaling. Hop-in
   tweens stay pure-translate (critical for animation simplicity at
   multi-character density).
-- Two-column extension when enemy partySize > 4: slots 0-3 in the
-  front column (lerp 0..1 over up to 4 slots); slots 4-7 in a back
-  column offset outward (right) and up by `EnemyBackColumnOffset`.
-  Edge counts 7-8 acceptable to look crowded.
-- Player party caps at 4 in Phase 6 scope — no two-column extension
-  needed on the player side.
+- Enemy formation (post-redesign — staggered two-row diagonal grid,
+  follow-up commit): two parallel down-and-right diagonals. Front row
+  is anchored at slot 0's runtime position (per-EnemyData: Warrior
+  `(1480, 606)`, Phase-2 boss `(1480, 592)`); each subsequent column
+  in either row steps `+80 X, +24 Y`. Back row sits BELOW (`+96 Y`)
+  and to the LEFT (`-40 X`) of the corresponding front-row column —
+  reads as a "second wave below" depth-staggered formation, not
+  "depth-receding behind." Slot index → `(row, col)` via
+  `EnemySlotToGridPosition` lookup; pattern alternates front/back and
+  fills outer columns (col 0, col 2) before inner (col 1) before
+  far-outer (col 3). At 4 enemies, slots fill `FC0/BC0/FC2/BC2`
+  leaving cols 1 and 3 empty — reads as a "pinch" formation around
+  the inner column. Slot 0 at `(row=0, col=0)` returns the slot 0
+  runtime position unchanged → 1v1 bit-identical to ship state by
+  construction. No depth-sort / Z-index changes in this pass —
+  Godot's `CANVAS_ITEM_Z_MAX ≈ 4096` rules out a naive Y-tied
+  scheme; if interactive review surfaces back-row occlusion issues
+  they're handled in a separate follow-up commit. Per-encounter
+  overrides remain out of scope.
+- (Original C7-extra shipped enemies as a single diagonal column with
+  linear-Lerp + back-column extension at 6-8 enemies. The 4v5 default
+  cramped sprites at 80-px slot spacing vs 390-px Warrior sprite
+  width; the staggered two-row grid above replaces it.)
 - HP/MP panels at bottom-center reorder so slot 0 sits at the
   RIGHTMOST panel position via `(partySize - 1 - slotIndex)`
   inversion. Spatial correlation: damage on sprite → eye drops →
