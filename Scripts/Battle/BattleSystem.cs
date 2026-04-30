@@ -542,12 +542,17 @@ public partial class BattleSystem : Node
         sprite.FlipH        = attackerOnRight ? step.FlipH : !step.FlipH;
         sprite.Scale        = step.Scale;
         sprite.Position     = targetCenter + activeOffset;
-        // Effect sprites (explosions, slashes, smoke, comet trails, etc.) must render
-        // on top of the combatants they hit. During the Phase 1 → Phase 2 transition
-        // the reveal sprite is at ZIndex 1 and the bumped warrior is at ZIndex 2, so
-        // effects at ZIndex 3 stay strictly above both throughout the sequence (and
-        // above everything in normal combat, where combatants sit at 0 or 1).
-        sprite.ZIndex       = 3;
+        // C7-extra-followup: effect sprites take the target's ZIndex so they "join
+        // the row" of the combatant they hit — front-row-target effects render at
+        // the front-row Z (and may be occluded by adjacent back-row sprites that
+        // overlap, by design); back-row-target effects render at the back-row Z
+        // (in front of front-row sprites in the same column). Tree order keeps the
+        // effect rendering on top of the target sprite at equal Z (effect added
+        // later). At 1v1 default (target = slot 0, Z=0) this matches the
+        // pre-refactor default-Z behaviour. The Phase 1 → Phase 2 reveal sequence
+        // does not call SpawnEffectSprite, so the legacy reveal layering (reveal=1,
+        // warrior bumped=2) is unaffected by this change.
+        sprite.ZIndex       = target.AnimSprite.ZIndex;
         // Use an explicit named delegate so the handler can disconnect itself before
         // calling QueueFree. The direct `+= sprite.QueueFree` pattern causes Godot's
         // automatic signal cleanup (which runs when the node is freed) to attempt a

@@ -330,6 +330,14 @@ public partial class BattleTest : Node2D
     private Combatant _sequenceAttacker;
     private Combatant _sequenceDefender;
     private Vector2   _sequenceAttackerClosePos;  // close-but-not-touching stance position for this sequence
+    // C7-extra-followup: snapshot of the hop-in attacker's pre-bump ZIndex. Set in
+    // PlayHopIn before the attacker takes the defender's Z; restored in PlayTeardown's
+    // tween.Finished. Sentinel -1 means "no active snapshot" — safe by construction
+    // for the SkipHopIn=true / cast-attack paths that never call PlayHopIn. Single
+    // field is sufficient because only one sequence is active at a time (turn-queue
+    // invariant). Cleared unconditionally on teardown so a leaked stale value cannot
+    // persist into the next sequence even if the attacker died mid-attack.
+    private int       _attackerZIndexBeforeHopIn = -1;
     // Dying combatant for the in-flight death animation. Set immediately before each
     // death-subscription site (enemy or player death) so OnEnemyDeathFinished /
     // OnPlayerDeathFinished can route their disconnects/teardown through the correct
@@ -496,13 +504,17 @@ public partial class BattleTest : Node2D
         else if (testFullParty)
         {
             // Multi-unit roster scaffolding. Override the inspector PartySize values; null
-            // out Phase2EnemyData so the Phase 1 → Phase 2 transition is suppressed at 4v5
+            // out Phase2EnemyData so the Phase 1 → Phase 2 transition is suppressed at 4v8
             // (the transition logic assumes a single enemy and would corrupt state when
-            // slots 1-4 are still alive at warrior death).
+            // slots 1-N are still alive at warrior death). 4v8 (rather than the prior 4v5)
+            // exercises the full enemy staggered grid — both rows × all four columns —
+            // which is the density at which the C7-extra-followup row/col-derived Z fix
+            // is actually visible. 4v5 leaves cols 1 and 3 empty, masking row/col Z
+            // ordering bugs.
             PlayerPartySize = 4;
-            EnemyPartySize  = 5;
+            EnemyPartySize  = 8;
             Phase2EnemyData = null;
-            GD.Print("[TEST] TestFullParty active — 4 players vs 5 enemies.");
+            GD.Print("[TEST] TestFullParty active — 4 players vs 8 enemies.");
             GD.Print("[TEST] TestFullParty suppresses Phase 1 → Phase 2 transition.");
         }
 
@@ -1432,7 +1444,7 @@ public partial class BattleTest : Node2D
         // C5: the queue is the single source of turn flow; every AdvanceTurn call
         // site is explicit, so there's no event-driven double-fire risk that would
         // require a reentrancy guard here. The pre-C5 guard mistakenly tripped on
-        // legitimate consecutive enemy turns (E1 → E2 in 4v5 rotation).
+        // legitimate consecutive enemy turns (E1 → E2 in 4v8 rotation).
         _state               = BattleState.EnemyAttack;
         // Refresh panels so the previous player's PanelActiveModulate highlight
         // clears now that we're past the player-input phase. ApplyDeadOrActiveStyling
@@ -1815,7 +1827,7 @@ public partial class BattleTest : Node2D
             // C5 multi-unit: a defender dying doesn't end the round. Tear down the
             // enemy's pose and advance the turn queue so the next combatant gets to act.
             // (Pre-Phase-6, this branch could rely on game-over being the only defender-
-            // death outcome; at 4v5 a single player death leaves the round still in flight.)
+            // death outcome; at 4v8 a single player death leaves the round still in flight.)
             PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn);
             return;
         }
@@ -3315,6 +3327,17 @@ public partial class BattleTest : Node2D
             {
                 (rect, sprite) = SpawnPlayerSlot(i, PlayerPartySize, overlayShader);
             }
+            // C7-extra-followup: slot index drives Z because the player formation is a
+            // single ↘ diagonal column where Y is monotonically increasing in slot index
+            // (slot 0 top-right, slots 1..N-1 step down-left). Slot index = Y rank, so
+            // Z = slotIndex produces the correct depth-sort. The `* 2` spacing leaves the
+            // odd Z values free for the hop-in attacker bump (defender.Z + 1) — without
+            // it, an enemy attacker bumped to Z=1 would tie with player slot 1 at Z=1,
+            // and scene-tree order would let the enemy win regardless of attacker side.
+            // NOTE: if the player layout ever expands to a staggered multi-row formation
+            // (mirroring the enemy grid), switch to the row/col-derived Z used for
+            // enemies below — slot index would no longer match Y rank.
+            sprite.ZIndex = i * 2;
             _playerParty.Add(BuildPlayerCombatantForSlot(i, rect, sprite));
         }
 
@@ -3331,6 +3354,17 @@ public partial class BattleTest : Node2D
             {
                 (rect, sprite) = SpawnEnemySlot(i, EnemyPartySize, overlayShader);
             }
+            // C7-extra-followup: enemy Z derives from the staggered grid (row, col), not
+            // from slot index. The slot fill pattern (FC0/BC0/FC2/BC2/FC1/BC1/FC3/BC3 —
+            // outer-cols-first, alternating front/back) is deliberately non-monotonic in
+            // Y, so slot index ≠ Y rank. (row*4+col) maps to Y rank: front row 0..3
+            // (FC0..FC3 ascending Y) then back row 4..7 (BC0..BC3 ascending Y, all behind
+            // the front row). The `* 2` spacing matches the player side: leaves odd Z
+            // values free for hop-in attacker bumps, prevents same-Z ties between
+            // formation members on either side. Slot 0 still gets Z=0 (FC0 = (0,0)*2 = 0),
+            // preserving 1v1 bit-identity.
+            var (row, col) = EnemySlotToGridPosition[i];
+            sprite.ZIndex = (row * 4 + col) * 2;
             _enemyParty.Add(BuildEnemyCombatantForSlot(i, rect, sprite, enemyInitialMaxHp));
         }
 
@@ -4027,10 +4061,21 @@ public partial class BattleTest : Node2D
         _sequenceDefender         = defender;
         _sequenceAttackerClosePos = ComputeClosePosition(attacker, defender) + new Vector2(attackerOffset.X, 0f);
 
-        // Raise the attacker's sprite ZIndex so it renders in front of the defender
-        // during the hop-in overlap. Restored to 0 in PlayTeardown.
-        attacker.AnimSprite.ZIndex = 1;
-        defender.AnimSprite.ZIndex = 0;
+        // C7-extra-followup: snapshot the attacker's pre-bump ZIndex and raise it to
+        // the defender's Z + 1 so the attacker "joins the defender's row" during the
+        // hop-in overlap AND renders strictly in front of the defender. Formation
+        // slot Z values are spaced 2 apart in BuildInitialParties (player N → 2N,
+        // enemy → 2*(row*4+col)), leaving the odd Z values uniquely free for this +1
+        // bump. Without the spacing, the bumped attacker would tie at Z with another
+        // formation member (e.g. enemy attacker bumped to Z=1 ties with player slot 1
+        // at Z=1) and scene-tree order — enemies added after players — would let the
+        // wrong sprite win regardless of attacker side. Restored from the snapshot in
+        // PlayTeardown. Defender Z is left untouched — at 1v1 it's already 0 (no-op vs
+        // the old explicit reset), and at multi-character density the defender's slot
+        // Z must be preserved so back-row defenders stay correctly depth-sorted
+        // relative to other formation members.
+        _attackerZIndexBeforeHopIn = attacker.AnimSprite.ZIndex;
+        attacker.AnimSprite.ZIndex = defender.AnimSprite.ZIndex + 1;
 
         // Hop-in footstep sound.
         if (!attacker.IsDead)
@@ -4313,17 +4358,20 @@ public partial class BattleTest : Node2D
                 attacker.AnimSprite.SpeedScale = 1f;
                 PlayAnim(attacker, "idle");
             }
-            // Restore default ZIndex on both sequence participants now that the attack
-            // is over. The attacker hopped in and had its ZIndex implicitly involved;
-            // the defender stays put but is reset for symmetry. Skip the dead enemy —
-            // SpawnBossReveal bumped slot 0 enemy's ZIndex up so the reveal stays
-            // strictly behind, and SwapToPhase2 restores the original snapshot value.
-            // (Player death doesn't bump ZIndex, so the IsDead check only matters for
-            // the enemy-side participant.)
-            foreach (var c in new[] { _sequenceAttacker, _sequenceDefender })
+            // C7-extra-followup: restore the attacker's pre-hop-in ZIndex from the
+            // snapshot taken in PlayHopIn. Sentinel guard `>= 0` skips the restore
+            // when no hop-in ran (cast attacks / SkipHopIn=true paths leave the
+            // sentinel at -1). The IsDead check preserves the Phase 2 reveal contract:
+            // SpawnBossReveal bumps the dead Phase 1 warrior's ZIndex to stay above
+            // the reveal sprite, and SwapToPhase2 owns the eventual restore via its
+            // own snapshot (_enemyZIndexBeforeReveal). The sentinel is cleared
+            // unconditionally so a leak cannot persist into the next sequence even
+            // if the attacker died mid-attack and the restore was skipped.
+            if (_attackerZIndexBeforeHopIn >= 0)
             {
-                if (c.Side == CombatantSide.Enemy && c.IsDead) continue;
-                c.AnimSprite.ZIndex = 0;
+                if (!_sequenceAttacker.IsDead)
+                    _sequenceAttacker.AnimSprite.ZIndex = _attackerZIndexBeforeHopIn;
+                _attackerZIndexBeforeHopIn = -1;
             }
             onComplete?.Invoke();
         };

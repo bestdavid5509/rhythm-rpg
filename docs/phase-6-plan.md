@@ -16,8 +16,8 @@ status card per side.
 Phase 6 converts the entire runtime to multi-character machinery driven by an
 agility-based turn queue. 1v1 is preserved as an _emergent outcome_ of
 `PlayerPartySize = 1, EnemyPartySize = 1` running through the same machinery
-— not a separate code path. `TestFullParty = true` flips the roster to 4v5
-for density validation. The output is a close-to-shippable 4v5 Phase 1 boss
+— not a separate code path. `TestFullParty = true` flips the roster to 4v8
+for density validation. The output is a close-to-shippable 4v8 Phase 1 boss
 fight when the flag is on, and a fully-regression-tested 1v1 when the flag
 is off. Layout redesign, Beckon target-redirect (per `docs/design-notes.md`
 Option A), and the deferred pointer / damage-number / Cure-circle positioning
@@ -199,13 +199,15 @@ C2 rewrites both layers. See C2 grep checklist.
 
 ### 3.1 In scope
 
-- **Default config is 1v1; 4v5 is gated on `TestFullParty`**, but both run
+- **Default config is 1v1; 4v8 is gated on `TestFullParty`**, but both run
   through the same multi-character machinery. There is no separate 1v1
   code path. `PlayerPartySize` and `EnemyPartySize` are
   `[Export] int` properties on BattleTest with defaults `1, 1`. Setting
-  `TestFullParty = true` overrides them to `4, 5`. `BuildInitialParties`
+  `TestFullParty = true` overrides them to `4, 8`. `BuildInitialParties`
   loops those counts to construct the rosters — Knight copies for players,
-  Warrior Phase 1 copies for enemies.
+  Warrior Phase 1 copies for enemies. (4v8 fills the staggered enemy grid
+  to all 4 columns × both rows; the prior 4v5 left cols 1 and 3 empty,
+  which masked the row/col-Z bug landed in the C7-extra-followup.)
 - Absorber identified by explicit `bool IsAbsorber` on Combatant;
   `_playerParty[0].IsAbsorber = true`, others false. Only the Absorber's
   Skills submenu contains absorbed moves. **Only the Absorber's Skills
@@ -246,8 +248,8 @@ C2 rewrites both layers. See C2 grep checklist.
   BattleDialogue remains skippable-on-input, BattleMessage remains
   non-skippable with duration-based dismissal.
 - `TestFullParty` test flag (lowest priority). Default `false` → 1v1
-  (`PlayerPartySize = 1, EnemyPartySize = 1`). When `true` → 4v5
-  (overrides those exports to 4 and 5 in the test-flag resolution block).
+  (`PlayerPartySize = 1, EnemyPartySize = 1`). When `true` → 4v8
+  (overrides those exports to 4 and 8 in the test-flag resolution block).
 - **Phase 2 transition suppression under TestFullParty:** when the flag
   is active, the test-flag resolution block sets `Phase2EnemyData = null`
   and logs `[TEST] TestFullParty suppresses Phase 1 → Phase 2
@@ -259,7 +261,7 @@ C2 rewrites both layers. See C2 grep checklist.
 ### 3.2 Out of scope (hold the line)
 
 - Phase 1 → Phase 2 transition expanded to multi-unit. At 1v1 default it
-  works as today; at 4v5 TestFullParty it is explicitly suppressed.
+  works as today; at 4v8 TestFullParty it is explicitly suppressed.
 - Parry counter refactor to route through `BattleSystem.StartSequence`.
 - `AttackStep.Offset` / `PlayerOffset` schema consolidation (D5).
 - Character-specific move sets (all players share Knight moves).
@@ -361,8 +363,8 @@ item use, cure, combo strike. Behaviour must be bit-identical to pre-C2.
 
 Verification: headless load at `PlayerPartySize = 1, EnemyPartySize = 1`
 (default) — 1v1 fight behaves identically. Headless load at
-`PlayerPartySize = 4, EnemyPartySize = 5` (via test-flag or manual export
-change) — screenshot confirms 4 players and 5 enemies render at sensible
+`PlayerPartySize = 4, EnemyPartySize = 8` (via test-flag or manual export
+change) — screenshot confirms 4 players and 8 enemies render at sensible
 positions; fight continues to target slot-0-only (intermediate behaviour).
 
 ### C4 — `TestFullParty` flag
@@ -371,15 +373,15 @@ positions; fight continues to target slot-0-only (intermediate behaviour).
 - Priority resolution extended in the existing test-flag block: Victory >
   GameOver > PhaseTransition > FullParty. Conflicts log
   `[TEST] Victory/GameOver/PhaseTransition overrides TestFullParty`.
-- When active: set `PlayerPartySize = 4, EnemyPartySize = 5`, set
+- When active: set `PlayerPartySize = 4, EnemyPartySize = 8`, set
   `Phase2EnemyData = null`, and log both
-  `[TEST] TestFullParty active — 4 players vs 5 enemies.` and
+  `[TEST] TestFullParty active — 4 players vs 8 enemies.` and
   `[TEST] TestFullParty suppresses Phase 1 → Phase 2 transition.`
 - The Phase 2 suppression is essential — without it, the first Warrior
   death would trigger the transition logic, which assumes exactly one
-  enemy and would corrupt state at 4 remaining live enemies.
-- Verification: toggle flag, confirm 1v1 and 4v5 both load. Verify Phase 2
-  transition works at 1v1 default and is suppressed at 4v5.
+  enemy and would corrupt state at 7 remaining live enemies.
+- Verification: toggle flag, confirm 1v1 and 4v8 both load. Verify Phase 2
+  transition works at 1v1 default and is suppressed at 4v8.
 
 ### C4.5 — Menu restructure for multi-character Skills
 
@@ -400,7 +402,7 @@ positions; fight continues to target slot-0-only (intermediate behaviour).
 - This commit still runs on the pre-queue alternation (C5 hasn't landed
   yet), so "active player" is still `_playerParty[0]`. The menu
   conditional has no visible effect at 1v1 default (slot 0 is always the
-  Absorber) but becomes observable at 4v5 TestFullParty once the queue
+  Absorber) but becomes observable at 4v8 TestFullParty once the queue
   rotates the active player.
 - `InitSubMenuData` / `PopulateSubMenuPanel` restructured to rebuild per-
   active-player rather than at BuildMenu time. The existing rebuild-on-
@@ -454,9 +456,9 @@ observable verification is folded into C5's acceptance.
   output of the queue, not a retained fallback path. This is the primary
   regression gate for the commit.
 
-Verification: headless load + forced 4v5 (C4 flag on), log queue state
+Verification: headless load + forced 4v8 (C4 flag on), log queue state
 per turn, run through ~2 full rounds observing P1 P2 P3 P4 E1 E2 E3 E4
-E5 order. Separately, headless load at default (1v1) — full fight runs
+E5 E6 E7 E8 order. Separately, headless load at default (1v1) — full fight runs
 bit-identical to pre-queue behaviour.
 
 ### C6 — Layout redesign
@@ -464,7 +466,7 @@ bit-identical to pre-queue behaviour.
 - Raise combatants: new `FloorY = 650f` (was 750f — frees ~100px below
   for dialogue/message slot). Per-side Y offset tunables kept for visual
   fine-tuning.
-- Staggered formations (4v5 case; 1v1 case uses slot 0 of each side):
+- Staggered formations (4v8 case; 1v1 case uses slot 0 of each side):
   - Players: 2 front (Y = FloorY) at X = 380, 560; 2 back (Y = FloorY -
     60) at X = 290, 470. Depth-order via ZIndex.
   - Enemies: 3 front (Y = FloorY) at X = 1160, 1320, 1480; 2 back
@@ -489,7 +491,7 @@ bit-identical to pre-queue behaviour.
   combatants and the bottom HP strip.
 
 Verification: visual inspection via Godot editor + headless load with
-screenshots confirming the formation at both 1v1 and 4v5. Intro
+screenshots confirming the formation at both 1v1 and 4v8. Intro
 dialogue runs at both configs; menu appears below the dialogue slot.
 
 ### C7 — Turn-order strip UI
@@ -507,7 +509,7 @@ dialogue runs at both configs; menu appears below the dialogue slot.
 - At 1v1 the strip shows two slots alternating — still renders, not
   hidden.
 
-Verification: visual inspection at both 1v1 and 4v5. Log shows current-
+Verification: visual inspection at both 1v1 and 4v8. Log shows current-
 turn index aligns with queue state.
 
 ### C7-extra — Combat sprite layout cleanup
@@ -572,11 +574,101 @@ visible to be highlighted.
   for cross-formation magic attacks. Flagged for C11 priority.
 
 Verification: visual at 1v1 (single Knight + Warrior at exact legacy
-positions, panel at legacy left-anchored slot-0 position) and 4v5
-(diagonal columns visible, all 9 sprites in-frame, 4 player panels
-reordered so leader = rightmost). Optional 4v8 stress: temp constant
-override to verify two-column formula renders coherently; slot 7
-right-edge clip acceptable.
+positions, panel at legacy left-anchored slot-0 position) and 4v8
+(TestFullParty=true; staggered grid visible with both rows × all four
+columns populated, all 12 sprites in-frame, 4 player panels reordered
+so leader = rightmost; slot 7 right-edge clip acceptable). 4v8 (rather
+than the prior 4v5) is the verification target because it fills cols 1
+and 3 — needed to exercise the row/col-derived enemy Z (C7-extra-
+followup).
+
+### C7-extra follow-up — Per-slot Z-index for combatant depth-sort
+
+Identified after the staggered two-row diagonal grid landed: at
+multi-character density, back-row sprites overlapping front-row
+sprites in the same column inherited only the scene-tree spawn order
+for render priority, producing the wrong "back wave on top of front
+wave" occlusion. Bounded slot-derived Z values fix the depth-sort
+without risking the `CANVAS_ITEM_Z_MAX (~4096)` overflow the prior
+Y-tied attempt hit. As a consequence, `TestFullParty` is bumped from
+4v5 to 4v8 — the prior 4v5 left enemy cols 1 and 3 empty, masking the
+class of bug this commit fixes.
+
+- **Formation Z values are spaced 2 apart** so the hop-in attacker's
+  `defender.Z + 1` bump always lands at an odd Z that's unique by
+  construction — strictly between formation members on either side.
+  Without the spacing, an enemy attacker bumped to Z=1 would tie with
+  player slot 1 at Z=1, and scene-tree order (enemies added after
+  players in `BuildInitialParties`) would let the enemy win
+  regardless of attacker side. Captured in interactive verification:
+  enemy Warrior 3 attacking Knight slot 0 was bumped to the wrong
+  side of a Z-tie under the prior unit-spaced scheme.
+- **Player Z = `slotIndex * 2`.** Player formation is a single ↘
+  diagonal column where Y is monotonically increasing in slot index,
+  so slot index already matches Y rank.
+- **Enemy Z = `(row * 4 + col) * 2`** read from
+  `EnemySlotToGridPosition`. The slot fill pattern
+  (`FC0/BC0/FC2/BC2/FC1/BC1/FC3/BC3` — outer-cols-first, alternating
+  front/back) is deliberately non-monotonic in Y, so slot index ≠ Y
+  rank. `(row*4+col)` maps to Y rank: front row 0..3 (FC0..FC3
+  ascending Y) then back row 4..7 (BC0..BC3 ascending Y, all behind
+  the front row). Slot 0 still gets Z=0 (FC0 = (0,0)*2 = 0),
+  preserving 1v1 bit-identity. Both sides' assignments live in
+  `BuildInitialParties` after the rect/sprite pair is resolved
+  (covers tscn-placed slot 0 and dynamically spawned slots through
+  one site each).
+- **Hop-in attacker takes `defender.Z + 1`.** "Joins the defender's
+  row" depth band, lands at an odd Z slot uniquely free under the
+  2-apart spacing — guarantees the attacker renders strictly in front
+  of the defender AND of any same-side or opposing combatant whose
+  formation Z would otherwise tie. Pre-bump Z snapshotted into a new
+  `_attackerZIndexBeforeHopIn` sentinel field (-1 = no active
+  snapshot) at `PlayHopIn` start; restored at `PlayTeardown`'s
+  `tween.Finished`. `IsDead` check on restore preserves the Phase 1 →
+  Phase 2 reveal contract (dead Phase 1 warrior keeps its
+  `SpawnBossReveal`-bumped Z until `SwapToPhase2`'s own snapshot
+  pattern restores it). Sentinel cleared unconditionally so a leak
+  cannot persist into the next sequence even when restore is skipped.
+- The previous unconditional `defender.AnimSprite.ZIndex = 0` in
+  `PlayHopIn` is dropped — at 1v1 it was already a no-op; at
+  multi-character density it was a latent clobber of the defender's
+  slot Z. Defender Z is left untouched throughout the sequence.
+- `SpawnEffectSprite` (BattleSystem) now reads
+  `target.AnimSprite.ZIndex` instead of the hardcoded `Z = 3`.
+  Effects "join the row" of their target visually. Tree order keeps
+  the effect rendering on top of the target sprite at equal Z (effect
+  added later). Phase 2 reveal sequence is unaffected — no
+  `SpawnEffectSprite` calls fire during the reveal, so the legacy
+  reveal-layer Z values (reveal = 1, warrior bumped = 2) keep their
+  hardcoded constants in `BattleAnimator.SpawnBossReveal`.
+- Damage numbers (Z = 100 design lock) are not implemented in the
+  current codebase; this constraint is reserved for a future commit
+  rather than shipped here.
+- Hit flashes are shader-on-sprite — they follow the sprite's Z
+  naturally, no separate handling.
+- **TestFullParty roster bump (4v5 → 4v8) folded into this commit.**
+  Verification is meaningless at 4v5 because cols 1 and 3 stay empty
+  — slot 4 (FC1) and slot 6 (FC3) don't exist, so the Y-rank-vs-slot-
+  index divergence that produces the bug never manifests. Aligning
+  the in-source flag with the verification density keeps future
+  regression checks from missing the same class of bug.
+
+Verification: visual 1v1 (no observable change — slot 0 Z=0, hop-in
+attacker at defender.Z + 1 = 1 matches pre-refactor explicit `+1`
+bump, effects at Z=0 with tree-order fallback) and 4v8 with
+`TestFullParty=true` (front-row sprites depth-sort by ascending Y
+within the row, back-row sprites depth-sort by ascending Y within the
+back row, all back-row sprites render in front of all front-row
+sprites in overlap; hop-in attacker visibly joins the target's row
+and renders strictly in front of every formation member that would
+overlap during the close-stance regardless of which side it belongs
+to; effects align with target's depth band).
+
+`CANVAS_ITEM_Z_MAX (~4096)` headroom: max formation Z at 4v8 is
+2*7 = 14 (back-row enemy slot 7 = BC3 = (1*4+3)*2). Hop-in attacker
+peaks at 15. Three orders of magnitude of headroom remain — the
+2-apart spacing scales freely if the formation grows in either party
+size or grid depth.
 
 ### C8 — Active-combatant sprite highlight
 
@@ -589,7 +681,7 @@ right-edge clip acceptable.
 - HP panel for active player gets a distinct border colour or glow
   (modulate on the panel's border NinePatchRect).
 
-Verification: visual at 1v1 and 4v5.
+Verification: visual at 1v1 and 4v8.
 
 ### C9 — Target-pool expansion and cycling
 
@@ -605,7 +697,7 @@ Verification: visual at 1v1 and 4v5.
 - At 1v1 the pool is always singleton and the pointer still auto-
   confirms — behaviour preserved.
 
-Verification: 4v5 TestFullParty → menu → Attack → cycle through
+Verification: 4v8 TestFullParty → menu → Attack → cycle through
 enemies with left/right. 1v1 default → menu → Attack → auto-confirms
 as today.
 
@@ -633,7 +725,7 @@ as today.
   SelectEnemyTarget) must be coherent — clear in exactly one place (the
   moment the enemy attack begins execution), not both.
 
-Verification: 4v5 TestFullParty with P1 as Absorber. P1 beckons E3.
+Verification: 4v8 TestFullParty with P1 as Absorber. P1 beckons E3.
 E3's turn: uniform-random enemy target selection would normally pick a
 random player; Beckon redirect overrides to P1. Threat-reveal fires on
 P1, white-flash fires on E3, attack is the learnable. Absorb on
@@ -684,7 +776,7 @@ location. Cure circle centers on the recipient.
   first.
 - **C4 before C4.5** — the menu restructure needs a way to test under
   multi-player conditions. Even though C4.5 lands before the queue, the
-  4v5 roster makes the Beckon-only rendering observable via slot-0 vs
+  4v8 roster makes the Beckon-only rendering observable via slot-0 vs
   slot-N inspection.
 - **C4.5 before C5** — the queue wires `_activePlayer` into menu
   dispatch; C4.5 makes the menu structure parameterised by active
@@ -693,7 +785,7 @@ location. Cure circle centers on the recipient.
   immediately rewrite it.
 - **The queue drives 1v1 too.** Because default config is 1v1, _every
   dev run_ exercises the queue at `PlayerPartySize=1, EnemyPartySize=1`.
-  The queue is not a 4v5-only code path. Correctness test for C5: at
+  The queue is not a 4v8-only code path. Correctness test for C5: at
   1v1 the emitted sequence must be P1 E1 P1 E1… matching the old
   alternation. Any divergence is a bug, not a "feature at high density."
 - **C5 before C6** — layout changes at 1v1 are wasted effort; the
@@ -780,15 +872,16 @@ global swap that every handler body would have to reason about.
 - `dotnet build` on `rhythm-rpg.sln` — zero errors and warnings.
 - Godot `--headless --quit` load — zero runtime errors on scene load.
 - Every commit runs the 1v1 default path (full fight). Every commit
-  that touches multi-unit logic (C3 onward) additionally runs the 4v5
+  that touches multi-unit logic (C3 onward) additionally runs the 4v8
   `TestFullParty` path.
 - For UI commits (C6, C7, C8): visual inspection via editor run,
   screenshots committed to `../claude_review/` alongside the diff file.
 
-**End-of-Phase-6 acceptance, 4v5 (`TestFullParty = true`):**
+**End-of-Phase-6 acceptance, 4v8 (`TestFullParty = true`):**
 
 - Full fight runs end-to-end without crashes.
-- Queue order at equal agility: P1 P2 P3 P4 E1 E2 E3 E4 E5, round-robin.
+- Queue order at equal agility: P1 P2 P3 P4 E1 E2 E3 E4 E5 E6 E7 E8,
+  round-robin.
 - Defend persists across queue advances: defend with P2 → P2's
   IsDefending stays true through every intervening turn (E-turns, P3,
   P4, E-turns) until P2's next ShowMenu, at which point it clears.
@@ -803,7 +896,7 @@ global swap that every handler body would have to reason about.
   appears in P1's Skills submenu.
 - Positioning fixes: pointer, damage numbers, Cure circle all align to
   the visible sprite, not the ColorRect.
-- Victory fires when all 5 enemies dead. GameOver fires when all 4
+- Victory fires when all 8 enemies dead. GameOver fires when all 4
   players dead.
 - Phase 2 transition does NOT fire (`TestFullParty` suppression log
   line is visible at scene start).
@@ -838,8 +931,11 @@ rule before C5 lands.
 
 Resolved and folded into scope:
 
-- (Q1) 1v1 is the default config; 4v5 is TestFullParty. Both run through
-  the same queue-driven machinery.
+- (Q1) 1v1 is the default config; 4v8 is TestFullParty (was 4v5; bumped
+  to 4v8 in the C7-extra-followup commit so the staggered enemy grid
+  fills both rows × all four columns and the row/col-derived Z fix is
+  exercised — 4v5 left cols 1 and 3 empty). Both run through the same
+  queue-driven machinery.
 - (Q2) Roster config is `[Export] int PlayerPartySize / EnemyPartySize`,
   defaulting to 1/1. Typed-array promotion deferred past Phase 6.
 - (Q3) Enemy target selection is uniform random over alive players when
