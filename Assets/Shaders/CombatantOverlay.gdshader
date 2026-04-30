@@ -1,16 +1,23 @@
 shader_type canvas_item;
 
-// Two independent per-combatant effects composited into a single shader so
-// both can run concurrently without material-slot collision on the sprite.
+// Three independent per-combatant effects composited into a single shader so
+// all can run concurrently without material-slot collision on the sprite.
 //
-// flash_amount — existing "white flash" — used by FlashCombatantWhite to
-//                signal learnable moves on the enemy.
-// tint_amount  — Phase 5 "threat reveal" — used by FlashCombatantThreatened
-//                to signal incoming enemy attacks on the target combatant.
+// flash_amount  — "white flash" — used by FlashCombatantWhite to signal
+//                 learnable moves on the enemy. Pulses; high amplitude.
+// tint_amount   — Phase 5 "threat reveal" — used by FlashCombatantThreatened
+//                 to signal incoming enemy attacks on the target combatant.
+// active_amount — Phase 6 C8 "active turn highlight" — sustained subtle white
+//                 wash on the active combatant's sprite for the duration of
+//                 their turn. Driven by the AdvanceTurn lifecycle hub via
+//                 ApplyActiveSpriteTint / ClearActiveSpriteTint. Effective
+//                 visual weight is tuned via the ActiveTintAmount caller-side
+//                 constant (no in-shader softening multiplier).
 
-uniform float flash_amount : hint_range(0.0, 1.0) = 0.0;
-uniform float tint_amount  : hint_range(0.0, 1.0) = 0.0;
-uniform vec4  tint_color   : source_color         = vec4(1.0, 0.2, 0.2, 1.0);
+uniform float flash_amount  : hint_range(0.0, 1.0) = 0.0;
+uniform float tint_amount   : hint_range(0.0, 1.0) = 0.0;
+uniform float active_amount : hint_range(0.0, 1.0) = 0.0;
+uniform vec4  tint_color    : source_color         = vec4(1.0, 0.2, 0.2, 1.0);
 
 void fragment() {
     vec4 col = texture(TEXTURE, UV);
@@ -25,8 +32,18 @@ void fragment() {
     vec3 tinted = col.rgb * tint_color.rgb;
     col.rgb = mix(col.rgb, tinted, tint_amount * col.a);
 
-    // White flash — applied after the tint so a concurrent flash overrides
-    // the tint (white = learnable signal, higher priority).
+    // Active-turn whitening — partial mix toward pure white. Sustained for the
+    // entire active turn; subtlety lives in the caller-side ActiveTintAmount
+    // (~0.15) rather than an in-shader softening multiplier so the visual is
+    // tuned in one place. Composed AFTER threat tint so when both are active
+    // the white wash slightly lightens the red — acceptable given threat's
+    // 0.85 amplitude dominates over active's ~0.15. If interactive verification
+    // shows the stack reads as washout, gate this on (1.0 - tint_amount) — see
+    // C8 plan-doc note.
+    col.rgb = mix(col.rgb, vec3(1.0), active_amount * col.a);
+
+    // White flash — applied last so a concurrent flash overrides everything
+    // else (white = learnable signal, highest priority).
     col.rgb = mix(col.rgb, vec3(1.0), flash_amount * col.a);
 
     COLOR = col;

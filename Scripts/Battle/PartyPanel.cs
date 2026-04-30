@@ -38,4 +38,17 @@ public class PartyPanel
     public Control        MpFill;         // MP bar fill Control (player only; null on enemy)
     public Label          MpLabel;        // MP "current/max" overlay text (player only; null on enemy)
     public Combatant      BoundCombatant; // the combatant this panel renders for
+
+    // C8 sub-feature 2 — resting OffsetBottom captured at panel build time, used
+    // by SlidePlayerPanelUp/Down to return the panel to its exact resting Y on
+    // every turn-end without drift. Reading from current state instead would
+    // accumulate float error across many turns. Player panels only (enemy panels
+    // don't slide).
+    public float RestingOffsetBottom;
+
+    // C8 sub-feature 2 — per-panel handle for the slide-up/down tween, killed on
+    // every transition so a turn-start mid-slide-down (or vice versa) interrupts
+    // cleanly. Mirrors the per-combatant tween pattern (FlashTween / ThreatTween
+    // / ActiveTween) for the same reason: independent state per visual effect.
+    public Tween SlideTween;
 }

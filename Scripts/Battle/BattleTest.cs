@@ -1385,6 +1385,36 @@ public partial class BattleTest : Node2D
     {
         if (CheckGameOver()) return;
 
+        // C8 lifecycle hub — turn-end hooks on the outgoing actor (the one
+        // whose turn just completed). Captured BEFORE _queue.Advance so we
+        // have the previous _queue.Current; the queue overwrites Current on
+        // Advance.
+        //
+        // For player-side outgoing actors, the primary turn-end hook lives at
+        // ConfirmTargetSelection (action-commit moment for Attack / Combo /
+        // Magic / Cure / Items / Beckon — every SelectingTarget-routed path).
+        // This block functions as a defensive backup AND as the primary hook
+        // for Defend, which bypasses SelectingTarget and goes Menu →
+        // HideMenu() + AdvanceTurn() directly. Helpers are idempotent
+        // (already-cleared sprite tint = 0→0 fade; already-at-rest panel =
+        // no-op slide tween) so the double-fire on SelectingTarget paths
+        // costs nothing.
+        //
+        // ClearActiveSpriteTint is player-only post-interactive-verification
+        // (gates internally on Side == Player); enemy outgoing actors pass
+        // through harmlessly. SlidePlayerPanelDown gates externally via the
+        // Side check below since enemies have no PartyPanel slide.
+        //
+        // First AdvanceTurn after scene init has _queue.Current == null —
+        // nothing to clean up; skip.
+        var outgoing = _queue.Current;
+        if (outgoing != null)
+        {
+            ClearActiveSpriteTint(outgoing);
+            if (outgoing.Side == CombatantSide.Player)
+                SlidePlayerPanelDown(outgoing);
+        }
+
         // C7 follow-up: slide the previous turn's card off BEFORE Advance so
         // the strip's top card matches the actor whose turn is currently
         // resolving (rather than showing the next-next). On the very first
@@ -1408,6 +1438,19 @@ public partial class BattleTest : Node2D
             GD.PrintErr("[BattleTest] AdvanceTurn: queue.Advance returned null — all combatants dead?");
             return;
         }
+
+        // C8 lifecycle hub — turn-start hooks on the incoming actor (the one
+        // whose turn just began). Active sprite tint fades up on player turns
+        // only (sub-feature 3 is player-only post-interactive-verification —
+        // enemy white wash conflicted visually with threat-reveal red and
+        // warrior windup pose; ApplyActiveSpriteTint gates internally on
+        // Side == Player so enemy incoming actors pass through harmlessly).
+        // The panel slide-up similarly fires only for player turns
+        // (sub-feature 2 is player-only). UpdateHPBars below picks up the
+        // active panel modulate via ApplyDeadOrActiveStyling.
+        ApplyActiveSpriteTint(current);
+        if (current.Side == CombatantSide.Player)
+            SlidePlayerPanelUp(current);
 
         if (current.Side == CombatantSide.Player)
         {
@@ -1986,6 +2029,22 @@ public partial class BattleTest : Node2D
     {
         _targetPointer.Visible       = false;
         _selectingTargetMenuContext  = MenuContext.Main;  // defensive clear; mirrors cancel's reset pattern
+
+        // C8 — primary action-commit hook for the active player's turn-end
+        // visual cues. Fires before the launcher invokes so the sprite-tint
+        // fade and panel slide-down begin synchronously with the panel-modulate
+        // clear that UpdateHPBars below picks up after the launcher transitions
+        // _state out of {PlayerMenu, SelectingTarget}. Covers every action
+        // routed through SelectingTarget: Attack, Combo Strike, Magic, Cure,
+        // Items (Ether), and Beckon. Defend bypasses SelectingTarget and is
+        // covered by AdvanceTurn's outgoing branch instead. AdvanceTurn also
+        // retains an outgoing-branch call to these helpers as a defensive
+        // backup for any future code path that skips this method; both helpers
+        // are idempotent (already-cleared = 0→0 no-op fade; already-at-rest =
+        // no-op slide tween).
+        ClearActiveSpriteTint(_activePlayer);
+        SlidePlayerPanelDown(_activePlayer);
+
         var launcher = _pendingActionLauncher;
         _pendingActionLauncher = null;
         launcher?.Invoke();
@@ -2739,6 +2798,150 @@ public partial class BattleTest : Node2D
             0.85f, 0.0f, 0.12f);
     }
 
+    // C8 sub-feature 3 — active-turn sprite highlight constants. Tint amount is
+    // the effective shader value (no in-shader softening multiplier — softness
+    // lives here for one-place tuning). Fade duration matches the panel-slide
+    // duration (PanelSlideDur) so all visual cues for a turn transition land
+    // simultaneously rather than the tint lagging the slide.
+    private const float ActiveTintAmount  = 0.15f;
+    private const float ActiveTintFadeSec = 0.10f;
+
+    /// <summary>
+    /// C8 sub-feature 3 — fades <c>active_amount</c> on <paramref name="target"/>'s
+    /// CombatantOverlay shader up to <see cref="ActiveTintAmount"/> over
+    /// <see cref="ActiveTintFadeSec"/>, signalling "this combatant's turn is now
+    /// active." Tween-based rather than instant set so the fade reads as
+    /// intentional and synchronises with the panel slide on the player side.
+    /// Per-combatant tween (<c>ActiveTween</c>) so multiple combatants' fades
+    /// don't stomp each other if a turn-transition happens before the previous
+    /// fade completes.
+    ///
+    /// Player-side only post-interactive-verification. The original C8 design
+    /// applied the tint to enemies too, but the white wash was visually noisy
+    /// alongside threat-reveal red on the targeted player + the warrior windup
+    /// pose + camera shake. Strip-card differentiation + threat reveal carry
+    /// the active-enemy signal sufficiently. Enemies pass through this helper
+    /// (e.g. from AdvanceTurn's lifecycle hub) but the early-return below makes
+    /// the call a no-op.
+    ///
+    /// No-op on dead combatants (defensive — guards a race where the active
+    /// actor dies before turn-end fires).
+    /// </summary>
+    private void ApplyActiveSpriteTint(Combatant target)
+    {
+        if (target?.FlashMaterial == null || target.IsDead) return;
+        if (target.Side != CombatantSide.Player) return;
+        target.ActiveTween?.Kill();
+        target.ActiveTween = CreateTween();
+        var material = target.FlashMaterial;
+        target.ActiveTween.TweenMethod(
+            Callable.From((float v) => material.SetShaderParameter("active_amount", v)),
+            (float)material.GetShaderParameter("active_amount"),
+            ActiveTintAmount,
+            ActiveTintFadeSec);
+    }
+
+    /// <summary>
+    /// C8 sub-feature 3 — fades <c>active_amount</c> back to 0 over
+    /// <see cref="ActiveTintFadeSec"/>. Primary call site is
+    /// <see cref="ConfirmTargetSelection"/> (action-commit path for Attack /
+    /// Combo / Magic / Cure / Items / Beckon — every action that routes
+    /// through SelectingTarget). AdvanceTurn's outgoing branch retains a
+    /// defensive call so Defend (which bypasses SelectingTarget) and any
+    /// future code path that skips ConfirmTargetSelection still gets the
+    /// clear. Idempotent: a second call after the tint is already at 0
+    /// produces a 0→0 fade (no visible effect).
+    ///
+    /// Player-side only — symmetric with <see cref="ApplyActiveSpriteTint"/>.
+    /// Enemies never get the tint applied, so clearing is a no-op for them.
+    /// Safe to call on dead combatants — clears stale state even when the
+    /// active actor died during their own turn (the death's dead-styling
+    /// cascades through the panel, but the sprite shader is orthogonal and
+    /// needs explicit clearing).
+    /// </summary>
+    private void ClearActiveSpriteTint(Combatant target)
+    {
+        if (target?.FlashMaterial == null) return;
+        if (target.Side != CombatantSide.Player) return;
+        target.ActiveTween?.Kill();
+        target.ActiveTween = CreateTween();
+        var material = target.FlashMaterial;
+        target.ActiveTween.TweenMethod(
+            Callable.From((float v) => material.SetShaderParameter("active_amount", v)),
+            (float)material.GetShaderParameter("active_amount"),
+            0.0f,
+            ActiveTintFadeSec);
+    }
+
+    // C8 sub-feature 2 — active-player panel slide-up constants. 15% of panel
+    // height (typically ~12px on a ~80px panel) lifts the active panel just
+    // enough to read as "this one's turn now" without pulling focus from the
+    // sprite formation or the menu. 0.10s ease-out matches the active-tint
+    // fade duration so the two cues land together. Resting OffsetBottom is
+    // captured per-panel at build time (PartyPanel.RestingOffsetBottom) so
+    // the slide-back returns to the exact resting Y with no drift across
+    // many turn cycles.
+    private const float PanelSlideRatio = 0.15f;
+    private const float PanelSlideDur   = 0.10f;
+
+    /// <summary>
+    /// C8 sub-feature 2 — slides the active player's status panel up by
+    /// <see cref="PanelSlideRatio"/> of its height. Player-only (enemy panels
+    /// don't slide). No-op if the active player has no panel (e.g. dead /
+    /// pre-build). Reads <see cref="PartyPanel.RestingOffsetBottom"/> as the
+    /// origin so each call computes a fresh target (rather than incrementally
+    /// applying the offset) — safe under interruption.
+    /// </summary>
+    private void SlidePlayerPanelUp(Combatant player)
+    {
+        var pp = FindPlayerPanelFor(player);
+        if (pp == null) return;
+        pp.SlideTween?.Kill();
+        pp.SlideTween = CreateTween().SetEase(Tween.EaseType.Out)
+                                     .SetTrans(Tween.TransitionType.Quad);
+        // Panel.Size.Y is auto-computed from VBox content (label + 2 bars +
+        // padding). Valid by the time the first AdvanceTurn fires (post-intro
+        // fade-in completes, layout has resolved). Negative direction = upward
+        // because OffsetBottom is measured from the viewport bottom and the
+        // anchor is bottom-anchored; subtracting moves the panel toward the
+        // top of the viewport (visually up).
+        float target = pp.RestingOffsetBottom - pp.Panel.Size.Y * PanelSlideRatio;
+        pp.SlideTween.TweenProperty(pp.Panel, "offset_bottom", target, PanelSlideDur);
+    }
+
+    /// <summary>
+    /// C8 sub-feature 2 — slides the active player's status panel back to its
+    /// resting OffsetBottom. Called from AdvanceTurn's outgoing branch (turn-end).
+    /// Always returns to the captured <see cref="PartyPanel.RestingOffsetBottom"/>
+    /// rather than tracking the slide-up delta — guarantees no drift across
+    /// many turns even if a tween is interrupted mid-flight.
+    /// </summary>
+    private void SlidePlayerPanelDown(Combatant player)
+    {
+        var pp = FindPlayerPanelFor(player);
+        if (pp == null) return;
+        pp.SlideTween?.Kill();
+        pp.SlideTween = CreateTween().SetEase(Tween.EaseType.Out)
+                                     .SetTrans(Tween.TransitionType.Quad);
+        pp.SlideTween.TweenProperty(pp.Panel, "offset_bottom", pp.RestingOffsetBottom, PanelSlideDur);
+    }
+
+    /// <summary>
+    /// Returns the player-side <see cref="PartyPanel"/> bound to <paramref name="player"/>,
+    /// or null if not found. Used by the slide helpers to skip enemy combatants
+    /// (sub-feature 2 is player-only) and to skip the slide if the panel
+    /// hasn't been built yet (defensive — at C8 scope every player has a panel
+    /// post-_Ready, but the iteration is cheap enough at PartySize=4 to not
+    /// matter).
+    /// </summary>
+    private PartyPanel FindPlayerPanelFor(Combatant player)
+    {
+        if (player == null) return null;
+        foreach (var pp in _playerPanels)
+            if (pp.BoundCombatant == player) return pp;
+        return null;
+    }
+
     // Party-wipe semantics (C3): Game Over fires when every player is at 0 HP; Victory
     // fires when every enemy is at 0 HP. At 1v1 (default PartySize=1) this is equivalent
     // to the pre-C3 slot-0 check. Callers that subsequently discriminate "which side won"
@@ -2774,9 +2977,22 @@ public partial class BattleTest : Node2D
     /// dead branch dominates; active-player branch only fires for the player whose
     /// turn is currently in flight (gated on <c>_state in {PlayerMenu, SelectingTarget}</c>).
     /// </summary>
+    // Status-panel modulate constants. Applied to pp.ModulateTarget in
+    // ApplyDeadOrActiveStyling; cascade through the panel subtree.
     private static readonly Color PanelAliveModulate  = Colors.White;                          // alive, not active
     private static readonly Color PanelActiveModulate = new(1.5f,  1.5f,  1.2f, 1.0f);         // active — bright white-warm boost (visible at a glance)
     private static readonly Color PanelDeadModulate   = new(0.5f,  0.5f,  0.5f, 0.6f);         // dead — desaturated + transparent
+
+    // C8 sub-feature 1 — turn-order strip card differentiation. Stronger than the
+    // panel-side scheme: non-active dimmed to 0.7 + active boosted to 1.8 gives
+    // ~2.6x ratio between current and next-up cards, readable at a glance without
+    // side-by-side comparison. Strip-only because the panels carry their own
+    // active cue via the slide-up tween (sub-feature 2) and the active sprite
+    // tint (sub-feature 3) — applying the dimmed-vs-boost scheme to panels too
+    // (the original C8 attempt) made non-active panels read as gray, a worse
+    // tradeoff than the bar-dulling problem the prior chrome-split was solving.
+    private static readonly Color StripAliveModulate  = new(0.7f,  0.7f,  0.7f, 1.0f);         // alive, not active — dimmed
+    private static readonly Color StripActiveModulate = new(1.8f,  1.8f,  1.4f, 1.0f);         // active — bright white-warm boost
 
     /// <summary>
     /// Refreshes every status panel from its bound combatant. Iterates _playerPanels +
@@ -3664,7 +3880,14 @@ public partial class BattleTest : Node2D
         {
             Panel          = panel,
             ModulateTarget = panel,  // outer panel is the Modulate target — cascades to all children
-            BoundCombatant = combatant,
+            // C8 sub-feature 2: snapshot the resting OffsetBottom (-UiEdgeMargin
+            // = -20f) so SlidePlayerPanelDown can return to it without drift.
+            // Captured here rather than inferred at slide time because the
+            // panel layout is finalised at AddChild and OffsetBottom is the
+            // single source of truth for the bottom-anchored Y — easier than
+            // computing from anchors + viewport size at every slide.
+            RestingOffsetBottom = panel.OffsetBottom,
+            BoundCombatant      = combatant,
         };
         AddPlayerRow(content, combatant.Name, pp);
         return pp;
@@ -3814,20 +4037,20 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Applies <see cref="PanelActiveModulate"/> to the top card and
-    /// <see cref="PanelAliveModulate"/> to all others. Called from
+    /// Applies <see cref="StripActiveModulate"/> to the top card and
+    /// <see cref="StripAliveModulate"/> to all others. Called from
     /// <see cref="BuildTurnOrderStrip"/>, <see cref="HardRebindStrip"/>, and
     /// the post-callback inside <see cref="AnimateSlide"/> after the list
-    /// rotation. The active boost makes the next-to-act card visibly
-    /// distinct beyond the positional convention. During slide-out the
-    /// ex-top card's alpha tweens to 0 so the boost is washed out anyway —
+    /// rotation. The dimmed-vs-boosted ratio (~2.6x) makes the next-to-act
+    /// card visibly distinct beyond the positional convention. During slide-out
+    /// the ex-top card's alpha tweens to 0 so the boost is washed out anyway —
     /// no special handling needed for the in-flight slide.
     /// </summary>
     private void RefreshTopCardHighlight()
     {
         for (int i = 0; i < _turnOrderCards.Count; i++)
             _turnOrderCards[i].Panel.Modulate =
-                (i == 0) ? PanelActiveModulate : PanelAliveModulate;
+                (i == 0) ? StripActiveModulate : StripAliveModulate;
     }
 
     /// <summary>

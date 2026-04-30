@@ -732,6 +732,31 @@ public partial class BattleTest : Node2D
         _hopInSequenceCompleted   = false;
         _hopInAnimFinished        = false;
 
+        // C8 — clear shader uniform state and per-combatant tween handles on the
+        // slot-0 enemy. The dying Phase 1 warrior may have had active_amount set
+        // (it was the active actor when killed) and threat_amount/flash_amount
+        // mid-fade from a learnable wind-up that never got to fire. The
+        // FlashMaterial reference persists across the sprite swap (same
+        // AnimatedSprite2D node, just new SpriteFrames per ApplyPhase2Sprite),
+        // so without explicit clearing the Phase 2 boss inherits stale uniform
+        // values until the next AdvanceTurn cycle. Explicit reset closes a
+        // pre-existing latent issue that C8's longer-lived active_amount makes
+        // observable. Tween handles cleared so any in-flight fade aimed at the
+        // dead warrior doesn't keep running on the new combatant.
+        var enemyMaterial = _enemyParty[0].FlashMaterial;
+        if (enemyMaterial != null)
+        {
+            enemyMaterial.SetShaderParameter("active_amount", 0.0f);
+            enemyMaterial.SetShaderParameter("flash_amount",  0.0f);
+            enemyMaterial.SetShaderParameter("tint_amount",   0.0f);
+        }
+        _enemyParty[0].ActiveTween?.Kill();
+        _enemyParty[0].ActiveTween = null;
+        _enemyParty[0].FlashTween?.Kill();
+        _enemyParty[0].FlashTween = null;
+        _enemyParty[0].ThreatTween?.Kill();
+        _enemyParty[0].ThreatTween = null;
+
         // Reset enemy Combatant state. EnemyData was reassigned in ApplyPhase2Sprite
         // above, so reading EnemyData.MaxHp here pulls the Phase 2 value. AnimSprite,
         // PositionRect, and FlashMaterial references stay valid — same node instances,

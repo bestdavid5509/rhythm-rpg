@@ -670,18 +670,157 @@ peaks at 15. Three orders of magnitude of headroom remain — the
 2-apart spacing scales freely if the formation grows in either party
 size or grid depth.
 
-### C8 — Active-combatant sprite highlight
+### C8 — Active-combatant indicators (3 sub-features bundled)
 
-- Reuse the existing `CombatantOverlay.gdshader` `tint_amount` uniform
-  as the knob. A subtle pulsing tween on the active combatant's sprite
-  during their turn window. New `ActiveTween` handle on Combatant (or
-  reuse `ThreatTween` with care — they never co-fire because threat
-  reveal fires on the _enemy's target_ while the enemy is active, which
-  is a different combatant).
-- HP panel for active player gets a distinct border colour or glow
-  (modulate on the panel's border NinePatchRect).
+After C7 / C7-extra-followup landed, the multi-character formation
+read correctly geometrically but lacked clear "whose turn is it"
+signalling. C8 bundles three UX cues that share `AdvanceTurn`'s
+outgoing→incoming lifecycle hub.
 
-Verification: visual at 1v1 and 4v8.
+A fourth sub-feature was attempted and reverted during interactive
+verification: a chrome-only panel modulate scheme that excluded the
+HP/MP bars from the active highlight. Motivation was to prevent the
+bars from being dulled when the active modulate cascaded through the
+panel subtree. The implementation worked technically (split the
+modulate target between the panel root for dead state and the fill +
+border NinePatchRects for active state), but the visual tradeoff was
+worse than the original problem: the brighter strip-style differentiation
+that the chrome split implicitly enabled (1.8 boost vs 0.7 dimmed
+non-active) made non-active panels read as gray, more distracting
+than the bar-dulling it solved. The slide-up cue (sub-feature 2) and
+the active sprite tint (sub-feature 3) carry the active-panel
+identification clearly enough on their own. Reverted to the pre-C8
+single-target scheme: panel root takes both active boost (1.5) and
+dead grayout, with non-active panels at identity white. Strip
+constants kept separate (`StripActiveModulate` / `StripAliveModulate`)
+so sub-feature 1's stronger differentiation applies only to cards.
+
+**Sub-feature 1 — Turn-strip differentiation.** Strip cards use
+their own modulate constants (`StripActiveModulate = (1.8, 1.8, 1.4, 1.0)`,
+`StripAliveModulate = (0.7, 0.7, 0.7, 1.0)`) — separate from the
+panel constants so the dimmed-vs-boosted scheme applies only to the
+strip. Active brightens AND non-active dims gives a ~2.6× ratio
+between current and next-up cards, readable at a glance without
+side-by-side comparison.
+
+**Sub-feature 2 — Active player panel slide-up.** Active player's
+panel slides up by 15% of its height (`PanelSlideRatio = 0.15f`,
+~12px on a typical 80px panel) over 0.10s ease-out at turn-start;
+slides back to its captured `RestingOffsetBottom` at turn-end. Per-
+panel `RestingOffsetBottom` snapshotted at build time and read on
+every slide-back call (rather than tracking deltas) — guarantees
+no Y-drift across many turn cycles even with mid-flight tween
+interruption. Player-only (enemy panels don't slide).
+
+**Sub-feature 3 — Active sprite tint (player-only).** New
+`active_amount` uniform on `CombatantOverlay.gdshader` (alongside
+the existing `flash_amount` and `tint_amount`). Subtle white wash
+applied to the active player's sprite during their turn so the
+acting character reads at a glance. No pointer above the sprite;
+pointers are reserved for target selection (yellow). Self-targeting
+reuses the existing yellow target pointer on the active player's
+sprite — orthogonal to the active tint, both can co-exist. Per-
+combatant `Combatant.ActiveTween` mirrors `FlashTween` /
+`ThreatTween` so simultaneous fades don't stomp. `ActiveTintAmount
+= 0.15f` is the effective shader value — softness lives in the
+constant, not in an in-shader multiplier, so visual tuning is
+one-place. `ActiveTintFadeSec = 0.10f` matches `PanelSlideDur` so
+all turn-transition cues land together.
+
+The original C8 design applied the tint to enemies too on the
+rationale that 4v8 needed a way to identify the active warrior.
+Reverted during interactive verification: the white wash was
+visually noisy alongside the threat-reveal red on the targeted
+player + the warrior windup pose + the camera shake. Strip-card
+differentiation (sub-feature 1) and threat reveal (Phase 5) carry
+the active-enemy signal sufficiently. Both
+`ApplyActiveSpriteTint` and `ClearActiveSpriteTint` gate
+internally on `Side == Player`; enemy combatants pass through the
+helpers harmlessly so the lifecycle hub remains symmetric.
+
+**Lifecycle hubs.** Two complementary entry points:
+
+- **Action-commit (player primary)** — `ConfirmTargetSelection`
+  fires `ClearActiveSpriteTint(_activePlayer)` and
+  `SlidePlayerPanelDown(_activePlayer)` before invoking the
+  pending launcher. Synchronises with the panel modulate clear
+  that `UpdateHPBars` (called immediately after the launcher
+  returns) picks up once `_state` has transitioned out of
+  `{PlayerMenu, SelectingTarget}`. Covers Attack / Combo Strike /
+  Magic / Cure / Items (Ether) / Beckon — every action routed
+  through SelectingTarget.
+- **AdvanceTurn (turn-end backup + Defend)** — captures
+  `outgoing = _queue.Current` BEFORE `_queue.Advance()`, fires
+  the same turn-end hooks. Primary hook for Defend (which
+  bypasses SelectingTarget and goes Menu → HideMenu() +
+  AdvanceTurn directly). Defensive backup for SelectingTarget
+  paths so any future code path that skips
+  `ConfirmTargetSelection` still gets the clear. Helpers are
+  idempotent (already-cleared = 0→0 fade; already-at-rest =
+  no-op tween) so the double-fire costs nothing on
+  SelectingTarget paths. Turn-start hooks
+  (`ApplyActiveSpriteTint`, `SlidePlayerPanelUp`) fire here on
+  the incoming actor — the only entry point for those.
+
+This dual-path arrangement keeps player turn-end visual cues
+synchronised with the panel-modulate clear at action-commit
+(where the player perceives the action beginning), rather than
+delayed until the action-completion AdvanceTurn fires ~0.5s
+later.
+
+**Shader stacking.** Composition order in
+`CombatantOverlay.gdshader`: tint (red threat) → active (white
+wash) → flash (white pulse). Flash overrides everything (matches
+prior behaviour); active composes on top of tint and may slightly
+lighten the threat red when both fire on the same sprite (rare —
+threat fires on the enemy's target, active fires on the active
+actor; same-sprite stack happens only if the active actor is also
+the threat target, which the queue invariant prevents in steady
+state). Documented fallback: gate active on `(1.0 - tint_amount)`
+if interactive verification at 4v8 surfaces a washout — keeps the
+red dominant during a learnable wind-up at the cost of one extra
+shader op. Apply only if needed.
+
+**Phase 2 transition cleanup.** Extended `SwapToPhase2` to clear
+shader uniforms (`active_amount`, `flash_amount`, `tint_amount`)
+and per-combatant tween handles (`ActiveTween`, `FlashTween`,
+`ThreatTween`) on the slot-0 enemy. The `FlashMaterial` reference
+persists across the sprite swap (same AnimatedSprite2D node, just
+new `SpriteFrames` per `ApplyPhase2Sprite`), so without explicit
+clearing the Phase 2 boss inherits stale uniform values. Closes a
+pre-existing latent issue made observable by C8's longer-lived
+active tint.
+
+**Verification:**
+
+- Headless 1v1 (default) and 4v8 (`TestFullParty=true`) load clean.
+- Interactive 1v1: panel slides up smoothly at turn start, sprite
+  tint visible on the lone player and lone enemy on their respective
+  turns. Strip's two-card alternation reads with the new
+  differentiation. Panel returns to exact resting Y across many
+  turns (no drift).
+- Interactive 4v8: strip top card obviously distinct from the
+  second card at a glance. Active-player panel slide-up identifies
+  which of 4 panels is acting. Active
+  sprite tint readable on each combatant in formation rotation —
+  previous fades out as next fades in (synchronised 0.10s).
+  Threat-red on player target during enemy turn coexists with
+  active-tint on the active enemy (different sprites; no shader
+  conflict). Learnable enemy turn: enemy gets active-tint
+  (sustained subtle white) + learnable-flash (pulse); pulse pops
+  over the sustained tint visibly.
+- Phase 1 → Phase 2 transition: warrior dies with active state set;
+  `SwapToPhase2` clears it; new boss starts clean.
+- Edge cases observed during interactive verification:
+  - Game over flow (overlay vs scene replacement) — confirm stale
+    state isn't visible underneath the overlay; if it is, add
+    `ClearActiveSpriteTint` in `CheckGameOver` before its early
+    return.
+  - Player-dies-on-own-turn — dead player's panel sits at slid-up
+    position with dead-modulate during death animation before
+    `AdvanceTurn` brings it back; confirm transient reads
+    acceptably or fire `SlidePlayerPanelDown` on death detection
+    rather than waiting for AdvanceTurn.
 
 ### C9 — Target-pool expansion and cycling
 

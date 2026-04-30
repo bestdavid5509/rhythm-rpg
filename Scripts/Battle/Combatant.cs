@@ -88,6 +88,14 @@ public class Combatant
     // learnable move — white flash on enemy + red tint on player).
     public Tween ThreatTween;
 
+    // Phase 6 C8 — independent handle for the sustained active-turn whitening
+    // tween. Drives active_amount on FlashMaterial via ApplyActiveSpriteTint /
+    // ClearActiveSpriteTint. Independent from FlashTween / ThreatTween so the
+    // active wash, learnable flash, and threat reveal can fade in/out without
+    // stomping each other when they overlap on the same sprite (e.g., active
+    // enemy using a learnable move: active wash sustains while flash pulses).
+    public Tween ActiveTween;
+
     // ---- Damage / heal application --------------------------------------------
     //
     // Friendly-fire-readiness note: TakeDamage and Heal are attacker-agnostic —
