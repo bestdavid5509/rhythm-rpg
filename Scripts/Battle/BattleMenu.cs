@@ -576,13 +576,36 @@ public partial class BattleTest : Node2D
 
         // Beckon — Absorber-only utility. Routes through SelectingTarget so the
         // player picks which enemy to redirect onto themselves. The launcher
-        // reads _selectedTarget at confirm time and stores it on the active
-        // player's BeckoningTarget; cancel back-out costs nothing.
+        // reads _selectedTarget at confirm time and adds it to the active
+        // player's BeckoningTargets set; cancel back-out costs nothing. Picker
+        // pool excludes enemies already in the active player's set so the
+        // player can't waste MP on a no-op double-Beckon (HashSet.Add would
+        // also reject the duplicate as defense-in-depth).
+        //
+        // Empty-pool pre-check: if every alive enemy is already beckoned, the
+        // picker would open with zero candidates. EnterSelectingTarget's
+        // empty-pool guard would fire PrintErr — wrong log level for a normal
+        // gameplay state. Pre-check here so the player gets a brief
+        // "No new targets to beckon." message and the Skills submenu stays
+        // visible (no HideMenu, no MP deduction, no state change). The
+        // genuinely-unreachable case (no alive enemies at all — Victory
+        // should have fired) still hits the EnterSelectingTarget guard.
         if (label == "Beckon")
         {
+            bool anyBeckonable = false;
+            foreach (var e in _enemyParty)
+                if (!e.IsDead && !_activePlayer.BeckoningTargets.Contains(e))
+                { anyBeckonable = true; break; }
+            if (!anyBeckonable)
+            {
+                ShowBattleMessage("No new targets to beckon.");
+                return;
+            }
+
             _pendingActionLauncher = () => PerformBeckon();
             HideMenu();
-            EnterSelectingTarget(CombatantSide.Enemy, MenuContext.Skills);
+            EnterSelectingTarget(CombatantSide.Enemy, MenuContext.Skills,
+                include: e => !_activePlayer.BeckoningTargets.Contains(e));
             return;
         }
 

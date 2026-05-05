@@ -60,7 +60,15 @@ public class Combatant
     public int       CurrentMp;
     public int       MaxMp;
     public bool      IsDefending;
-    public Combatant BeckoningTarget;  // Target enemy this combatant has beckoned — consumed on the next SelectEnemyAttack call for that enemy. Null = no active beckon. Target defaults to _enemyParty[0] until C10 wires proper target selection.
+    public System.Collections.Generic.HashSet<Combatant> BeckoningTargets = new();
+    // Set of enemies this combatant has beckoned. Each enemy's entry is
+    // consumed on the next SelectEnemyAttack call for that enemy. Empty =
+    // no active beckons. Set by Beckon's target picker via PerformBeckon
+    // (Add). Cleared in KillCombatant if any beckoned enemy dies before
+    // its turn fires (Remove). Whole set cleared in SwapToPhase2 (Clear).
+    // Multiple concurrent beckons supported — the player can stack
+    // Beckons across turns; each enemy's force-learnable fires when its
+    // own turn arrives.
     public bool      IsAbsorber;       // True for the single Absorber on the player side; gates absorbed-move learning and Beckon menu visibility in the Skills submenu.
 
     // ---- Enemy-only — null/unused/default on players ----

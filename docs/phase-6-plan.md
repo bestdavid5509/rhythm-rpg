@@ -907,34 +907,78 @@ verification ship in the same commit:
 
 ### C10 — Beckon target-redirect (Option A, Absorber-only)
 
-- Beckon menu entry exists only in the Absorber's Skills submenu (C4.5
-  enforces rendering; C10 wires behaviour). Using Beckon requires
-  `_activePlayer.IsAbsorber == true` by menu construction.
-- `PerformBeckon` transitions to `SelectingTarget` with
-  `MenuContext.Beckon` (return path on cancel is the Skills submenu).
-  Target pool is alive enemies. Default target: first alive enemy.
-- On target confirm: set `_activePlayer.BeckoningTarget = chosenEnemy`,
-  deduct MP (`BeckonMpCost = 10`), advance turn via
-  `_queue.Advance(); AdvanceTurn();`.
-- `SelectEnemyAttack(enemy)`: before natural attack-pool selection, scan
-  `_playerParty` for any `p` with `p.BeckoningTarget == enemy`. If
-  found, return `enemy.Data.LearnableAttack` and clear
-  `p.BeckoningTarget = null`. Otherwise natural selection runs.
-- `SelectEnemyTarget(enemy)` (from C5): scan `_playerParty` for any
-  `p` with `p.BeckoningTarget == enemy`. If found, redirect target to
-  `p`. Otherwise uniform-random over alive players.
-- `_threatenedCombatants` population reads the resolved target post-
-  Beckon, so the red-tint flash fires on the Beckoner.
-- Both `BeckoningTarget` clearing sites (SelectEnemyAttack +
-  SelectEnemyTarget) must be coherent — clear in exactly one place (the
-  moment the enemy attack begins execution), not both.
+The mechanical wiring shipped silently in commit `1da4e3b` (the C9
+bundle) alongside the multi-target picker — both touched the same
+enemy target-selection / threat-reveal pipeline, so they landed
+together rather than as a separate C10 commit. The C10 commit covers
+only the cleanup work surfaced by post-bundle survey.
+
+**Wiring shipped in `1da4e3b` (the C9 bundle):**
+
+- `PerformBeckon` routes through `SelectingTarget` with
+  `MenuContext.Skills`. Beckon menu entry is Absorber-only via the
+  C4.5 submenu rebuild + a defense-in-depth `IsAbsorber` reject in
+  `PerformBeckon` itself.
+- On target confirm: `_activePlayer.BeckoningTarget = chosenEnemy`,
+  MP deducted (`BeckonMpCost = 10`), turn advances via
+  `AdvanceTurn()`.
+- `SelectEnemyAttack(enemy)` scans `_playerParty` for any `p` with
+  `p.BeckoningTarget == enemy`. On match: clears `p.BeckoningTarget`
+  and returns `EnemyData.LearnableAttack` if non-null; otherwise
+  breaks out and falls through to natural attack-pool selection
+  (graceful no-op for enemies without a defined learnable).
+- `SelectEnemyTarget(enemy)` does the same scan read-only — returns
+  the matching beckoner if found, otherwise uniform-random over
+  alive players.
+- Single-clear invariant: `SelectEnemyTarget` is read-only;
+  `SelectEnemyAttack` is the sole consumption site. The
+  `BeginEnemyAttack` flow at [BattleTest.cs:1540-1550] resolves
+  defender first then attack so the redirect scan and force-
+  learnable scan see the same `BeckoningTarget` value.
+- `_threatenedCombatants` populated post-redirect, so the red-tint
+  flash fires on the Beckoner.
+- `KillCombatant` defensively nulls any `p.BeckoningTarget == dying`
+  so a dead Beckoned enemy doesn't leave a stale reference.
+
+**This commit (C10):**
+
+- `ShowLearnableSignal` ("If I watch carefully…" text + sound) gates
+  on `playerDefender.IsAbsorber`. The text is the Absorber's
+  introspective perception cue; non-Absorbers have no learning
+  channel. `FlashCombatantWhite(enemyAttacker)` stays unconditional —
+  it's the enemy's signature visual identity for the move,
+  independent of who's targeted.
+- `Combatant.BeckoningTarget` doc-comment refreshed (was stale,
+  referenced "defaults to `_enemyParty[0]` until C10 wires proper
+  target selection").
+- First interactive 4v8 verification of the Beckon redirect path
+  end-to-end. The wiring existed in HEAD post-`1da4e3b` but hadn't
+  been exercised under interactive multi-character density.
 
 Verification: 4v8 TestFullParty with P1 as Absorber. P1 beckons E3.
-E3's turn: uniform-random enemy target selection would normally pick a
-random player; Beckon redirect overrides to P1. Threat-reveal fires on
-P1, white-flash fires on E3, attack is the learnable. Absorb on
-perfect parry → learnable added to P1's Skills submenu. Non-Absorbers
-(P2–P4) never see a Beckon entry in their submenus.
+E3's turn: uniform-random enemy target selection would normally pick
+a random player; Beckon redirect overrides to P1. Threat-reveal
+fires on P1, white-flash fires on E3, attack is the learnable.
+"If I watch carefully…" fires (target IS Absorber). Absorb on
+perfect parry → learnable added to P1's Skills submenu. Negative
+case: enemy uses learnable while targeting non-Absorber player —
+white flash fires, but text does not (the new gate's observable
+effect). Non-Absorbers (P2–P4) never see a Beckon entry in their
+submenus.
+
+**Post-C10 enhancement — multi-Beckon stacking** (separate commit):
+the C10 verification surfaced an edge case where stacking Beckons
+silently overwrote the prior pending Beckon — `BeckoningTarget`
+was a single `Combatant` reference. Refactor: field renamed to
+`BeckoningTargets` and typed `HashSet<Combatant>`. Multiple
+concurrent Beckons supported; each beckoned enemy's force-learnable
+fires when its turn arrives. The Beckon picker excludes enemies
+already in the active player's set (via an optional `include`
+predicate threaded through `GetTargetPool` and `EnterSelectingTarget`).
+All read/write/clear sites updated: `PerformBeckon` (Add),
+`SelectEnemyAttack` (Contains + Remove on match — single-clear
+preserved per-enemy), `SelectEnemyTarget` (Contains, read-only),
+`KillCombatant` (Remove — no-op on absent), `SwapToPhase2` (Clear).
 
 ### C11 — Positioning fixes (pointer / damage numbers / Cure circle)
 

@@ -1538,25 +1538,32 @@ public partial class BattleTest : Node2D
         GD.Print("[BattleTest] Enemy attacks.");
 
         // Resolve the defender first (read-only) so SelectEnemyAttack's
-        // BeckoningTarget consumption doesn't clear the field before the
-        // redirect scan runs. Both functions consult the same field for
-        // the same enemyAttacker; SelectEnemyAttack is the single-clear
-        // site, SelectEnemyTarget is read-only. Beckon redirect wins when
-        // any player has BeckoningTarget == enemyAttacker; otherwise a
-        // uniform-random pick from alive players. Threaded through to
-        // ExecuteEnemyAttack so the threat-reveal flash and the actual
-        // sequence agree on the defender.
+        // entry-consumption doesn't remove the entry before the redirect
+        // scan runs. Both functions consult the same BeckoningTargets sets
+        // for the same enemyAttacker; SelectEnemyAttack is the single-clear
+        // site (Removes only the matched enemy), SelectEnemyTarget is
+        // read-only. Beckon redirect wins when any player's BeckoningTargets
+        // contains enemyAttacker; otherwise a uniform-random pick from
+        // alive players. Threaded through to ExecuteEnemyAttack so the
+        // threat-reveal flash and the actual sequence agree on the defender.
         var playerDefender = SelectEnemyTarget(enemyAttacker);
         var selectedAttack = SelectEnemyAttack(enemyAttacker);
 
         // Signal the player when the enemy uses its learnable move (suppressed once absorbed).
         // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
         // is already in _absorbedMoves (not if any move has been absorbed).
+        //
+        // Two split signals: ShowLearnableSignal is the Absorber's introspective
+        // perception cue — only fires when the resolved defender IS the Absorber,
+        // since non-Absorbers have no learning channel. FlashCombatantWhite is the
+        // enemy's signature visual identity for the move — fires whenever the
+        // enemy uses a learnable, regardless of who's targeted.
         if (EnemyData?.LearnableAttack != null
             && selectedAttack == EnemyData.LearnableAttack
             && !_absorbedMoves.Contains(EnemyData.LearnableAttack))
         {
-            ShowLearnableSignal();
+            if (playerDefender.IsAbsorber)
+                ShowLearnableSignal();
             FlashCombatantWhite(enemyAttacker);
         }
 
@@ -2027,13 +2034,24 @@ public partial class BattleTest : Node2D
     /// sprite center; during SelectingTarget no sprite-position tween is active
     /// (hop-in fires after confirm), so this matches live screen position
     /// without coupling to mid-tween state.
+    /// <para>
+    /// Optional <paramref name="include"/> predicate filters out combatants the
+    /// caller wants excluded (in addition to the IsDead filter). Used by
+    /// Beckon's picker callsite to exclude already-beckoned enemies; other
+    /// callsites pass null and get the unfiltered alive pool.
+    /// </para>
     /// </summary>
-    private List<Combatant> GetTargetPool(CombatantSide side)
+    private List<Combatant> GetTargetPool(CombatantSide side,
+                                           System.Func<Combatant, bool> include = null)
     {
         var party = side == CombatantSide.Player ? _playerParty : _enemyParty;
         var alive = new List<Combatant>();
         foreach (var c in party)
-            if (!c.IsDead) alive.Add(c);
+        {
+            if (c.IsDead) continue;
+            if (include != null && !include(c)) continue;
+            alive.Add(c);
+        }
         alive.Sort((a, b) =>
         {
             int yCmp = a.AnimSpriteOrigin.Y.CompareTo(b.AnimSpriteOrigin.Y);
@@ -2043,11 +2061,12 @@ public partial class BattleTest : Node2D
         return alive;
     }
 
-    private void EnterSelectingTarget(CombatantSide targetSide, MenuContext fromMenu)
+    private void EnterSelectingTarget(CombatantSide targetSide, MenuContext fromMenu,
+                                       System.Func<Combatant, bool> include = null)
     {
         _state                       = BattleState.SelectingTarget;
         _selectingTargetMenuContext  = fromMenu;
-        _targetPool                  = GetTargetPool(targetSide);
+        _targetPool                  = GetTargetPool(targetSide, include);
         _targetPoolIndex             = 0;
 
         if (_targetPool.Count == 0)
@@ -2647,8 +2666,8 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Returns the attack to use for the current enemy turn. The
     /// <paramref name="enemyAttacker"/> parameter scopes the Beckon force-learnable
-    /// scan: only a player whose <c>BeckoningTarget</c> equals the attacking enemy
-    /// triggers the redirect. Priority: LoopAttack+TestEnemyAttack (testing) >
+    /// scan: only a player whose <c>BeckoningTargets</c> contains the attacking
+    /// enemy triggers the redirect. Priority: LoopAttack+TestEnemyAttack (testing) >
     /// Beckon force-learnable > EnemyData.AttackPool > _enemyAttackData (fallback).
     /// </summary>
     private AttackData SelectEnemyAttack(Combatant enemyAttacker)
@@ -2656,14 +2675,15 @@ public partial class BattleTest : Node2D
         if (LoopAttack && TestEnemyAttack != null)
             return TestEnemyAttack;
 
-        // Beckon force-learnable: scan all players for one whose BeckoningTarget
-        // matches this attacking enemy. Consume the redirect on match. Single-clear
-        // invariant — this is the consumption site; SelectEnemyTarget reads only.
+        // Beckon force-learnable: scan all players for one whose BeckoningTargets
+        // contains this attacking enemy. Consume only that entry on match (other
+        // beckoned enemies stay queued). Single-clear invariant — this is the
+        // consumption site; SelectEnemyTarget reads only.
         foreach (var p in _playerParty)
         {
-            if (p.BeckoningTarget == enemyAttacker && !p.IsDead)
+            if (p.BeckoningTargets.Contains(enemyAttacker) && !p.IsDead)
             {
-                p.BeckoningTarget = null;
+                p.BeckoningTargets.Remove(enemyAttacker);
                 if (EnemyData?.LearnableAttack != null)
                     return EnemyData.LearnableAttack;
                 break;  // matched player but no learnable available; fall through to pool
@@ -2682,18 +2702,19 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Resolves an enemy attacker's defender. Beckon redirect wins when any
-    /// alive player has <c>BeckoningTarget == attacker</c>; otherwise a
-    /// uniform-random pick from alive players (via <see cref="_rng"/>).
-    /// Read-only — does not consume <c>BeckoningTarget</c>; consumption
+    /// alive player's <c>BeckoningTargets</c> contains the attacker; otherwise
+    /// a uniform-random pick from alive players (via <see cref="_rng"/>).
+    /// Read-only — does not Remove from <c>BeckoningTargets</c>; consumption
     /// happens in <see cref="SelectEnemyAttack"/> when the redirected
-    /// enemy commits to its learnable.
+    /// enemy commits to its learnable (Remove of just that entry, leaving
+    /// any other beckoned enemies queued).
     /// </summary>
     private Combatant SelectEnemyTarget(Combatant attacker)
     {
-        // Beckon redirect — first alive beckoner wins.
+        // Beckon redirect — first alive beckoner whose set contains this attacker wins.
         foreach (var p in _playerParty)
         {
-            if (p.BeckoningTarget == attacker && !p.IsDead)
+            if (p.BeckoningTargets.Contains(attacker) && !p.IsDead)
                 return p;
         }
 
@@ -2739,8 +2760,10 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Beckon ability — if the enemy has an unabsorbed learnable move, sets
-    /// playerCombatant.BeckoningTarget so SelectEnemyAttack returns LearnableAttack this turn.
+    /// Beckon ability — if the enemy has an unabsorbed learnable move, adds the
+    /// enemy to playerCombatant.BeckoningTargets so SelectEnemyAttack returns
+    /// LearnableAttack on that enemy's turn. Multiple concurrent Beckons
+    /// stack; each beckoned enemy's force-learnable fires when its turn arrives.
     /// Otherwise shows a brief message. Always hands off to the enemy turn immediately (no animation).
     /// </summary>
     /// <summary>
@@ -2765,7 +2788,7 @@ public partial class BattleTest : Node2D
         var beckonTarget = _selectedTarget ?? _enemyParty[0];
         player.CurrentMp -= beckonMpCost;
         UpdateMpBar();
-        player.BeckoningTarget = beckonTarget;
+        player.BeckoningTargets.Add(beckonTarget);
         GD.Print($"[BattleTest] Player beckons {beckonTarget.Name} (-{beckonMpCost} MP) — enemy will use learnable move next turn.");
         AdvanceTurn();
     }
@@ -4281,8 +4304,8 @@ public partial class BattleTest : Node2D
     /// Marks <paramref name="dying"/> as dead and runs the death sequence:
     /// IsDead flag, strip fade (both sides), death sound, death animation,
     /// Phase 2 reveal scheduling (enemy side, internally gated), and Beckon-
-    /// target cleanup (enemy side — nulls any player BeckoningTarget pointing
-    /// at the dying enemy).
+    /// target cleanup (enemy side — Removes the dying enemy from every
+    /// player's BeckoningTargets set so no stale entry can fire a redirect).
     ///
     /// <para>Idempotent: early-returns if <paramref name="dying"/> is null or
     /// already <c>IsDead</c>. Damage sites can call without checking the flag
@@ -4310,14 +4333,14 @@ public partial class BattleTest : Node2D
             ConnectAnim(dying, OnEnemyDeathFinished);
             ScheduleBossRevealIfPhase1();  // internally gated on IsPhaseTransitionPending — safe at multi-character density
 
-            // Defensive: any player Beckoning this enemy now has a stale ref.
-            // C10's full Beckon redirect plumbing relies on BeckoningTarget
-            // liveness; null it here so the enemy-side scan in C10
-            // SelectEnemyAttack / SelectEnemyTarget doesn't compare against a
-            // dead reference.
+            // Defensive: any player Beckoning this enemy now has a stale entry
+            // in their BeckoningTargets set. Remove the dying enemy from every
+            // player's set so the enemy-side scans in SelectEnemyAttack /
+            // SelectEnemyTarget can't return a dead reference. HashSet.Remove
+            // is a no-op (returns false) when the element is absent — safe to
+            // call on every player without a Contains pre-check.
             foreach (var p in _playerParty)
-                if (p.BeckoningTarget == dying)
-                    p.BeckoningTarget = null;
+                p.BeckoningTargets.Remove(dying);
         }
         else // Player
         {
