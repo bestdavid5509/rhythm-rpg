@@ -262,12 +262,13 @@ public partial class BattleTest : Node2D
     //
     // Phase 6 C9 — multi-target picker. _targetPool is the snapshot of valid
     // targets (alive combatants on the side passed to EnterSelectingTarget,
-    // sorted ascending by AnimSpriteOrigin.Y then by X — top-to-bottom in
-    // formation, tie-breaking left-to-right within a row). _targetPoolIndex
-    // is the cycling cursor into that list. ui_left / ui_right increment/
-    // decrement the cursor mod pool count and re-snap the pointer. Singleton
-    // pools (count == 1) auto-confirm at entry — pointer never renders. Both
-    // fields are cleared on confirm and cancel.
+    // sorted by each side's dominant visual axis — Y-primary / X-tie-break
+    // for the enemy two-row grid, X-primary / Y-tie-break for the player
+    // single-↘-diagonal). _targetPoolIndex is the cycling cursor into that
+    // list. ui_left / ui_right increment/decrement the cursor mod pool count
+    // and re-snap the pointer. Singleton pools (count == 1) auto-confirm at
+    // entry — pointer never renders. Both fields are cleared on confirm and
+    // cancel.
     private enum MenuContext { Main, Skills, Items }
     private Combatant       _selectedTarget;
     private System.Action   _pendingActionLauncher;
@@ -2028,12 +2029,16 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Returns the cycling target pool for the named side — alive combatants on
-    /// that side, sorted ascending by <see cref="Combatant.AnimSpriteOrigin"/>.Y
-    /// (top-to-bottom in formation), tie-breaking on X for combatants sharing
-    /// the same Y row. AnimSpriteOrigin is the snapshotted post-floor-anchor
-    /// sprite center; during SelectingTarget no sprite-position tween is active
-    /// (hop-in fires after confirm), so this matches live screen position
-    /// without coupling to mid-tween state.
+    /// that side, sorted so each side's primary sort axis matches its dominant
+    /// visual axis. Enemies sort Y-asc primary / X-asc tie-break (front row vs
+    /// back row is the dominant feature; reading order is top-row left-to-right
+    /// then bottom-row left-to-right). Players sort X-asc primary / Y-asc
+    /// tie-break (single ↘ diagonal where horizontal span is the dominant
+    /// feature; ui_right cycles toward screen-right / the leader).
+    /// AnimSpriteOrigin is the snapshotted post-floor-anchor sprite center;
+    /// during SelectingTarget no sprite-position tween is active (hop-in fires
+    /// after confirm), so this matches live screen position without coupling
+    /// to mid-tween state.
     /// <para>
     /// Optional <paramref name="include"/> predicate filters out combatants the
     /// caller wants excluded (in addition to the IsDead filter). Used by
@@ -2052,12 +2057,35 @@ public partial class BattleTest : Node2D
             if (include != null && !include(c)) continue;
             alive.Add(c);
         }
-        alive.Sort((a, b) =>
+        if (side == CombatantSide.Player)
         {
-            int yCmp = a.AnimSpriteOrigin.Y.CompareTo(b.AnimSpriteOrigin.Y);
-            if (yCmp != 0) return yCmp;
-            return a.AnimSpriteOrigin.X.CompareTo(b.AnimSpriteOrigin.X);
-        });
+            // X-primary for players — single ↘ diagonal where X is the
+            // dominant visual axis (slot 0 at top-right, slots 1..N-1
+            // step down-left). ui_right cycles toward screen-right
+            // (larger X), matching the player's reading intuition.
+            // Y is tie-break only — unused at single-diagonal density
+            // since every slot has unique X, but keeps the comparator
+            // total in case future formations stack players vertically.
+            alive.Sort((a, b) =>
+            {
+                int xCmp = a.AnimSpriteOrigin.X.CompareTo(b.AnimSpriteOrigin.X);
+                if (xCmp != 0) return xCmp;
+                return a.AnimSpriteOrigin.Y.CompareTo(b.AnimSpriteOrigin.Y);
+            });
+        }
+        else
+        {
+            // Y-primary for enemies — two-row staggered grid where Y is
+            // the dominant visual axis (front row vs back row). X is
+            // tie-break for combatants sharing a row, giving "top row
+            // left-to-right, then bottom row left-to-right" reading order.
+            alive.Sort((a, b) =>
+            {
+                int yCmp = a.AnimSpriteOrigin.Y.CompareTo(b.AnimSpriteOrigin.Y);
+                if (yCmp != 0) return yCmp;
+                return a.AnimSpriteOrigin.X.CompareTo(b.AnimSpriteOrigin.X);
+            });
+        }
         return alive;
     }
 

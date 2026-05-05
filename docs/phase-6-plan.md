@@ -905,6 +905,18 @@ verification ship in the same commit:
   of the ColorRect-derived `PositionRect.Size.Y` basis. Multiplier
   retuned from 0.55 to 0.5 against the larger basis.
 
+**Post-C9 cycling-direction fix** (separate commit): the C9 bundle
+shipped a single Y-asc / X-asc sort comparator for both sides.
+Player picker (Cure / Ether) cycling at 4v8 felt reversed because
+the player single-↘-diagonal traverses Y-asc from top-right to
+bottom-left — `ui_right` moved the pointer leftward in screen
+space. Fix: `GetTargetPool` branches on `CombatantSide`. Players
+sort X-primary / Y-tie-break (matches the diagonal's dominant
+horizontal span); enemies keep Y-primary / X-tie-break (matches
+the two-row grid). Conceptual framing: each side's primary sort
+axis matches its dominant visual axis. Single-file fix, ~20 LOC
+in `GetTargetPool`'s body.
+
 ### C10 — Beckon target-redirect (Option A, Absorber-only)
 
 The mechanical wiring shipped silently in commit `1da4e3b` (the C9
