@@ -7,15 +7,18 @@ using Godot;
 ///
 /// <para>
 /// Rendering is pure <c>_Draw</c> — a downward-pointing triangle, no sprite
-/// assets. Anchored off <c>target.AnimSprite.GlobalPosition</c> rather than
-/// <c>target.Origin + PositionRect.Size / 2f</c> to avoid the ColorRect
-/// width-bias quirk documented in the Phase 3.5 / Cure self-heal notes.
+/// assets. Anchored off <c>target.AnimSprite.GlobalPosition</c> for X and
+/// off the rendered sprite height (<c>FrameHeight * AnimSpriteScale.Y</c>)
+/// for Y. The earlier <c>PositionRect.Size.Y</c> basis read the ColorRect
+/// anchor instead of the visible sprite, placing the pointer near sprite
+/// center rather than above the head once multi-character density made
+/// the discrepancy observable.
 /// </para>
 ///
 /// <para>
-/// Target cycling (ui_left / ui_right) is stubbed in BattleTest today; the
-/// scaffolding phase will wire multi-target iteration through this same
-/// SnapTo entry point without further pointer changes.
+/// Target cycling (ui_left / ui_right) is wired in BattleTest's
+/// HandleSelectingTargetInput (Phase 6 C9) and routes through the same
+/// <see cref="SnapTo"/> entry point.
 /// </para>
 /// </summary>
 public partial class TargetPointer : Node2D
@@ -23,17 +26,19 @@ public partial class TargetPointer : Node2D
     private const float TriangleHalfWidth = 18f;
     private const float TriangleHeight    = 22f;
 
-    // Fraction of the target's frame height to offset above the sprite center.
-    // Derives per-combatant so 80px-tall player and 130–160px-tall enemies get
-    // proportional positioning without a separate tuning constant per height.
-    private const float HeadOffsetMultiplier = 0.55f;
+    // Fraction of the rendered sprite height to offset above the sprite center.
+    // Reads the per-combatant FrameHeight * AnimSpriteScale.Y so all sprite
+    // sizes (80px Knight, 130/160px Warriors) get proportional placement
+    // without a separate tuning constant per height. Tuned at 4v8 — adjust
+    // if interactive verification shows the tip drifting too high or low.
+    private const float HeadOffsetMultiplier = 0.5f;
 
     private static readonly Color PointerColor = new(1f, 0.85f, 0.2f, 1f);
 
     public override void _Ready()
     {
         Visible = false;
-        ZIndex  = 10;  // above combatants (0) and effect sprites (3)
+        ZIndex  = 30;  // selection-UI tier — above formation (max 14) + hop-in (15) + headroom for future formation expansion
     }
 
     public override void _Draw()
@@ -48,7 +53,8 @@ public partial class TargetPointer : Node2D
     public void SnapTo(Combatant target)
     {
         var sprite = target.AnimSprite;
-        float offsetY = -target.PositionRect.Size.Y * HeadOffsetMultiplier;
+        float renderedSpriteHeight = target.FrameHeight * target.AnimSpriteScale.Y;
+        float offsetY = -renderedSpriteHeight * HeadOffsetMultiplier;
         GlobalPosition = new Vector2(
             sprite.GlobalPosition.X,
             sprite.GlobalPosition.Y + offsetY);

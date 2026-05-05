@@ -259,10 +259,21 @@ public partial class BattleTest : Node2D
     // was entered from so Cancel returns to the correct menu (main / Absorbed
     // Moves submenu / Items submenu). All three fields are cleared on confirm
     // and on cancel.
+    //
+    // Phase 6 C9 — multi-target picker. _targetPool is the snapshot of valid
+    // targets (alive combatants on the side passed to EnterSelectingTarget,
+    // sorted ascending by AnimSpriteOrigin.Y then by X — top-to-bottom in
+    // formation, tie-breaking left-to-right within a row). _targetPoolIndex
+    // is the cycling cursor into that list. ui_left / ui_right increment/
+    // decrement the cursor mod pool count and re-snap the pointer. Singleton
+    // pools (count == 1) auto-confirm at entry — pointer never renders. Both
+    // fields are cleared on confirm and cancel.
     private enum MenuContext { Main, Skills, Items }
-    private Combatant     _selectedTarget;
-    private System.Action _pendingActionLauncher;
-    private MenuContext   _selectingTargetMenuContext;
+    private Combatant       _selectedTarget;
+    private System.Action   _pendingActionLauncher;
+    private MenuContext     _selectingTargetMenuContext;
+    private List<Combatant> _targetPool      = new();
+    private int             _targetPoolIndex = 0;
 
     // Party lists owned by BattleTest. Single-entry for the 1v1 prototype; the
     // scaffolding exercise grows them to 4/5. Source of truth for combat-universal
@@ -405,6 +416,12 @@ public partial class BattleTest : Node2D
     // Set at the start of each combo turn; cleared in BeginPlayerAttack and BeginComboMissRetreat.
     // When true, OnComboPassNSlashFinished skips the wind-up hold and triggers the retreat instead.
     private bool       _comboMissed;
+
+    // Set when a combo per-pass damage application kills the defender mid-combo. Triggers the
+    // same retreat path as _comboMissed (free prompt, hide target zone, advance turn) but
+    // semantically distinct — the kill is a successful hit, not a miss. Cleared at the start
+    // of each combo turn in BeginPlayerAttack.
+    private bool       _comboTargetDied;
 
     // Hop-in coordination — two-flag rendezvous so ProceedAfterHopInAnim fires only after
     // BOTH the sequence completes AND the attack animation finishes (whichever is last).
@@ -1429,8 +1446,22 @@ public partial class BattleTest : Node2D
         // animation overlaps with the dispatch below (ShowMenu /
         // BeginEnemyAttack), which is fine — no input is gated on the
         // animation.
+        //
+        // Dead-outgoing case (counter-kill, mid-sequence kill, etc.):
+        // FadeDeadCombatantFromStrip's tween-callback already ran
+        // HardRebindStrip ~180ms earlier when KillCombatant fired at the
+        // damage site. That rebuild took the currentIsDead branch and
+        // produced the correct post-advance Lookahead-only preview — strip
+        // already shows the next-active actor at the top. AnimateSlide
+        // running on that already-rebuilt strip would capture the new
+        // top card as slideOutCapture and rotate it off (corrupting the
+        // strip — duplicates a future entry, drops the active actor).
+        // Route dead-outgoing turns to HardRebindStrip instead; it's
+        // idempotent with the fade-callback's earlier rebuild — both
+        // produce the same Lookahead-driven preview.
+        bool animate = outgoing != null && !outgoing.IsDead;
         if (_queue.Current != null)
-            RefreshTurnOrderStrip(animate: true);
+            RefreshTurnOrderStrip(animate: animate);
 
         var current = _queue.Advance();
         if (current == null)
@@ -1627,20 +1658,20 @@ public partial class BattleTest : Node2D
             UpdateHPBars();
             ShakeCamera(intensity: 8f, duration: 0.3f);  // shake — player takes a hit
 
-            // Immediate death — play the animation now; the sequence continues silently.
-            // SuppressInput (when aggregate wipe) blocks all further manual input and auto-miss
-            // feedback on circles. Game Over label is deferred to OnEnemySequenceCompleted so
-            // the player can watch the full attack pattern for future attempts.
+            // Immediate death — KillCombatant fires the animation; the sequence continues
+            // silently. SuppressInput (when aggregate wipe) blocks all further manual input
+            // and auto-miss feedback on circles. Game Over label is deferred to
+            // OnEnemySequenceCompleted so the player can watch the full attack pattern for
+            // future attempts.
             //
-            // C3 multi-unit: this combatant really died — mark IsDead + play death anim
-            // unconditionally. The Game Over overlay and SuppressInput only fire if the
-            // aggregate CheckGameOver predicate confirms the whole party is down.
+            // C3 multi-unit: this combatant really died — KillCombatant marks IsDead +
+            // plays death anim unconditionally. The Game Over overlay and SuppressInput
+            // only fire if the aggregate CheckGameOver predicate confirms the whole party
+            // is down.
             if (player.CurrentHp <= 0 && !player.IsDead)
             {
                 GD.Print("[BattleTest] Player HP reached zero mid-sequence.");
-                player.IsDead = true;
-                FadeDeadCombatantFromStrip(player);
-                player.AnimSprite.Play("death");
+                KillCombatant(player);
                 if (CheckGameOver())
                 {
                     // _state transition deferred to ShowGameOverOptionsPanel (2.0s later,
@@ -1929,11 +1960,14 @@ public partial class BattleTest : Node2D
                 return;
             }
 
-            // Game over — determine which side is dead and play the appropriate death animation.
+            // Game over — KillCombatant has already fired at the damage site
+            // (per-target death detection). This branch only handles the
+            // sequence-completion follow-up: enemy attacker's idle/cast_end
+            // animation, end-of-battle overlay (player wipe), and the
+            // post-counter player idle (enemy wipe via parry counter).
             PlayTeardown(null);
 
             var player = defender;  // alias for readability below (defender == player in enemy sequences)
-            var enemy  = attacker;
 
             if (player.CurrentHp <= 0)
             {
@@ -1948,25 +1982,12 @@ public partial class BattleTest : Node2D
                     else
                         PlayAnim(attacker, "idle");
                 }
-                player.IsDead = true;
-                FadeDeadCombatantFromStrip(player);
-                _sequenceDeathTarget = player;
-                SafeDisconnectAnim(player, OnPlayerDeathFinished);
-                player.AnimSprite.Play("death");
-                ConnectAnim(player, OnPlayerDeathFinished);
                 // Early overlay + music fade so the Game Over reads the moment the knight falls.
                 // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
                 ShowEndLabel("Game Over");
             }
-            else // enemy.CurrentHp <= 0 — perfect parry counter killed the enemy
+            else // attacker.CurrentHp <= 0 — perfect parry counter killed the enemy
             {
-                enemy.IsDead = true;
-                PlaySound("enemy_defeat.mp3");
-                _sequenceDeathTarget = enemy;
-                SafeDisconnectAnim(enemy, OnEnemyDeathFinished);
-                enemy.AnimSprite.Play("death");
-                ConnectAnim(enemy, OnEnemyDeathFinished);
-                ScheduleBossRevealIfPhase1();
                 PlayAnim(defender, "idle");  // player returns to idle (defender == player pre-C2 §3 no-swap semantics)
             }
         }
@@ -1981,54 +2002,88 @@ public partial class BattleTest : Node2D
     }
 
     // =========================================================================
-    // Target selection (Phase 4)
+    // Target selection (Phase 4 / Phase 6 C9)
     // =========================================================================
     // State machine glue between a menu pick and the attack launch. Menu handlers
     // in BattleMenu.cs build a launcher closure (captures attack-identity state +
     // MP deduction + the Begin* call) and hand off to EnterSelectingTarget with a
-    // default target. The player confirms with battle_confirm (invokes the
-    // launcher) or cancels with ui_cancel (restores the menu, no MP spent).
+    // CombatantSide hint specifying which side's combatants are valid targets.
+    // The player confirms with battle_confirm (invokes the launcher) or cancels
+    // with ui_cancel (restores the menu, no MP spent).
     //
-    // Target cycling is stubbed — single-target today; scaffolding phase will
-    // wire ui_left / ui_right to iterate valid targets once multi-enemy / party
-    // selection density exists.
+    // Pool semantics: GetTargetPool returns alive combatants on the named side,
+    // sorted left-to-right by AnimSpriteOrigin.X. Default starting target is the
+    // leftmost-by-X (pool index 0). ui_left / ui_right cycle through the pool
+    // with wraparound; singleton pools auto-confirm at entry so the pointer never
+    // renders at 1v1. Cure-on-allies is in scope: heal attacks pass
+    // CombatantSide.Player so all alive players (including the active player) are
+    // valid recipients.
 
-    private void EnterSelectingTarget(Combatant defaultTarget, MenuContext fromMenu)
+    /// <summary>
+    /// Returns the cycling target pool for the named side — alive combatants on
+    /// that side, sorted ascending by <see cref="Combatant.AnimSpriteOrigin"/>.Y
+    /// (top-to-bottom in formation), tie-breaking on X for combatants sharing
+    /// the same Y row. AnimSpriteOrigin is the snapshotted post-floor-anchor
+    /// sprite center; during SelectingTarget no sprite-position tween is active
+    /// (hop-in fires after confirm), so this matches live screen position
+    /// without coupling to mid-tween state.
+    /// </summary>
+    private List<Combatant> GetTargetPool(CombatantSide side)
+    {
+        var party = side == CombatantSide.Player ? _playerParty : _enemyParty;
+        var alive = new List<Combatant>();
+        foreach (var c in party)
+            if (!c.IsDead) alive.Add(c);
+        alive.Sort((a, b) =>
+        {
+            int yCmp = a.AnimSpriteOrigin.Y.CompareTo(b.AnimSpriteOrigin.Y);
+            if (yCmp != 0) return yCmp;
+            return a.AnimSpriteOrigin.X.CompareTo(b.AnimSpriteOrigin.X);
+        });
+        return alive;
+    }
+
+    private void EnterSelectingTarget(CombatantSide targetSide, MenuContext fromMenu)
     {
         _state                       = BattleState.SelectingTarget;
-        _selectedTarget              = defaultTarget;
         _selectingTargetMenuContext  = fromMenu;
+        _targetPool                  = GetTargetPool(targetSide);
+        _targetPoolIndex             = 0;
 
-        // Auto-confirm when target is unambiguous. Today every attack has exactly
-        // one valid target (offensive → single enemy, Cure → self); the pointer
-        // appears when friendly-fire / ally-heal support introduces multi-target
-        // pools. Until then, skip the confirmation ceremony — selecting a known
-        // single target adds input friction without giving the player a choice.
-        if (IsTargetPoolSingleton(defaultTarget))
+        if (_targetPool.Count == 0)
+        {
+            // Defensive: no alive candidates on the requested side. Structurally
+            // unreachable today (offensive picker wouldn't open with all enemies
+            // dead — Victory fires; ally-target picker wouldn't open with all
+            // players dead — GameOver fires). Log + cancel back to menu rather
+            // than launch with a null target.
+            GD.PrintErr($"[BattleTest] SelectingTarget entered with empty pool for side {targetSide} — cancelling.");
+            CancelTargetSelection();
+            return;
+        }
+
+        _selectedTarget = _targetPool[0];
+
+        // Auto-confirm when the pool has exactly one valid target. The pointer
+        // adds input friction without giving the player a choice — and at 1v1
+        // this is every selection, by construction.
+        if (_targetPool.Count == 1)
         {
             ConfirmTargetSelection();
             return;
         }
 
-        _targetPointer.SnapTo(defaultTarget);
+        _targetPointer.SnapTo(_selectedTarget);
         _targetPointer.Visible = true;
-        GD.Print($"[BattleTest] Selecting target — default: {defaultTarget.Name}.");
+        GD.Print($"[BattleTest] Selecting target — pool size {_targetPool.Count}, default: {_selectedTarget.Name}.");
     }
-
-    /// <summary>
-    /// True when the valid-target pool for the current attack contains exactly one
-    /// combatant (i.e. <paramref name="defaultTarget"/> is the only choice). Stub
-    /// today — every offensive attack targets the single enemy; Cure targets self;
-    /// no attack yet allows ally-target or friendly-fire. When those land (post
-    /// Phase 6, pending AttackData target-pool metadata), this checks the actual
-    /// alive-combatants-on-the-appropriate-side count instead of hard-returning true.
-    /// </summary>
-    private bool IsTargetPoolSingleton(Combatant defaultTarget) => true;
 
     private void ConfirmTargetSelection()
     {
         _targetPointer.Visible       = false;
         _selectingTargetMenuContext  = MenuContext.Main;  // defensive clear; mirrors cancel's reset pattern
+        _targetPool.Clear();
+        _targetPoolIndex             = 0;
 
         // C8 — primary action-commit hook for the active player's turn-end
         // visual cues. Fires before the launcher invokes so the sprite-tint
@@ -2065,6 +2120,8 @@ public partial class BattleTest : Node2D
         _targetPointer.Visible = false;
         _selectedTarget         = null;
         _pendingActionLauncher  = null;
+        _targetPool.Clear();
+        _targetPoolIndex        = 0;
         // Defensive flag reset — stale attack-identity state shouldn't linger
         // between cancel and the next menu pick. Next pick will set these anyway,
         // but an explicit clear prevents future regression if a new code path
@@ -2116,10 +2173,26 @@ public partial class BattleTest : Node2D
             CancelTargetSelection();
             return;
         }
-        if (@event.IsActionPressed("ui_left") || @event.IsActionPressed("ui_right"))
+        // Cycle the cursor through the pool. Pool guaranteed ≥ 2 here — singleton
+        // pools auto-confirm at EnterSelectingTarget before reaching this handler.
+        // (idx - 1 + count) % count keeps the result non-negative on the
+        // wraparound at index 0. Cycling only mutates the pool cursor, the
+        // resolved _selectedTarget, and the pointer position; attack-identity
+        // state (_isComboAttack, _activeMagicAttack) is left untouched so the
+        // launcher closure captured at menu-pick time remains valid.
+        if (@event.IsActionPressed("ui_right"))
         {
-            // Stub: target cycling lands with the scaffolding phase once multiple
-            // enemies/allies exist. Single-target today; no-op.
+            _targetPoolIndex = (_targetPoolIndex + 1) % _targetPool.Count;
+            _selectedTarget  = _targetPool[_targetPoolIndex];
+            _targetPointer.SnapTo(_selectedTarget);
+            return;
+        }
+        if (@event.IsActionPressed("ui_left"))
+        {
+            _targetPoolIndex = (_targetPoolIndex - 1 + _targetPool.Count) % _targetPool.Count;
+            _selectedTarget  = _targetPool[_targetPoolIndex];
+            _targetPointer.SnapTo(_selectedTarget);
+            return;
         }
     }
 
@@ -2132,6 +2205,7 @@ public partial class BattleTest : Node2D
         _state               = BattleState.PlayerAttack;
         _isPlayerMagicAttack = false;
         _comboMissed         = false;
+        _comboTargetDied     = false;
         GD.Print(_isComboAttack ? "[BattleTest] Player uses Combo Strike." : "[BattleTest] Player attacks.");
         _comboPassIndex = 0;
         var promptType = _isComboAttack ? TimingPrompt.PromptType.Bouncing : TimingPrompt.PromptType.Standard;
@@ -2219,13 +2293,16 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);  // shake — perfect timing feedback
 
-        var enemy = _enemyParty[0];  // single target in the current UI
+        var enemy = _sequenceDefender;
         enemy.TakeDamage(damage);
         GD.Print($"[BattleTest] Player deals {damage} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(ComputeDamageOrigin(enemy), damage, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);  // shake — strike lands on enemy
         PlayCombatantHurtFlash(enemy);
+
+        if (enemy.CurrentHp <= 0)
+            KillCombatant(enemy);
 
         UpdateHPBars();
         _pendingGameOver = CheckGameOver();
@@ -2255,6 +2332,15 @@ public partial class BattleTest : Node2D
         int baseDamage = _battleSystem.GetStepBaseDamage(stepIndex);
         int amount     = ComputePlayerDamage(baseDamage, r);
 
+        // Mid-sequence dead-defender guard — multi-circle offensive magic
+        // (e.g. repeating_comet_barrage) applies damage per circle. If an
+        // earlier circle killed the target, skip remaining damage so the
+        // corpse doesn't take additional hits. Heal-on-dead-ally is a
+        // separate forward-compatibility concern (resurrection mechanics);
+        // gate this guard to offensive paths via the side-difference check.
+        if (_sequenceAttacker.Side != _sequenceDefender.Side && _sequenceDefender.IsDead)
+            return;
+
         // Side-equality receiver predicate — true whenever the attacker and target
         // share a side (self-heal, ally-heal, self-damage, friendly-fire). Today only
         // Cure self-targets, so this reduces to "player casting heal on player," but
@@ -2282,13 +2368,17 @@ public partial class BattleTest : Node2D
         if (r == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);
 
-        var enemy = _enemyParty[0];  // single target in the current UI
+        var enemy = _sequenceDefender;
         enemy.TakeDamage(amount);
         GD.Print($"[BattleTest] Magic hit deals {amount} damage. Enemy HP: {enemy.CurrentHp}/{enemy.MaxHp}");
         PlaySound("enemy_hit.wav");
         SpawnDamageNumber(ComputeDamageOrigin(enemy), amount, dmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         PlayCombatantHurtFlash(enemy);
+
+        if (enemy.CurrentHp <= 0)
+            KillCombatant(enemy);
+
         UpdateHPBars();
     }
 
@@ -2328,28 +2418,15 @@ public partial class BattleTest : Node2D
         }
 
         // Magic sequences: attacker = player, defender = target (usually enemy; self for Cure).
+        // KillCombatant has already fired at the per-circle damage site (per-target death
+        // detection). This branch only handles end-of-battle UX — Game Over overlay on
+        // player-side wipe. Phase 2 reveal is fired by KillCombatant via
+        // ScheduleBossRevealIfPhase1; no work here.
         var magicDefender = _sequenceDefender;
-        var magicAttacker = _sequenceAttacker;
-        if (magicDefender.CurrentHp <= 0 && magicDefender.Side == CombatantSide.Enemy)
-        {
-            magicDefender.IsDead = true;
-            PlaySound("enemy_defeat.mp3");
-            _sequenceDeathTarget = magicDefender;
-            SafeDisconnectAnim(magicDefender, OnEnemyDeathFinished);
-            magicDefender.AnimSprite.Play("death");
-            ConnectAnim(magicDefender, OnEnemyDeathFinished);
-            ScheduleBossRevealIfPhase1();
-        }
-        else
+        if (!(magicDefender.CurrentHp <= 0 && magicDefender.Side == CombatantSide.Enemy))
         {
             // Player died from a self-damage magic sequence (hypothetical; no current
             // attack does self-damage that can reach 0 HP, but the branch stays defensive).
-            magicAttacker.IsDead = true;
-            FadeDeadCombatantFromStrip(magicAttacker);
-            _sequenceDeathTarget = magicAttacker;
-            SafeDisconnectAnim(magicAttacker, OnPlayerDeathFinished);
-            magicAttacker.AnimSprite.Play("death");
-            ConnectAnim(magicAttacker, OnPlayerDeathFinished);
             // Early overlay + music fade so the Game Over reads the moment the knight falls.
             // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
             ShowEndLabel("Game Over");
@@ -2519,41 +2596,24 @@ public partial class BattleTest : Node2D
             }
             else
             {
-                // Game over — retreat enemy without scheduling next turn, then handle death.
+                // Game over — retreat enemy without scheduling next turn. KillCombatant
+                // has already fired at the per-target damage sites (per-pass player damage
+                // at OnEnemyPassEvaluated and parry-counter site in PlayParryCounter), so
+                // death animation + IsDead + Phase 2 reveal scheduling are all in flight.
+                // This branch only handles end-of-battle UX.
                 PlayTeardown(null);
 
                 // Roles in the hop-in enemy-attack sequence: attacker = enemy, defender = player.
-                // No swap per C2 §3; parry counter that may have killed the enemy still sees
-                // _sequenceAttacker = enemy / _sequenceDefender = player.
                 var player = _sequenceDefender;
-                var enemy  = _sequenceAttacker;
 
-                if (player.CurrentHp <= 0 && !player.IsDead)
+                if (player.CurrentHp <= 0)
                 {
-                    player.IsDead = true;
-                    FadeDeadCombatantFromStrip(player);
-                    _sequenceDeathTarget = player;
-                    SafeDisconnectAnim(player, OnPlayerDeathFinished);
-                    player.AnimSprite.Play("death");
-                    ConnectAnim(player, OnPlayerDeathFinished);
                     // Early overlay + music fade so the Game Over reads the moment the knight falls.
                     // OnPlayerDeathFinished will still call ShowEndLabel at anim completion — no-ops via guard.
                     ShowEndLabel("Game Over");
                 }
-                else if (player.CurrentHp <= 0 && player.IsDead)
+                else  // attacker.CurrentHp <= 0 — parry counter killed the enemy
                 {
-                    // Death was triggered mid-sequence — animation already playing.
-                    ShowEndLabel("Game Over");
-                }
-                else  // enemy.CurrentHp <= 0 — parry counter killed the enemy
-                {
-                    enemy.IsDead = true;
-                    PlaySound("enemy_defeat.mp3");
-                    _sequenceDeathTarget = enemy;
-                    SafeDisconnectAnim(enemy, OnEnemyDeathFinished);
-                    enemy.AnimSprite.Play("death");
-                    ConnectAnim(enemy, OnEnemyDeathFinished);
-                    ScheduleBossRevealIfPhase1();
                     PlayAnim(player, "idle");
                 }
             }
@@ -3584,6 +3644,27 @@ public partial class BattleTest : Node2D
             _enemyParty.Add(BuildEnemyCombatantForSlot(i, rect, sprite, enemyInitialMaxHp));
         }
 
+        // Rename enemies by Y-rank ascending (top-to-bottom in formation), tie-
+        // breaking by X. Slot index follows the C7-extra-followup fill pattern
+        // (outer-cols-first, alternating front/back) which is non-monotonic in
+        // screen Y; reading slot-index-derived names against the formation feels
+        // chaotic. Y-rank-derived names match how the player visually scans the
+        // enemy line. Slot 0's pre-set name (the boss EnemyName) is overwritten
+        // here only when slot 0 is NOT the topmost — at 1v1 slot 0 stays
+        // "Warrior" because the singleton list trivially has Y-rank 0.
+        {
+            var byYRank = new List<Combatant>(_enemyParty);
+            byYRank.Sort((a, b) =>
+            {
+                int yCmp = a.AnimSpriteOrigin.Y.CompareTo(b.AnimSpriteOrigin.Y);
+                if (yCmp != 0) return yCmp;
+                return a.AnimSpriteOrigin.X.CompareTo(b.AnimSpriteOrigin.X);
+            });
+            string baseName = EnemyData?.EnemyName ?? "Enemy";
+            for (int rank = 0; rank < byYRank.Count; rank++)
+                byYRank[rank].Name = rank == 0 ? baseName : $"{baseName} {rank + 1}";
+        }
+
         GD.Print($"[BattleTest] Parties built — " +
                  $"player: {_playerParty.Count} combatant(s) (slot 0 HP={_playerParty[0].CurrentHp}/{_playerParty[0].MaxHp}, " +
                  $"MP={_playerParty[0].CurrentMp}/{_playerParty[0].MaxMp}); " +
@@ -3802,8 +3883,23 @@ public partial class BattleTest : Node2D
         layer.AddChild(panel);
         _enemyCombinedPanel = panel;
 
-        for (int i = 0; i < _enemyParty.Count; i++)
-            _enemyPanels.Add(BuildEnemyRow(content, _enemyParty[i]));
+        // Build rows in Y-rank order (top-to-bottom in formation, tie-break X)
+        // so the panel reads in the same direction as the sprite layout. Matches
+        // the Y-then-X sort used by GetTargetPool and the post-loop name
+        // renumbering in BuildInitialParties; reading the panel top-to-bottom
+        // gives "Warrior, Warrior 2, Warrior 3, ..." against the formation
+        // top-to-bottom. Per-row BoundCombatant refs are preserved through
+        // BuildEnemyRow's combatant parameter — reordering build sequence does
+        // not rebind any existing row.
+        var rowOrder = new List<Combatant>(_enemyParty);
+        rowOrder.Sort((a, b) =>
+        {
+            int yCmp = a.AnimSpriteOrigin.Y.CompareTo(b.AnimSpriteOrigin.Y);
+            if (yCmp != 0) return yCmp;
+            return a.AnimSpriteOrigin.X.CompareTo(b.AnimSpriteOrigin.X);
+        });
+        foreach (var enemy in rowOrder)
+            _enemyPanels.Add(BuildEnemyRow(content, enemy));
     }
 
     /// <summary>
@@ -4094,6 +4190,16 @@ public partial class BattleTest : Node2D
     {
         var preview = _queue.Lookahead(LookaheadCount);
 
+        // Belt-and-suspenders against the strip-mutator race: if a death-fade
+        // tween from FadeDeadCombatantFromStrip is in flight, its pending
+        // HardRebindStrip callback would clobber this slide's rotation. Kill
+        // it first (matches the C8 panel SlideTween Kill pattern). The
+        // detection guard in this method's tween-callback covers the residual
+        // case where a fade tween starts mid-AnimateSlide.
+        if (_turnOrderTween != null && _turnOrderTween.IsValid()
+            && _turnOrderTween.IsRunning())
+            _turnOrderTween.Kill();
+
         _turnOrderTween = CreateTween();
         _turnOrderTween.SetParallel(true);
 
@@ -4147,6 +4253,20 @@ public partial class BattleTest : Node2D
         var newCardCapture  = newCard;
         _turnOrderTween.TweenCallback(Callable.From(() =>
         {
+            // Detection guard for the residual race: a death-fade tween that
+            // started AFTER this AnimateSlide ran HardRebindStrip in its own
+            // callback, wiping and rebuilding the strip from queue.Lookahead.
+            // If _turnOrderCards[0] is no longer slideOutCapture, the rebuild
+            // produced a correct lookahead-based state — skip the rotation
+            // and free the now-stale newCard so its panel doesn't leak.
+            bool stripStateUnchanged = _turnOrderCards.Count > 0
+                                    && _turnOrderCards[0] == slideOutCapture;
+            if (!stripStateUnchanged)
+            {
+                if (newCardCapture != null && IsInstanceValid(newCardCapture.Panel))
+                    newCardCapture.Panel.QueueFree();
+                return;
+            }
             if (slideOutCapture != null && IsInstanceValid(slideOutCapture.Panel))
                 slideOutCapture.Panel.QueueFree();
             if (_turnOrderCards.Count > 0) _turnOrderCards.RemoveAt(0);
@@ -4158,17 +4278,65 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
+    /// Marks <paramref name="dying"/> as dead and runs the death sequence:
+    /// IsDead flag, strip fade (both sides), death sound, death animation,
+    /// Phase 2 reveal scheduling (enemy side, internally gated), and Beckon-
+    /// target cleanup (enemy side — nulls any player BeckoningTarget pointing
+    /// at the dying enemy).
+    ///
+    /// <para>Idempotent: early-returns if <paramref name="dying"/> is null or
+    /// already <c>IsDead</c>. Damage sites can call without checking the flag
+    /// themselves — re-entry is safe.</para>
+    ///
+    /// <para>Does NOT fire end-label / music fade / state transition / retreat —
+    /// those remain at the call site so per-target deaths during a multi-
+    /// character fight don't accidentally trigger end-of-battle UX. Callers
+    /// that detect a whole-party wipe via <see cref="CheckGameOver"/> drive the
+    /// end-of-battle work separately.</para>
+    /// </summary>
+    private void KillCombatant(Combatant dying)
+    {
+        if (dying == null || dying.IsDead) return;
+
+        dying.IsDead = true;
+        FadeDeadCombatantFromStrip(dying);
+
+        if (dying.Side == CombatantSide.Enemy)
+        {
+            PlaySound("enemy_defeat.mp3");
+            _sequenceDeathTarget = dying;
+            SafeDisconnectAnim(dying, OnEnemyDeathFinished);
+            dying.AnimSprite.Play("death");
+            ConnectAnim(dying, OnEnemyDeathFinished);
+            ScheduleBossRevealIfPhase1();  // internally gated on IsPhaseTransitionPending — safe at multi-character density
+
+            // Defensive: any player Beckoning this enemy now has a stale ref.
+            // C10's full Beckon redirect plumbing relies on BeckoningTarget
+            // liveness; null it here so the enemy-side scan in C10
+            // SelectEnemyAttack / SelectEnemyTarget doesn't compare against a
+            // dead reference.
+            foreach (var p in _playerParty)
+                if (p.BeckoningTarget == dying)
+                    p.BeckoningTarget = null;
+        }
+        else // Player
+        {
+            _sequenceDeathTarget = dying;
+            SafeDisconnectAnim(dying, OnPlayerDeathFinished);
+            dying.AnimSprite.Play("death");
+            ConnectAnim(dying, OnPlayerDeathFinished);
+        }
+    }
+
+    /// <summary>
     /// Fades all strip cards bound to <paramref name="deadCombatant"/> off the
     /// right (same slide-out treatment as <see cref="AnimateSlide"/>'s top card),
     /// then hard-rebinds the strip from the new <c>_queue.Lookahead</c> — which
     /// excludes the dead combatant because the queue's tick simulation skips
-    /// IsDead. Called from every site that flips <c>player.IsDead = true</c>.
-    /// Caller must set IsDead BEFORE invoking so the post-fade Lookahead
-    /// reflects the new state.
-    ///
-    /// Enemy-side death-handling deferred (enemies currently keep acting after
-    /// HP reaches zero — slated for C9 / later); this helper is gated by call
-    /// sites only firing it for player deaths today.
+    /// IsDead. Called from <see cref="KillCombatant"/> for both sides — strip
+    /// cards bind by Combatant reference equality regardless of side. Caller
+    /// must set IsDead BEFORE invoking so the post-fade Lookahead reflects
+    /// the new state.
     /// </summary>
     private void FadeDeadCombatantFromStrip(Combatant deadCombatant)
     {
@@ -4235,6 +4403,7 @@ public partial class BattleTest : Node2D
         label.HorizontalAlignment = HorizontalAlignment.Center;
         label.CustomMinimumSize   = new Vector2(80f, 0f);
         label.AddThemeFontSizeOverride("font_size", 28);
+        label.ZIndex              = 100;  // always-on-top tier — above prompt tier (50–52) and selection-UI tier (30–32)
 
         Vector2 startPos = position - new Vector2(40f, 0f);
         Vector2 endPos   = startPos  - new Vector2(0f, 80f);
@@ -4426,7 +4595,7 @@ public partial class BattleTest : Node2D
             prompt.Position      = ComputeCameraMidpoint(attacker, defender);
             _targetZone.Position = prompt.Position;
             _targetZone.Visible  = true;
-            prompt.ZIndex = 20;
+            prompt.ZIndex = 50;  // prompt tier — above selection-UI tier (30–32)
             AddChild(prompt);
         }, playerHopInOffset);
     }
@@ -4488,7 +4657,7 @@ public partial class BattleTest : Node2D
         //   • Hide the target zone — PromptCompleted will not fire for a mid-combo miss.
         //   • OnComboPassNSlashFinished detects _comboMissed and calls BeginComboMissRetreat
         //     instead of holding the wind-up pose (pass 0 and 1 only; pass 2 uses OnFinalSlashFinished).
-        if (_comboMissed) return;  // already cancelled; ignore subsequent pass evaluations
+        if (_comboMissed || _comboTargetDied) return;  // already cancelled; ignore subsequent pass evaluations
 
         var comboDmgResult = (TimingPrompt.InputResult)result;
         int comboBase      = _playerComboStrike?.BaseDamage ?? 6;
@@ -4501,7 +4670,7 @@ public partial class BattleTest : Node2D
         };
         if (comboDmgResult == TimingPrompt.InputResult.Perfect)
             ShakeCamera(intensity: 6f, duration: 0.2f);
-        var comboTarget = _enemyParty[0];  // single target in the current UI
+        var comboTarget = _sequenceDefender;
         comboTarget.TakeDamage(comboDamage);
         GD.Print($"[BattleTest] Combo pass {passIndex + 1} {comboDmgResult}: {comboDamage} damage. " +
                  $"Enemy HP: {comboTarget.CurrentHp}/{comboTarget.MaxHp}");
@@ -4509,6 +4678,26 @@ public partial class BattleTest : Node2D
         SpawnDamageNumber(ComputeDamageOrigin(comboTarget), comboDamage, comboDmgColor);
         ShakeCamera(intensity: 8f, duration: 0.25f);
         PlayCombatantHurtFlash(comboTarget);
+
+        // Combo-target died mid-sequence (regardless of hit/miss result — even a
+        // miss's 5-damage floor can drop a low-HP enemy to 0). Fire death sequence,
+        // set the cancel flag, route through the same retreat as a miss. Mirrors
+        // the miss branch's prompt-free + zone-hide so passes that haven't fired
+        // yet resolve cleanly. _comboTargetDied is checked in
+        // OnComboPass{0,1}SlashFinished alongside _comboMissed to skip wind-up
+        // holds. Death takes precedence over miss handling — early-return so the
+        // miss block doesn't double-up on prompt-free / zone-hide / pendingGameOver.
+        if (comboTarget.CurrentHp <= 0)
+        {
+            KillCombatant(comboTarget);
+            _comboTargetDied    = true;
+            _pendingGameOver    = CheckGameOver();
+            _targetZone.Visible = false;
+            GetTree().CreateTimer(TimingPrompt.FlashDuration).Timeout += FreeActivePrompt;
+            UpdateHPBars();
+            return;
+        }
+
         UpdateHPBars();
 
         if (comboDmgResult == TimingPrompt.InputResult.Miss)

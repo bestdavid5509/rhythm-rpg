@@ -822,10 +822,14 @@ public partial class BattleTest : Node2D
         var attacker = _sequenceAttacker;  // player combo attacker
         SafeDisconnectAnim(attacker, OnComboPass0SlashFinished);
         if (attacker.IsDead) return;
-        if (_comboMissed)
+        if (_comboMissed || _comboTargetDied)
         {
-            // Pass 0 was a miss — skip the wind-up hold and retreat immediately.
-            _comboMissed = false;
+            // Pass 0 cancelled (miss or kill) — skip the wind-up hold and retreat
+            // immediately. Both flags route through the same retreat path; the
+            // damage-site set them, OnAttackPassEvaluated's early-return blocks
+            // subsequent passes, and BeginComboMissRetreat advances the turn.
+            _comboMissed     = false;
+            _comboTargetDied = false;
             BeginComboMissRetreat();
             return;
         }
@@ -845,10 +849,12 @@ public partial class BattleTest : Node2D
         var attacker = _sequenceAttacker;  // player combo attacker
         SafeDisconnectAnim(attacker, OnComboPass1SlashFinished);
         if (attacker.IsDead) return;
-        if (_comboMissed)
+        if (_comboMissed || _comboTargetDied)
         {
-            // Pass 1 was a miss — skip the wind-up hold and retreat immediately.
-            _comboMissed = false;
+            // Pass 1 cancelled (miss or kill) — skip the wind-up hold and retreat
+            // immediately. See OnComboPass0SlashFinished for the shared rationale.
+            _comboMissed     = false;
+            _comboTargetDied = false;
             BeginComboMissRetreat();
             return;
         }
@@ -867,19 +873,12 @@ public partial class BattleTest : Node2D
         // is naturally holding its last frame. Calling Stop() here would reset Frame to 0 in
         // Godot 4 — don't touch the frame; just start the retreat from the current pose.
         var attacker = _sequenceAttacker;  // player (combo attacker)
-        var defender = _sequenceDefender;  // enemy (combo target)
         if (_pendingGameOver)
         {
-            // Damage from the miss somehow killed the enemy (edge case).
-            defender.IsDead = true;
-            PlaySound("enemy_defeat.mp3");
-            _sequenceDeathTarget = defender;
-            SafeDisconnectAnim(defender, OnEnemyDeathFinished);
-            defender.AnimSprite.Play("death");  // OWNER: enemy death from combo miss damage
-            ConnectAnim(defender, OnEnemyDeathFinished);
-            ScheduleBossRevealIfPhase1();
-            // Retreat the player to origin and return to idle — mirrors the non-game-over
-            // path below so the player doesn't freeze on the last combo miss frame.
+            // Last enemy went down — KillCombatant already fired at the
+            // damage site (per-target death detection). This branch only
+            // handles the player-side retreat so the killing-blow attacker
+            // doesn't freeze on the last combo frame.
             GetTree().CreateTimer(0.3f).Timeout += () =>
             {
                 if (attacker.IsDead) return;
@@ -915,7 +914,6 @@ public partial class BattleTest : Node2D
     {
         if (!GodotObject.IsInstanceValid(this)) return;
         var attacker = _sequenceAttacker;  // player (slash attacker)
-        var defender = _sequenceDefender;  // enemy (slash target)
         SafeDisconnectAnim(attacker, OnFinalSlashFinished);
         StopAnim(attacker);  // OWNER: OnFinalSlashFinished — hold last slash frame (sheet frame 3 or 9)
         // Godot 4 resets Frame to 0 when Stop() is called on a finished non-looping animation.
@@ -924,21 +922,12 @@ public partial class BattleTest : Node2D
 
         if (_pendingGameOver)
         {
-            // Enemy HP reached zero from the player's attack.
+            // Last enemy went down from the player's attack — KillCombatant already
+            // fired at the damage site (per-target death detection). This branch
+            // only handles the player-side retreat so the killing-blow attacker
+            // doesn't freeze on the last slash frame. Required for the Phase 1 →
+            // Phase 2 transition so Phase 2 starts with the player idling.
             // (Player cannot die during their own attack; _pendingGameOver here always means enemy defeated.)
-            // Interrupt the enemy's current animation and play death; reset camera without next turn.
-            defender.IsDead = true;
-            PlaySound("enemy_defeat.mp3");
-            _sequenceDeathTarget = defender;
-            SafeDisconnectAnim(defender, OnEnemyDeathFinished);
-            defender.AnimSprite.Play("death");         // OWNER: enemy death from player attack
-            ConnectAnim(defender, OnEnemyDeathFinished);
-            ScheduleBossRevealIfPhase1();
-            // Retreat the player to origin and return to idle — same hop-back treatment
-            // as the non-game-over path. Without this the player freezes on the last
-            // slash frame (PlayTeardown would tween the ColorRect back but no run
-            // animation is played and OnRetreatFinished never fires PlayAnim(attacker, "idle")).
-            // Required for the phase transition so Phase 2 starts with the player idling.
             GetTree().CreateTimer(0.3f).Timeout += () =>
             {
                 if (attacker.IsDead) return;
@@ -1111,6 +1100,8 @@ public partial class BattleTest : Node2D
                     PlayAnim(counterTarget, "idle");
                     counterTarget.TakeDamage(CounterDamage);
                     GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {counterTarget.CurrentHp}/{counterTarget.MaxHp}");
+                    if (counterTarget.CurrentHp <= 0)
+                        KillCombatant(counterTarget);
                     PlaySound("enemy_hit.wav");
                     // Spawn damage number at the target's current world position, offset
                     // upward above the head. Parented to BattleTest root (not the sprite)

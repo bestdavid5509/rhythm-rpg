@@ -356,7 +356,7 @@ public partial class BattleSystem : Node
                 prompt.PromptCompleted += result =>
                     OnAnyCircleCompleted(capturedPrompt, result, stepIndex);
 
-                prompt.ZIndex = 20;
+                prompt.ZIndex = 50;  // prompt tier — above selection-UI tier (30–32)
                 _spawnParent.AddChild(prompt);
 
                 // For Bouncing steps, replay the effect animation from the start on each

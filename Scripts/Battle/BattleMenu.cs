@@ -525,16 +525,16 @@ public partial class BattleTest : Node2D
         if (label.StartsWith("Ether"))
         {
             // EtherCount decrement and UseEtherItem invocation move into the launcher
-            // so cancel from SelectingTarget is a clean no-cost back-out. Default target
-            // is the player (sole MP-having combatant today); multi-ally pools post
-            // Phase 6 will let the player pick which ally receives the MP restore.
+            // so cancel from SelectingTarget is a clean no-cost back-out. Pool is
+            // alive players (CombatantSide.Player); the picker defaults to leftmost-
+            // by-X and lets the player pick which ally receives the MP restore.
             _pendingActionLauncher = () =>
             {
                 EtherCount--;
                 UseEtherItem();
             };
             HideMenu();
-            EnterSelectingTarget(_activePlayer, MenuContext.Items);
+            EnterSelectingTarget(CombatantSide.Player, MenuContext.Items);
         }
     }
 
@@ -548,7 +548,7 @@ public partial class BattleTest : Node2D
                 _isComboAttack = false;
                 _pendingActionLauncher = () => BeginPlayerAttack();
                 HideMenu();
-                EnterSelectingTarget(_enemyParty[0], MenuContext.Main);
+                EnterSelectingTarget(CombatantSide.Enemy, MenuContext.Main);
                 break;
             case 1: ShowSubMenu(); break;   // Skills
             case 2:                         // Defend — halve miss damage this enemy turn
@@ -582,7 +582,7 @@ public partial class BattleTest : Node2D
         {
             _pendingActionLauncher = () => PerformBeckon();
             HideMenu();
-            EnterSelectingTarget(_enemyParty[0], MenuContext.Skills);
+            EnterSelectingTarget(CombatantSide.Enemy, MenuContext.Skills);
             return;
         }
 
@@ -601,18 +601,18 @@ public partial class BattleTest : Node2D
                 BeginPlayerAttack();
             };
             HideMenu();
-            EnterSelectingTarget(_enemyParty[0], MenuContext.Skills);
+            EnterSelectingTarget(CombatantSide.Enemy, MenuContext.Skills);
         }
         else if (category == AttackCategory.Magic)
         {
             // Magic moves (Magic Comet, Comet Barrage, Cure, etc.) — magic attack flow.
-            // Default-target resolution via the attack-identity dispatch predicate
-            // (same split as Phase 3.6): Cure targets self, other magic targets enemy.
-            // MP deduction moves into the launcher — deducted on confirm, not on menu
-            // pick, so cancel from SelectingTarget is a clean no-cost back-out.
+            // Pool side dispatched via the attack-identity predicate (same split as
+            // Phase 3.6): Cure targets allies (CombatantSide.Player), other magic
+            // targets enemies. MP deduction moves into the launcher — deducted on
+            // confirm, not on menu pick, so cancel from SelectingTarget is a clean
+            // no-cost back-out.
             _activeMagicAttack = attack;
             bool isHealAttack = attack == _playerCureAttack;
-            Combatant defaultTarget = isHealAttack ? _activePlayer : _enemyParty[0];
             int mpCost = attack?.MpCost ?? 0;
             _pendingActionLauncher = () =>
             {
@@ -620,7 +620,7 @@ public partial class BattleTest : Node2D
                 BeginPlayerMagicAttack();
             };
             HideMenu();
-            EnterSelectingTarget(defaultTarget, MenuContext.Skills);
+            EnterSelectingTarget(isHealAttack ? CombatantSide.Player : CombatantSide.Enemy, MenuContext.Skills);
         }
     }
 

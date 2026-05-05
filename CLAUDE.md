@@ -391,6 +391,16 @@ The battle menu is a `CanvasLayer` with two `PanelContainer` panels — only one
 
 Navigation: `ui_up` / `ui_down` to move, `battle_confirm` to select. Disabled options render in grey and are skipped during navigation.
 
+### Target Selection
+
+After a menu pick, `EnterSelectingTarget(CombatantSide, MenuContext)` enters the `SelectingTarget` state. Pool is alive combatants on the named side, sorted ascending by `AnimSpriteOrigin.Y` then `AnimSpriteOrigin.X` — top-to-bottom in formation, tie-breaking left-to-right within a row. Default starting target is pool index 0 (topmost, leftmost on tie). Singleton pools auto-confirm at entry — pointer never renders. For multi-target pools, `ui_left` / `ui_right` cycle through the pool with wraparound (cycling only mutates `_targetPool` / `_targetPoolIndex` / `_selectedTarget` / pointer position, not attack-identity state on the launcher closure). `battle_confirm` invokes the captured `_pendingActionLauncher` against the resolved `_selectedTarget`; `battle_cancel` routes back to the originating `MenuContext`. Cure dispatches to `CombatantSide.Player` so allies (including self) are valid recipients; offensive attacks dispatch to `CombatantSide.Enemy`. The pointer's Y offset reads `target.FrameHeight * target.AnimSpriteScale.Y * HeadOffsetMultiplier` so it sits at sprite-head height (not ColorRect-anchor height) at multi-character density.
+
+### Per-target Death Handling
+
+`KillCombatant(Combatant)` runs the death sequence for any combatant whose HP reaches zero — sets `IsDead`, fades the strip card (both sides), plays the death animation, schedules `ScheduleBossRevealIfPhase1` for enemy deaths (internally gated on Phase 1 + non-multi-character via `IsPhaseTransitionPending`), and nulls any stale `BeckoningTarget` pointing at a dying enemy. Idempotent on `IsDead`. Called from every `TakeDamage` site after damage applies — basic offensive ([BattleTest.cs](Scripts/Battle/BattleTest.cs)), offensive magic per-circle, combo per-pass, enemy-attack-on-player, parry counter ([BattleAnimator.cs](Scripts/Battle/BattleAnimator.cs)). Game-over branches (`OnFinalSlashFinished`, `BeginComboMissRetreat`, `OnEnemySequenceCompleted`, `OnPlayerMagicSequenceCompleted`, `OnEtherSequenceCompleted` `_pendingGameOver` paths) no longer fire kill work inline — KillCombatant has already run at the damage site. Those branches handle only the end-of-battle UX (retreat, idle, end-label, music fade).
+
+Mid-sequence cancellation: combo and multi-circle magic both detect target death at the damage site. Combo sets `_comboTargetDied`; subsequent passes early-return in `OnAttackPassEvaluated`, slash-finished handlers route through `BeginComboMissRetreat` for the retreat. Multi-circle offensive magic guards at the top of `OnPlayerMagicPassEvaluated` on `_sequenceDefender.IsDead` (offensive paths only, gated by side-difference; heal-on-dead-ally is a future concern out of scope).
+
 ### Player Animation System — Knight Sprite
 
 All knight animations use 120×80 px frames from horizontal-strip PNGs at `res://Assets/Characters/Knight/`.

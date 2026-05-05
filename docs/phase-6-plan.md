@@ -824,21 +824,86 @@ active tint.
 
 ### C9 — Target-pool expansion and cycling
 
-- Rewrite `IsTargetPoolSingleton`: for offensive non-friendly-fire
-  attacks the pool is all alive combatants on the opposing side; for
-  Cure (and future friendly-fire) the pool is all alive combatants on
-  the attacker's side. Returns true only when pool count == 1.
+- `EnterSelectingTarget` signature takes an explicit `CombatantSide
+  targetSide` hint instead of a `Combatant defaultTarget`. The five
+  menu callsites in `BattleMenu.cs` (Attack, Combo Strike, Magic /
+  Cure, Beckon, Ether) pass the side directly: offensive attacks pass
+  `CombatantSide.Enemy`; Cure and Ether pass `CombatantSide.Player`.
+  Reuses the existing `CombatantSide` enum from `Combatant.cs` rather
+  than introducing a parallel `TargetSide` enum.
+- New helper `GetTargetPool(CombatantSide side)` returns alive
+  combatants on the named side, sorted ascending by
+  `AnimSpriteOrigin.Y` then `AnimSpriteOrigin.X` — top-to-bottom in
+  formation, tie-breaking left-to-right within a row. AnimSpriteOrigin
+  is the snapshotted post-floor-anchor sprite center; during
+  SelectingTarget no sprite tween is active (hop-in fires after
+  confirm), so this matches live screen position.
+- `EnterSelectingTarget` builds the pool once at entry and caches it
+  into `_targetPool`/`_targetPoolIndex`. Default starting target is
+  pool index 0 (topmost, leftmost on tie) — not the menu-supplied
+  default, not slot 0, not last-selected. Per-actor / cross-battle
+  target memory is deferred.
+- `IsTargetPoolSingleton` is removed; the named method is no longer
+  needed. Auto-confirm fires on `_targetPool.Count == 1` directly in
+  `EnterSelectingTarget`. Empty-pool case (structurally unreachable
+  today — Victory / GameOver fire before all-dead-side menu entry) is
+  defended with a `PrintErr` + `CancelTargetSelection`.
 - `HandleSelectingTargetInput` wires `ui_left` / `ui_right` to cycle
-  through the pool (wrap-around). Each cycle calls
-  `_targetPointer.SnapTo(next)`.
-- Default target selection in `EnterSelectingTarget` picks the first
-  alive opposing combatant for offensive attacks (or self for Cure).
-- At 1v1 the pool is always singleton and the pointer still auto-
-  confirms — behaviour preserved.
+  the cursor through `_targetPool` with wraparound. Cycling only
+  mutates pool cursor + `_selectedTarget` + pointer position;
+  attack-identity state (`_isComboAttack`, `_activeMagicAttack`) is
+  left untouched so the launcher closure captured at menu-pick time
+  remains valid.
+- Cure-on-allies is in scope: heal attacks pass
+  `CombatantSide.Player`, so the pool includes all alive players
+  (including the active player). At 1v1 default the pool is
+  singleton and Cure auto-confirms onto the active player as today.
+- Friendly-fire damage exposure (`AttackData.CanFriendlyFire`) and
+  Beckon target-redirect on the enemy turn remain out of scope (the
+  latter lands in C10). C9's Beckon picker just selects which enemy
+  populates `_activePlayer.BeckoningTarget`.
+- Single-resolved-target launcher contract preserved:
+  `ConfirmTargetSelection` still reads `_selectedTarget` and invokes
+  the captured launcher; no launcher-side changes.
 
-Verification: 4v8 TestFullParty → menu → Attack → cycle through
-enemies with left/right. 1v1 default → menu → Attack → auto-confirms
-as today.
+Verification: at 1v1 default every menu action auto-confirms (pool
+size 1 for both sides) and the pointer never renders — bit-identical
+to pre-C9 surface. At 4v8 (`TestFullParty=true`) Attack /
+Combo Strike / Beckon over 8 enemies, Cure / Ether over 4 players —
+pointer renders on the topmost combatant (leftmost on tie),
+ui_left/ui_right cycles by Y rank with wraparound, dead combatants
+filtered from the pool, cancel routes
+back to the originating menu. Edge cases: pool of 1 at end of fight
+auto-confirms; cycling never lands on a dead sprite.
+
+**C9 follow-up bundle** — three bugs surfaced during interactive
+verification ship in the same commit:
+
+- **Offensive damage routing**: `OnPlayerPromptCompleted`,
+  `OnPlayerMagicPassEvaluated` offensive branch, and
+  `OnAttackPassEvaluated` combo per-pass damage all read
+  `_sequenceDefender` instead of hardcoded `_enemyParty[0]`.
+  Three single-line edits; the heal branch already used
+  `_sequenceDefender` per Phase 3.6.
+- **Per-target death handling**: new `KillCombatant(Combatant)`
+  helper bundles `IsDead` flag, death sound, death animation,
+  strip fade (player) / Phase 2 reveal scheduling (enemy,
+  internally gated), and Beckon-target cleanup. Wired at all 5
+  TakeDamage sites: basic, magic, combo per-pass, enemy attack on
+  player, parry counter. Game-over branches in
+  `BeginComboMissRetreat`, `OnFinalSlashFinished`,
+  `OnEnemySequenceCompleted`, `OnPlayerMagicSequenceCompleted`,
+  and `OnEtherSequenceCompleted` simplified — kill work moves
+  into KillCombatant; branches retain only retreat / idle /
+  ShowEndLabel work. Mid-sequence cancellation: combo introduces
+  `_comboTargetDied` flag mirroring `_comboMissed` semantics;
+  multi-circle offensive magic guards on dead-defender at the top
+  of `OnPlayerMagicPassEvaluated`. `TurnOrderQueue.Advance`
+  already skips IsDead internally — no queue-side change needed.
+- **TargetPointer Y offset**: `SnapTo` reads
+  `FrameHeight * AnimSpriteScale.Y * HeadOffsetMultiplier` instead
+  of the ColorRect-derived `PositionRect.Size.Y` basis. Multiplier
+  retuned from 0.55 to 0.5 against the larger basis.
 
 ### C10 — Beckon target-redirect (Option A, Absorber-only)
 
