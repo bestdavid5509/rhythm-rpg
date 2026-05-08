@@ -331,6 +331,12 @@ It does **not** draw the target ring or hit-window band — those belong exclusi
 **Visual constants** in `TargetZone.cs` must stay in sync with `TimingPrompt.cs`:
 `TargetRadius = 28f`, `RingLineWidth = 6f`, `ColorTarget`, `ColorHitWindow`.
 
+### Magic-Circle Anchor (Phase 6 C11.2)
+
+Magic and cast attacks spawn their timing circle at `_magicCircleAnchor` — a static formation-anchored position computed once at scene init in `BuildInitialParties`. The anchor is the midpoint between the player and enemy formation centers (player from `(PlayerFrontAnchor + PlayerBackAnchor) / 2`; enemy from `_enemyParty[0].AnimSpriteOrigin + (0, EnemyBackRowYOffset/2)`), lifted by `MagicCircleYOffset` (`-50f` — interactively tuned to sit in the upper portion of the formation Y range, "amidst the action" rather than floating above it; the slight overlap with taller sprites is the cost of keeping magic input close to the action). Stable for the entire battle; the Phase 1 → Phase 2 transition's ~14px slot-0 anchor shift is below the noise floor for circle position.
+
+Hop-in attacks (basic, combo, enemy melee — `AttackData.IsHopIn = true`) keep the per-attack midpoint via `ComputeCameraMidpoint(attacker, defender)` because the caster physically moves to that midpoint and the circle anchor matches the action's geographic point. For non-hop-in attacks the caster stays at origin, so the per-attack midpoint at multi-character density is geometrically arbitrary; the static formation anchor gives the player a predictable "timing input always lands here" position regardless of which caster targets which combatant. Cure ships center-anchor too: timing input at the static center, heal effect (blue descending circle) on the recipient's sprite via `SpawnEffectSprite` — the input-vs-feedback split is the cost of consistency across all magic.
+
 ### Attack Data Model
 
 **One `AttackStep` = one animation play + one or more timing circles.**

@@ -176,7 +176,7 @@ public partial class BattleTest : Node2D
     /// flags: TestVictoryScreen, TestGameOverScreen, TestPhaseTransition
     /// all override TestFullParty.
     /// </summary>
-    [Export] public bool TestFullParty = false;
+    [Export] public bool TestFullParty = true;
 
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
@@ -294,6 +294,17 @@ public partial class BattleTest : Node2D
     private MenuContext     _selectingTargetMenuContext;
     private List<Combatant> _targetPool      = new();
     private int             _targetPoolIndex = 0;
+
+    // Phase 6 C11.2 — static formation-anchored center for magic / cast
+    // timing circles. Computed once at scene init in BuildInitialParties;
+    // stable for the entire battle. Magic and cast attacks read this
+    // instead of ComputeCameraMidpoint so the circle position is
+    // independent of caster-target geometry. Hop-in attacks still use
+    // ComputeCameraMidpoint because the caster physically moves to that
+    // midpoint and the circle anchor matches the action's geographic
+    // point — magic / cast attackers stay at origin so the per-attack
+    // midpoint at multi-character density is geometrically arbitrary.
+    private Vector2 _magicCircleAnchor;
 
     // Party lists owned by BattleTest. Single-entry for the 1v1 prototype; the
     // scaffolding exercise grows them to 4/5. Source of truth for combat-universal
@@ -1661,7 +1672,12 @@ public partial class BattleTest : Node2D
         PlayAnim(enemyAttacker, "cast_intro");
         ConnectAnim(enemyAttacker, OnCastIntroFinished);
 
-        Vector2 promptPosition = ComputeCameraMidpoint(enemyAttacker, playerDefender);
+        // Phase 6 C11.2 — magic / cast circles use the static formation-
+        // anchored center; hop-in attacks (the branch above) keep the
+        // per-attack midpoint via ComputeCameraMidpoint. _magicCircleAnchor
+        // is computed once at scene init in BuildInitialParties and is
+        // stable for the entire battle.
+        Vector2 promptPosition = _magicCircleAnchor;
         _targetZone.Position   = promptPosition;
         _targetZone.Visible    = true;
         _battleSystem.StartSequence(this, ctx, promptPosition);
@@ -3642,6 +3658,21 @@ public partial class BattleTest : Node2D
     private const float EnemyBackRowXOffset = -40f;  // back row X relative to front row same-column
     private const float EnemyBackRowYOffset =  96f;  // back row Y relative to front row same-column (BELOW)
 
+    // Phase 6 C11.2 — magic-circle Y offset above the formation-centers
+    // midpoint. The midpoint itself lands at roughly Y=664 (between player
+    // formation Y=675 and enemy formation Y=654 for the Phase 1 Warrior);
+    // -50 lifts the circle to ~Y=614, which sits in the upper portion of
+    // the formation Y range — circle reads as "amidst the action" rather
+    // than floating above it. Front-row sprite tops (Warrior at Y=411,
+    // Knight slot 0 at Y=510) are above the circle, so the circle does
+    // overlap visible character bodies for taller sprites; the consistency
+    // of "magic input always lands here" is the win, with the slight
+    // visual occlusion accepted as the cost. Tunable — larger magnitudes
+    // (e.g. -200) lift the circle clearly above the formation but pull
+    // the player's eye further from the action; verified at -50 for
+    // current sprite roster, open to revisiting during broader playtesting.
+    private const float MagicCircleYOffset = -50f;
+
     // Slot-to-grid mapping. Pattern: alternate front/back, fill outer columns
     // (col 0, col 2) before inner column (col 1) before far-outer column (col 3).
     // (row 0 = front, row 1 = back.) Slot 0 lands at FC0 (front-col-0) — boss / lead.
@@ -3821,6 +3852,23 @@ public partial class BattleTest : Node2D
             for (int rank = 0; rank < byYRank.Count; rank++)
                 byYRank[rank].Name = rank == 0 ? baseName : $"{baseName} {rank + 1}";
         }
+
+        // Phase 6 C11.2 — pre-compute the static magic-circle anchor.
+        // Player formation center is the midpoint between the front
+        // (PlayerFrontAnchor) and back (PlayerBackAnchor) anchor constants.
+        // Enemy formation center anchors at slot 0's runtime AnimSpriteOrigin
+        // (which is per-EnemyData) plus half the back-row Y offset (the
+        // per-row Y midpoint). Lifted by MagicCircleYOffset to clear the
+        // formation sprite tops. Computed once here and cached on
+        // _magicCircleAnchor; stable for the entire battle. The Phase 1 →
+        // Phase 2 transition shifts slot-0 AnimSpriteOrigin by ~14px
+        // (Y=606 → Y=592) but the anchor doesn't recompute — the shift is
+        // below the noise floor for circle position.
+        Vector2 playerFormationCenter = (PlayerFrontAnchor + PlayerBackAnchor) / 2f;
+        Vector2 enemyFormationCenter  = _enemyParty[0].AnimSpriteOrigin
+                                      + new Vector2(0f, EnemyBackRowYOffset / 2f);
+        _magicCircleAnchor = (playerFormationCenter + enemyFormationCenter) / 2f
+                           + new Vector2(0f, MagicCircleYOffset);
 
         GD.Print($"[BattleTest] Parties built — " +
                  $"player: {_playerParty.Count} combatant(s) (slot 0 HP={_playerParty[0].CurrentHp}/{_playerParty[0].MaxHp}, " +

@@ -348,10 +348,15 @@ public partial class BattleTest : Node2D
         GetTree().CreateTimer(0.2f).Timeout += () =>
         {
             if (attacker.IsDead) return;
-            // Recompute the prompt position from the sequence-scoped fields set in
-            // BeginPlayerMagicAttack — they remain stable across the cast delay, so
-            // no separate Vector2 cache is needed.
-            Vector2 promptPos = ComputeCameraMidpoint(_sequenceAttacker, _sequenceDefender);
+            // Phase 6 C11.2 — magic / cast circles use the static formation-
+            // anchored center; hop-in attacks keep the per-attack midpoint via
+            // ComputeCameraMidpoint. Magic attackers stay at origin, so the
+            // per-attack midpoint at multi-character density is geometrically
+            // arbitrary; the static anchor gives the player a predictable
+            // "timing input always lands here" position. _magicCircleAnchor
+            // is computed once at scene init in BuildInitialParties and is
+            // stable for the entire battle.
+            Vector2 promptPos = _magicCircleAnchor;
             _targetZone.Position = promptPos;
             _targetZone.Visible  = true;
             var ctx = new SequenceContext

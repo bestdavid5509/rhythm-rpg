@@ -1011,10 +1011,27 @@ preserved per-enemy), `SelectEnemyTarget` (Contains, read-only),
   floats the tip above the visible head; the smaller multiplier pulls
   the tip back toward the visible character body. Empirically tuned
   against the current sprite roster. Each sub-chunk is its own commit.
-- **C11.2** — Magic / Cure circle center-anchor. Closing-circle
-  spawn position derives from the defender's sprite center rather
-  than `ComputeCameraMidpoint`'s geometric midpoint, fixing the
-  off-axis placement at multi-character density.
+- **C11.2** — Magic / Cure circle static formation-center anchor.
+  Two non-hop-in callsites (player magic post-cast in
+  `BattleAnimator.cs`, enemy non-hop-in cast in `BattleTest.cs`)
+  switch from `ComputeCameraMidpoint(attacker, defender)` to
+  `_magicCircleAnchor` — a static Vector2 computed once at the end
+  of `BuildInitialParties`. Anchor formula: midpoint of player
+  formation center (`(PlayerFrontAnchor + PlayerBackAnchor) / 2`)
+  and enemy formation center
+  (`_enemyParty[0].AnimSpriteOrigin + (0, EnemyBackRowYOffset/2)`),
+  lifted by `MagicCircleYOffset = -50f` (interactively tuned —
+  sits in the upper portion of the formation Y range so the circle
+  reads as "amidst the action" while still being predictable across
+  caster-target pairs; slight overlap with taller front-row sprites
+  is accepted as the cost of input proximity). Open to revisiting
+  during broader playtesting. Hop-in callsites keep
+  `ComputeCameraMidpoint` because the caster physically moves to
+  that geographic point. Cure-on-self ships center-anchor too —
+  timing input at static center, heal effect on the recipient's
+  sprite; the input-vs-feedback split is the cost of consistency.
+  Damage-number positioning is NOT bundled (deferred to C11.3 or
+  its own commit).
 - **C11.3** — Layout polish (vertical move, message box).
 
 - `TargetPointer.SnapTo`: replace `target.PositionRect.Size.Y` with the
