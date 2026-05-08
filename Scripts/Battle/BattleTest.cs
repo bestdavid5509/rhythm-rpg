@@ -266,9 +266,28 @@ public partial class BattleTest : Node2D
     // for the enemy two-row grid, X-primary / Y-tie-break for the player
     // single-↘-diagonal). _targetPoolIndex is the cycling cursor into that
     // list. ui_left / ui_right increment/decrement the cursor mod pool count
-    // and re-snap the pointer. Singleton pools (count == 1) auto-confirm at
-    // entry — pointer never renders. Both fields are cleared on confirm and
-    // cancel.
+    // and re-snap the pointer (when enabled). Singleton pools (count == 1)
+    // auto-confirm at entry — pointer never renders. Both fields are
+    // cleared on confirm and cancel.
+    //
+    // Phase 6 C11.1 — target-pointer feature flag. The yellow per-sprite
+    // highlight (target_amount on CombatantOverlay) is the sole active
+    // selection indicator. The pointer was demoted to a secondary cue but
+    // has a fundamental "frame top ≠ visible content top" problem at
+    // multi-character density: transparent space above sprites means even
+    // a small margin floats the tip well above the visible head. Without
+    // per-sprite content-top authoring, precise placement isn't possible.
+    // Rather than ship slightly-wrong placement, the pointer is gated off
+    // entirely — the highlight does the job alone. Re-enable by flipping
+    // this flag to true; consider doing so if (a) JRPG-feel preference
+    // shifts, (b) colorblind accessibility needs a non-color cue, or
+    // (c) per-sprite head-offset authoring lands. Lifecycle code stays
+    // wired so re-enablement is a one-line change.
+    // static readonly (not const) so the gated lifecycle calls don't trip
+    // CS0162 unreachable-code warnings — flipping the flag still requires a
+    // single source-line edit and a recompile, the same as a const would.
+    private static readonly bool ShowTargetPointer = false;
+
     private enum MenuContext { Main, Skills, Items }
     private Combatant       _selectedTarget;
     private System.Action   _pendingActionLauncher;
@@ -2120,14 +2139,19 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        _targetPointer.SnapTo(_selectedTarget);
-        _targetPointer.Visible = true;
+        if (ShowTargetPointer)
+        {
+            _targetPointer.SnapTo(_selectedTarget);
+            _targetPointer.Visible = true;
+        }
+        ApplyTargetHighlight(_selectedTarget);
         GD.Print($"[BattleTest] Selecting target — pool size {_targetPool.Count}, default: {_selectedTarget.Name}.");
     }
 
     private void ConfirmTargetSelection()
     {
-        _targetPointer.Visible       = false;
+        if (ShowTargetPointer) _targetPointer.Visible = false;
+        ClearTargetHighlight(_selectedTarget);
         _selectingTargetMenuContext  = MenuContext.Main;  // defensive clear; mirrors cancel's reset pattern
         _targetPool.Clear();
         _targetPoolIndex             = 0;
@@ -2164,7 +2188,8 @@ public partial class BattleTest : Node2D
 
     private void CancelTargetSelection()
     {
-        _targetPointer.Visible = false;
+        if (ShowTargetPointer) _targetPointer.Visible = false;
+        ClearTargetHighlight(_selectedTarget);  // null-safe — empty-pool path enters Cancel with _selectedTarget still null
         _selectedTarget         = null;
         _pendingActionLauncher  = null;
         _targetPool.Clear();
@@ -2229,16 +2254,20 @@ public partial class BattleTest : Node2D
         // launcher closure captured at menu-pick time remains valid.
         if (@event.IsActionPressed("ui_right"))
         {
+            ClearTargetHighlight(_selectedTarget);
             _targetPoolIndex = (_targetPoolIndex + 1) % _targetPool.Count;
             _selectedTarget  = _targetPool[_targetPoolIndex];
-            _targetPointer.SnapTo(_selectedTarget);
+            if (ShowTargetPointer) _targetPointer.SnapTo(_selectedTarget);
+            ApplyTargetHighlight(_selectedTarget);
             return;
         }
         if (@event.IsActionPressed("ui_left"))
         {
+            ClearTargetHighlight(_selectedTarget);
             _targetPoolIndex = (_targetPoolIndex - 1 + _targetPool.Count) % _targetPool.Count;
             _selectedTarget  = _targetPool[_targetPoolIndex];
-            _targetPointer.SnapTo(_selectedTarget);
+            if (ShowTargetPointer) _targetPointer.SnapTo(_selectedTarget);
+            ApplyTargetHighlight(_selectedTarget);
             return;
         }
     }
@@ -2917,6 +2946,18 @@ public partial class BattleTest : Node2D
     private const float ActiveTintAmount  = 0.15f;
     private const float ActiveTintFadeSec = 0.10f;
 
+    // Phase 6 C11.1 — selected-target highlight constants. Yellow needs more
+    // amplitude than C8's white (0.15) to read clearly across varied sprite
+    // colors; 0.4 is the starting value, tunable interactively. Fade is
+    // asymmetric: TargetTintFadeSec on Apply, TargetTintClearSec on Clear.
+    // The asymmetry prevents ghost trails on rapid cycling — previous target's
+    // highlight snaps to zero quickly so the eye sees one highlighted
+    // combatant at a time. If the asymmetry feels weird, fall back to
+    // symmetric ~0.06f on both.
+    private const float TargetTintAmount   = 0.4f;
+    private const float TargetTintFadeSec  = 0.08f;
+    private const float TargetTintClearSec = 0.04f;
+
     /// <summary>
     /// C8 sub-feature 3 — fades <c>active_amount</c> on <paramref name="target"/>'s
     /// CombatantOverlay shader up to <see cref="ActiveTintAmount"/> over
@@ -2982,6 +3023,71 @@ public partial class BattleTest : Node2D
             (float)material.GetShaderParameter("active_amount"),
             0.0f,
             ActiveTintFadeSec);
+    }
+
+    /// <summary>
+    /// C11.1 — fades <c>target_amount</c> on <paramref name="target"/>'s
+    /// CombatantOverlay shader up to <see cref="TargetTintAmount"/> over
+    /// <see cref="TargetTintFadeSec"/>, marking the picker's currently-
+    /// selected combatant with a yellow highlight. Replaces the pointer as
+    /// the primary "selected" indicator (the pointer remains as a secondary
+    /// cue at fixed pixel margin above the sprite top).
+    /// <para>
+    /// Per-combatant tween (<see cref="Combatant.TargetTween"/>) so highlight
+    /// fades on different sprites don't stomp each other when cycling between
+    /// combatants. Kill+restart on each Apply ensures rapid cycling produces
+    /// clean transitions with no ghost trails (paired with the faster-than-
+    /// fade-in <see cref="ClearTargetHighlight"/>).
+    /// </para>
+    /// <para>
+    /// No-op on null or dead combatants. The picker's <c>GetTargetPool</c>
+    /// already filters dead combatants before they can be selected, so the
+    /// IsDead guard here is purely defensive — covers any future code path
+    /// that bypasses the pool filter.
+    /// </para>
+    /// </summary>
+    private void ApplyTargetHighlight(Combatant target)
+    {
+        if (target?.FlashMaterial == null || target.IsDead) return;
+        target.TargetTween?.Kill();
+        target.TargetTween = CreateTween();
+        var material = target.FlashMaterial;
+        target.TargetTween.TweenMethod(
+            Callable.From((float v) => material.SetShaderParameter("target_amount", v)),
+            (float)material.GetShaderParameter("target_amount"),
+            TargetTintAmount,
+            TargetTintFadeSec);
+    }
+
+    /// <summary>
+    /// C11.1 — fades <c>target_amount</c> back to 0 over the shorter
+    /// <see cref="TargetTintClearSec"/> window. Asymmetric with
+    /// <see cref="ApplyTargetHighlight"/>'s slower fade-in so rapid picker
+    /// cycling shows one highlighted combatant at a time — the previous
+    /// target's highlight snaps off quickly while the new target's fades
+    /// in smoothly.
+    /// <para>
+    /// Call sites: previous-target fade on each cycle (ui_left / ui_right),
+    /// confirm (action launches; visual feedback shifts to the action
+    /// animation), cancel (returns to menu).
+    /// </para>
+    /// <para>
+    /// Idempotent: a second Clear after the highlight is already at 0
+    /// produces a 0→0 fade (no visible effect). Safe to call on any
+    /// Combatant (including null — the early return covers it).
+    /// </para>
+    /// </summary>
+    private void ClearTargetHighlight(Combatant target)
+    {
+        if (target?.FlashMaterial == null) return;
+        target.TargetTween?.Kill();
+        target.TargetTween = CreateTween();
+        var material = target.FlashMaterial;
+        target.TargetTween.TweenMethod(
+            Callable.From((float v) => material.SetShaderParameter("target_amount", v)),
+            (float)material.GetShaderParameter("target_amount"),
+            0.0f,
+            TargetTintClearSec);
     }
 
     // C8 sub-feature 2 — active-player panel slide-up constants. 15% of panel

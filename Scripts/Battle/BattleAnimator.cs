@@ -749,6 +749,7 @@ public partial class BattleTest : Node2D
             enemyMaterial.SetShaderParameter("active_amount", 0.0f);
             enemyMaterial.SetShaderParameter("flash_amount",  0.0f);
             enemyMaterial.SetShaderParameter("tint_amount",   0.0f);
+            enemyMaterial.SetShaderParameter("target_amount", 0.0f);
         }
         _enemyParty[0].ActiveTween?.Kill();
         _enemyParty[0].ActiveTween = null;

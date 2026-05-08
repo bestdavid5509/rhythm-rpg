@@ -994,6 +994,29 @@ preserved per-enemy), `SelectEnemyTarget` (Contains, read-only),
 
 ### C11 — Positioning fixes (pointer / damage numbers / Cure circle)
 
+**Split into sub-chunks** (post-Phase-6-arc shippability decision):
+- **C11.1** — Target highlight + pointer gated off. Yellow per-sprite
+  highlight (`target_amount` on `CombatantOverlay.gdshader`) becomes
+  the sole "selected target" indicator. The pointer was originally
+  intended as a secondary cue but the frame-top-vs-visible-content-top
+  problem (transparent space above sprites means even a small margin
+  floats the tip well above the visible head) made precise placement
+  unreliable without per-sprite content-top authoring. Rather than
+  ship slightly-wrong placement, the pointer is gated off behind
+  `ShowTargetPointer = false` in `BattleTest.cs` — the lifecycle code
+  stays wired, re-enablement is a one-line flag flip. The
+  `TargetPointer.SnapTo` formula was retuned from frame-top (0.5) to
+  a 10%-of-rendered-height anchor above sprite center (0.1) — sprite
+  frames have transparent space above the character so frame-top
+  floats the tip above the visible head; the smaller multiplier pulls
+  the tip back toward the visible character body. Empirically tuned
+  against the current sprite roster. Each sub-chunk is its own commit.
+- **C11.2** — Magic / Cure circle center-anchor. Closing-circle
+  spawn position derives from the defender's sprite center rather
+  than `ComputeCameraMidpoint`'s geometric midpoint, fixing the
+  off-axis placement at multi-character density.
+- **C11.3** — Layout polish (vertical move, message box).
+
 - `TargetPointer.SnapTo`: replace `target.PositionRect.Size.Y` with the
   visible sprite bounds derived from
   `target.AnimSprite.Scale * frameHeight` (pass frame height in on the

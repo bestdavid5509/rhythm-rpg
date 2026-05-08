@@ -1,6 +1,6 @@
 shader_type canvas_item;
 
-// Three independent per-combatant effects composited into a single shader so
+// Four independent per-combatant effects composited into a single shader so
 // all can run concurrently without material-slot collision on the sprite.
 //
 // flash_amount  — "white flash" — used by FlashCombatantWhite to signal
@@ -13,10 +13,18 @@ shader_type canvas_item;
 //                 ApplyActiveSpriteTint / ClearActiveSpriteTint. Effective
 //                 visual weight is tuned via the ActiveTintAmount caller-side
 //                 constant (no in-shader softening multiplier).
+// target_amount — Phase 6 C11.1 "selected target highlight" — yellow tint
+//                 on the picker's currently-selected combatant. Driven by
+//                 EnterSelectingTarget / cycle handlers / Confirm / Cancel
+//                 via ApplyTargetHighlight / ClearTargetHighlight. Replaces
+//                 the pointer as the primary "selected" indicator;
+//                 amplitude tuned via the TargetTintAmount caller-side
+//                 constant.
 
 uniform float flash_amount  : hint_range(0.0, 1.0) = 0.0;
 uniform float tint_amount   : hint_range(0.0, 1.0) = 0.0;
 uniform float active_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float target_amount : hint_range(0.0, 1.0) = 0.0;
 uniform vec4  tint_color    : source_color         = vec4(1.0, 0.2, 0.2, 1.0);
 
 void fragment() {
@@ -41,6 +49,13 @@ void fragment() {
     // shows the stack reads as washout, gate this on (1.0 - tint_amount) — see
     // C8 plan-doc note.
     col.rgb = mix(col.rgb, vec3(1.0), active_amount * col.a);
+
+    // Selected-target highlight — partial mix toward yellow. Composed AFTER
+    // active so cure-on-self (active player highlighting themselves as target)
+    // shows yellow on top of the white-active wash and reads as "selected"
+    // rather than muddy. Composed BEFORE flash so a concurrent learnable-flash
+    // pulse still overrides — preserves "flash = highest priority" invariant.
+    col.rgb = mix(col.rgb, vec3(1.0, 1.0, 0.0), target_amount * col.a);
 
     // White flash — applied last so a concurrent flash overrides everything
     // else (white = learnable signal, highest priority).

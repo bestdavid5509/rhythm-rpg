@@ -104,6 +104,15 @@ public class Combatant
     // enemy using a learnable move: active wash sustains while flash pulses).
     public Tween ActiveTween;
 
+    // Phase 6 C11.1 — independent handle for the yellow target-highlight fade.
+    // Drives target_amount on FlashMaterial via ApplyTargetHighlight /
+    // ClearTargetHighlight. Independent from FlashTween / ThreatTween /
+    // ActiveTween so the picker's selected-target highlight, learnable flash,
+    // threat reveal, and active-turn wash can fade in/out without stomping
+    // each other when they overlap on the same sprite (cure-on-self stacks
+    // active + target on the same Combatant).
+    public Tween TargetTween;
+
     // ---- Damage / heal application --------------------------------------------
     //
     // Friendly-fire-readiness note: TakeDamage and Heal are attacker-agnostic —
