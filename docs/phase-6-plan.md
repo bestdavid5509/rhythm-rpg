@@ -1032,7 +1032,96 @@ preserved per-enemy), `SelectEnemyTarget` (Contains, read-only),
   sprite; the input-vs-feedback split is the cost of consistency.
   Damage-number positioning is NOT bundled (deferred to C11.3 or
   its own commit).
-- **C11.3** — Layout polish (vertical move, message box).
+- **C11.3** — Layout polish. Four bundled changes:
+  - **Formation Y lift** (−50px): `FloorY` 750 → 700, with lockstep
+    Y updates on `PlayerFrontAnchor` (630 → 580), `PlayerBackAnchor`
+    (720 → 670), `PlayerFrontAnchorRect` (590 → 540), and
+    `PlayerBackAnchorRect` (680 → 630). Enemy positions auto-shift
+    via the FloorY-derived runtime formula. Pulls the formation
+    toward vertical center; tightens the previously-empty top gap
+    above the formation while giving more breathing room above the
+    player panel strip.
+  - **Magic-circle X hardcode** to viewport center
+    (`MagicCircleX = 960f`). Locks the timing-input position to
+    the most predictable horizontal anchor regardless of formation
+    X variance. Y stays formation-derived so the relative-above-
+    formation property auto-preserves under formation lifts. Pre-
+    survey audit confirmed formation centroids are already
+    symmetric within 2.5px of viewport center (player 335 + enemy
+    1580 / 2 = 957.5 vs viewport 960), so the hardcode coincides
+    with the natural center.
+  - **Damage number sprite-derived formula**: `ComputeDamageOrigin`
+    switches from ColorRect-derived (with fixed `-20f` Y) to
+    `AnimSpriteOrigin + (0, -renderedHeight * 0.5 -
+    DamageNumberMarginPixels)`. Mirrors C9's TargetPointer Y-offset
+    fix. Single helper rewrite; five callsites unchanged
+    (basic offensive, magic per-circle, combo per-pass,
+    enemy-on-player, parry counter). `DamageNumberMarginPixels`
+    starts at `25f`, tunable. Uses `AnimSpriteOrigin` (rest
+    position) not `GlobalPosition` (live tween position) per the
+    pre-existing rest-position invariant.
+  - **Battle message overlay clearance**: `OverlayBottomInset`
+    144 → 160. 16px additional clearance above the C8 active-
+    player panel slide-up (~15.6px lift). Shared by `BattleMessage`
+    and `BattleDialogue` — both lift together.
+  - **`SpawnEffectSprite` and `ComputeCameraMidpoint` migrated
+    off ColorRect-derived geometry.** Pre-existing ~40-50px
+    ColorRect-vs-sprite Y mismatch (the long-standing "Cure
+    target-circle positioning quirk" / damage-number quirk from
+    Phase 3.3) was widened to ~90-100px by the formation lift
+    above; effects would have spawned at sprite knee/foot height
+    without this migration. `SpawnEffectSprite.targetCenter`
+    switches from `target.Origin + target.PositionRect.Size / 2f`
+    to `target.AnimSpriteOrigin`. `ComputeCameraMidpoint` Y
+    derives from `ComputeAnimSpriteCloseY` (attacker close-stance,
+    same helper `PlayHopIn`'s AnimSprite tween uses) and
+    `defender.AnimSpriteOrigin.Y`; X stays ColorRect-derived
+    (the X dimension of the gap was negligible — bug was
+    purely Y). Mirrors C11.1 pointer fix shape. Completes the
+    ColorRect → sprite-positioning migration started by C11.1
+    (pointer) and the damage-number bullet above. After
+    this, only HP bar / PartyPanel binding and the X dimension
+    of close-stance / midpoint computations use ColorRect-
+    derived geometry; positioning math is sprite-derived
+    everywhere.
+  - **Calibration restore via `SpriteContentYOffset = 52f`.**
+    The migration above eliminated the ColorRect-vs-sprite
+    structural gap correctly but ALSO removed the implicit
+    ~40-45px offset that `.tres`-authored `activeOffset` values,
+    `ComputeCameraMidpoint`'s Y expectation, and the original
+    damage-number formula were all calibrated against (the
+    pre-C11.3 ColorRect-center sat 40px below sprite frame
+    center on the player side, 44px on the enemy side —
+    convergent below noise floor). Without the calibration
+    restore, post-migration consumers read ~30-50px "too high"
+    relative to the visible body. New `internal const float
+    SpriteContentYOffset = 52f` captures the offset (tuned
+    slightly below the pre-C11.3 empirical 40-44 to pull
+    consumers down ~12px from the bare calibration baseline
+    into upper-body center); applied at `SpawnEffectSprite`
+    (`targetCenter += SpriteContentYOffset`) and
+    `ComputeCameraMidpoint` (both Y values
+    `+= SpriteContentYOffset`). `ComputeDamageOrigin` rewritten
+    to use the same constant as a transparent-space allowance,
+    with an interactively-tuned multiplier change from `0.5f`
+    (frame top) to `0.25f` (upper-body anchor) — the 0.5
+    multiplier put taller sprites' damage numbers well above
+    visible content (warrior 390 / boss 480 have proportionally
+    smaller above-head transparent space than Knight 240). 0.25
+    pulls warrior / boss numbers down ~80-100px into the
+    upper-body / sword-art region (slight overlap with sword
+    art accepted per design call); Knight numbers land in
+    shoulder/upper-chest area. Final formula:
+    `AnimSpriteOrigin.Y - renderedHeight * 0.25
+    + SpriteContentYOffset - DamageNumberMargin`. Counter-
+    attack damage stays on its own hand-tuned in-body formula
+    (BattleAnimator.cs PlayParryCounter, ~`0.3 × renderedHeight
+    + 50f`) — intentional divergence for "big impact" feel.
+
+  Formation X audit confirmed no X edits needed: formations
+  symmetric within 2.5px of viewport center. Future refactor
+  opportunity: derive all four player anchors from `FloorY` at
+  scene init so the lockstep self-maintains.
 
 - `TargetPointer.SnapTo`: replace `target.PositionRect.Size.Y` with the
   visible sprite bounds derived from

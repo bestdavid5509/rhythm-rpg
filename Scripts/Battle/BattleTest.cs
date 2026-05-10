@@ -123,16 +123,78 @@ public partial class BattleTest : Node2D
     private static readonly Color DmgColorMiss    = new Color(0.60f, 0.60f, 0.60f, 1.00f);  // grey (weak hit)
     private static readonly Color DmgColorPlayer  = new Color(1.00f, 0.25f, 0.25f, 1.00f);  // red
 
+    // Phase 6 C11.3 — empirical offset from sprite frame center down to the
+    // effective sprite-positioning baseline (~visible body center). The
+    // pre-C11.3 ColorRect-center sat ~40px below the sprite frame center on
+    // the player side, ~44px on the enemy side; .tres-authored activeOffset
+    // values for SpawnEffectSprite and the ComputeCameraMidpoint Y formula
+    // were calibrated against that ColorRect-center baseline. The C11.3
+    // ColorRect→sprite migration switched to AnimSpriteOrigin (frame center)
+    // which removed this implicit offset; this constant restores it without
+    // re-introducing the ColorRect dependency. Interactively tuned to 52
+    // (slightly below the pre-C11.3 empirical 40-44 — the additional ~10px
+    // pulls hop-in circles and effect spawns down by 12px from the bare
+    // calibration baseline, landing closer to upper-body center). Tunable —
+    // adjust if effects / hop-in circles read consistently off-position.
+    // Internal so BattleSystem.cs (SpawnEffectSprite) can reference it
+    // across the partial-class boundary (mirrors the OverlayBottomInset
+    // pattern).
+    //
+    // Single-constant decision: damage-number formula uses this same
+    // constant as a "frame-top → visible-content-top" allowance for
+    // transparent space above the visible head. If verification surfaces
+    // meaningful asymmetry between the effect-spawn / midpoint use case
+    // (frame-center → body-center) and the damage-number use case
+    // (frame-top → content-top), split into two constants in a follow-up.
+    internal const float SpriteContentYOffset = 52f;
+
+    // Phase 6 C11.3 — fixed pixel margin above the visible content top
+    // (sprite frame top + SpriteContentYOffset) for damage number
+    // placement. Damage numbers float above the visible head with
+    // consistent margin across sprite sizes. Counter-attack damage uses
+    // a separate hand-tuned in-body formula
+    // ([BattleAnimator.cs](Scripts/Battle/BattleAnimator.cs) PlayParryCounter,
+    // ~0.3 × renderedHeight + 50f) — intentional divergence by design.
+    private const float DamageNumberMargin = 25f;
+
     /// <summary>
-    /// Returns the world-space spawn position for a damage number floating above the
-    /// given combatant's sprite — top-center of the unit's ColorRect minus a 20px upward
-    /// offset. Reads per-combatant <see cref="Combatant.Origin"/>, so multi-unit combat
-    /// correctly anchors damage numbers to each combatant's home location. Uses rest
-    /// position (not live <c>sprite.GlobalPosition</c>) so the number stays anchored
-    /// even during slam / hop-in tweens.
+    /// Returns the world-space spawn position for a damage number floating
+    /// above the given combatant's sprite. Anchors to a fraction of the
+    /// rendered sprite height above sprite center (via the height multiplier),
+    /// stepped down by <see cref="SpriteContentYOffset"/> for transparent-
+    /// space allowance, then stepped up by the margin. Sprite-derived;
+    /// doesn't depend on ColorRect geometry. Uses
+    /// <see cref="Combatant.AnimSpriteOrigin"/> (rest position) not live
+    /// <c>AnimSprite.GlobalPosition</c> so the number stays anchored at
+    /// the combatant's resting position even during slam / hop-in tweens —
+    /// preserves the rest-position invariant.
+    /// <para>
+    /// Multiplier interactively tuned to 0.25 (less aggressive than the
+    /// frame-top anchor at 0.5). The 0.5 multiplier put damage numbers
+    /// well above visible content for sprites where transparent-space
+    /// above the head is smaller than the sprite-height proportion (warrior
+    /// frame is 130px tall with ~30px transparent above; 8 Sword Warrior
+    /// 160px with similar). 0.25 pulls warrior / 8 Sword Warrior numbers
+    /// down ~80-100px into the upper-body / sword-art region — slight
+    /// overlap with sword art accepted per design call. Knight numbers
+    /// land in shoulder/upper-chest area.
+    /// </para>
+    /// <para>
+    /// Counter-attack damage uses a separate hand-tuned in-body formula
+    /// (BattleAnimator.cs PlayParryCounter, ~0.3 × renderedHeight + 50f)
+    /// — intentional divergence for the counter's "big impact" feel.
+    /// </para>
     /// </summary>
-    private static Vector2 ComputeDamageOrigin(Combatant unit) =>
-        unit.Origin + new Vector2(unit.PositionRect.Size.X / 2f, -20f);
+    private static Vector2 ComputeDamageOrigin(Combatant unit)
+    {
+        float renderedHeight = unit.FrameHeight * unit.AnimSpriteScale.Y;
+        return new Vector2(
+            unit.AnimSpriteOrigin.X,
+            unit.AnimSpriteOrigin.Y
+            - renderedHeight * 0.25f         // step up to upper-body anchor (less aggressive than frame top)
+            + SpriteContentYOffset           // step down to visible content top
+            - DamageNumberMargin);           // step up by margin above content top
+    }
 
     // =========================================================================
     // Prompt management
@@ -176,7 +238,7 @@ public partial class BattleTest : Node2D
     /// flags: TestVictoryScreen, TestGameOverScreen, TestPhaseTransition
     /// all override TestFullParty.
     /// </summary>
-    [Export] public bool TestFullParty = true;
+    [Export] public bool TestFullParty = false;
 
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
@@ -493,7 +555,7 @@ public partial class BattleTest : Node2D
     private const float SlamOutDuration  = 0.12f;  // pull back to close stance
 
     // Spacing constants (pixels).
-    private const float FloorY      = 750f;  // world-space Y of the ground line; characters anchor their feet here
+    private const float FloorY      = 700f;  // world-space Y of the ground line; characters anchor their feet here. C11.3 lift: was 750. Lockstep: PlayerFrontAnchor.Y / PlayerBackAnchor.Y / PlayerFrontAnchorRect.Y / PlayerBackAnchorRect.Y must shift by the same magnitude when this value changes (the sprite/ColorRect anchors are hand-tuned to track FloorY-derived positions).
     private const float AttackGap   = 200f;  // gap between attacker and defender in close stance
     private const float SlamOverlap = 20f;   // how far attacker overlaps defender on a slam
 
@@ -3341,11 +3403,14 @@ public partial class BattleTest : Node2D
 
     // Minimum bottom-inset for any UI overlay (BattleMessage / BattleDialogue / future
     // narrative bubbles) that needs to clear the player panel strip at the bottom.
-    // = UiEdgeMargin (20) + PlayerPanelHeight (104) + UiPanelSpacing (8) + breathing
-    // room (12) = 144. The +12 leaves visible whitespace between the strip's top edge
-    // and the overlay bottom rather than touching at the seam. Shared across
-    // BattleMessage and BattleDialogue so a single change flows to all overlay sites.
-    internal const float OverlayBottomInset = 144f;
+    // Base composition: UiEdgeMargin (20) + PlayerPanelHeight (104) + UiPanelSpacing
+    // (8) = 132. C11.3 sets the value to 160 (= 132 + 28 breathing room) to clear
+    // the C8 active-player panel slide-up (~15.6px lift during turns) plus a
+    // comfortable visible gap between the slid-up strip's top edge and the overlay
+    // bottom. Pre-C11.3 the value was 144 (12px breathing); the 4px residual gap
+    // at slid-up state read as a collision. Shared across BattleMessage and
+    // BattleDialogue so a single change flows to all overlay sites.
+    internal const float OverlayBottomInset = 160f;
 
     // Panel texture picks — const strings so a single swap retunes the whole UI.
     internal const string UiPanelFillPath    = "res://Assets/UI/kenney_fantasy-ui-borders/PNG/Default/Transparent center/panel-transparent-center-000.png";
@@ -3628,10 +3693,18 @@ public partial class BattleTest : Node2D
     //
     // The enemy side does NOT use Front/Back/BackColumnOffset anchors — see the
     // staggered two-row diagonal grid block below.
-    private static readonly Vector2 PlayerFrontAnchor     = new Vector2( 440f, 630f);  // AnimSprite slot 0 (legacy)
-    private static readonly Vector2 PlayerBackAnchor      = new Vector2( 230f, 720f);  // AnimSprite slot N-1
-    private static readonly Vector2 PlayerFrontAnchorRect = new Vector2( 390f, 590f);  // ColorRect slot 0 (legacy)
-    private static readonly Vector2 PlayerBackAnchorRect  = new Vector2( 180f, 680f);  // ColorRect slot N-1
+    //
+    // C11.3 LOCKSTEP: All four Y values below are hand-tuned to track FloorY-derived
+    // positions at scene init. When FloorY shifts (C11.3 lifted by -50: 750 → 700),
+    // these four Ys must shift by the same magnitude. Front/Back AnimSprite anchors
+    // align with the slot-0 floor formula (FloorY - playerFrameH * 3 * 0.5); Rect
+    // anchors retain the legacy -40 Y delta from their AnimSprite counterparts.
+    // Future refactor: derive all four from FloorY at scene init so the constants
+    // self-update — flagged but out of scope.
+    private static readonly Vector2 PlayerFrontAnchor     = new Vector2( 440f, 580f);  // AnimSprite slot 0 (C11.3 lift: was 630)
+    private static readonly Vector2 PlayerBackAnchor      = new Vector2( 230f, 670f);  // AnimSprite slot N-1 (C11.3 lift: was 720)
+    private static readonly Vector2 PlayerFrontAnchorRect = new Vector2( 390f, 540f);  // ColorRect slot 0 (C11.3 lift: was 590)
+    private static readonly Vector2 PlayerBackAnchorRect  = new Vector2( 180f, 630f);  // ColorRect slot N-1 (C11.3 lift: was 680)
 
     // Staggered two-row diagonal grid for enemy formation (post-C7-extra follow-up —
     // replaces the linear-Lerp + back-column model). Both rows are parallel diagonals
@@ -3659,19 +3732,25 @@ public partial class BattleTest : Node2D
     private const float EnemyBackRowYOffset =  96f;  // back row Y relative to front row same-column (BELOW)
 
     // Phase 6 C11.2 — magic-circle Y offset above the formation-centers
-    // midpoint. The midpoint itself lands at roughly Y=664 (between player
-    // formation Y=675 and enemy formation Y=654 for the Phase 1 Warrior);
-    // -50 lifts the circle to ~Y=614, which sits in the upper portion of
-    // the formation Y range — circle reads as "amidst the action" rather
-    // than floating above it. Front-row sprite tops (Warrior at Y=411,
-    // Knight slot 0 at Y=510) are above the circle, so the circle does
-    // overlap visible character bodies for taller sprites; the consistency
-    // of "magic input always lands here" is the win, with the slight
-    // visual occlusion accepted as the cost. Tunable — larger magnitudes
+    // midpoint. Lifts the circle into the upper portion of the formation
+    // Y range so it reads as "amidst the action" rather than floating
+    // above. Tuned interactively at -50 for the C11.2 sprite roster;
+    // open to revisiting during broader playtesting. Larger magnitudes
     // (e.g. -200) lift the circle clearly above the formation but pull
-    // the player's eye further from the action; verified at -50 for
-    // current sprite roster, open to revisiting during broader playtesting.
+    // the player's eye further from the action. Note: the relative-
+    // above-formation property auto-preserves under formation lifts
+    // (e.g. C11.3's -50 lift to FloorY) because the anchor formula
+    // reads PlayerFrontAnchor / PlayerBackAnchor / _enemyParty[0]
+    // .AnimSpriteOrigin, all of which shift together.
     private const float MagicCircleYOffset = -50f;
+
+    // Phase 6 C11.3 — magic-circle X hardcoded to viewport center.
+    // Locks the player's input position to the most predictable
+    // horizontal anchor regardless of formation X variance (formations
+    // are already symmetric within 2.5px of viewport center per C11.3
+    // pre-survey audit, so the hardcode coincides with the natural
+    // center anyway). Y stays formation-derived in the anchor formula.
+    private const float MagicCircleX = 960f;
 
     // Slot-to-grid mapping. Pattern: alternate front/back, fill outer columns
     // (col 0, col 2) before inner column (col 1) before far-outer column (col 3).
@@ -3854,21 +3933,26 @@ public partial class BattleTest : Node2D
         }
 
         // Phase 6 C11.2 — pre-compute the static magic-circle anchor.
-        // Player formation center is the midpoint between the front
-        // (PlayerFrontAnchor) and back (PlayerBackAnchor) anchor constants.
-        // Enemy formation center anchors at slot 0's runtime AnimSpriteOrigin
-        // (which is per-EnemyData) plus half the back-row Y offset (the
-        // per-row Y midpoint). Lifted by MagicCircleYOffset to clear the
-        // formation sprite tops. Computed once here and cached on
+        // X hardcoded to viewport center (MagicCircleX = 960) per C11.3
+        // for predictable input position; Y derived from the midpoint of
+        // player formation center Y (midpoint of PlayerFrontAnchor.Y and
+        // PlayerBackAnchor.Y) and enemy formation center Y (slot 0's
+        // runtime AnimSpriteOrigin.Y plus half the back-row Y offset).
+        // Lifted by MagicCircleYOffset to bring the circle into the
+        // upper formation Y range. Computed once here and cached on
         // _magicCircleAnchor; stable for the entire battle. The Phase 1 →
-        // Phase 2 transition shifts slot-0 AnimSpriteOrigin by ~14px
-        // (Y=606 → Y=592) but the anchor doesn't recompute — the shift is
-        // below the noise floor for circle position.
-        Vector2 playerFormationCenter = (PlayerFrontAnchor + PlayerBackAnchor) / 2f;
-        Vector2 enemyFormationCenter  = _enemyParty[0].AnimSpriteOrigin
-                                      + new Vector2(0f, EnemyBackRowYOffset / 2f);
-        _magicCircleAnchor = (playerFormationCenter + enemyFormationCenter) / 2f
-                           + new Vector2(0f, MagicCircleYOffset);
+        // Phase 2 transition shifts slot-0 AnimSpriteOrigin Y by ~14px
+        // (Warrior 606 → 8 Sword Warrior 592) but the anchor doesn't
+        // recompute — the shift is below the noise floor for circle
+        // position. The Y derivation auto-preserves the relative-above-
+        // formation property under formation lifts (e.g. C11.3's -50 lift
+        // shifted everything down, formation included; the formula tracks).
+        float playerFormationCenterY = (PlayerFrontAnchor.Y + PlayerBackAnchor.Y) / 2f;
+        float enemyFormationCenterY  = _enemyParty[0].AnimSpriteOrigin.Y
+                                     + EnemyBackRowYOffset / 2f;
+        float anchorY = (playerFormationCenterY + enemyFormationCenterY) / 2f
+                      + MagicCircleYOffset;
+        _magicCircleAnchor = new Vector2(MagicCircleX, anchorY);
 
         GD.Print($"[BattleTest] Parties built — " +
                  $"player: {_playerParty.Count} combatant(s) (slot 0 HP={_playerParty[0].CurrentHp}/{_playerParty[0].MaxHp}, " +
@@ -5080,13 +5164,33 @@ public partial class BattleTest : Node2D
     /// Returns the world-space midpoint between the attacker's close stance center
     /// and the defender's center — the point the camera zooms in on.
     /// Reads <see cref="_sequenceAttackerClosePos"/> for the attacker's current
-    /// close-stance position (which differs from its rest origin when the attacker
-    /// has hopped in).
+    /// close-stance X (which differs from its rest origin when the attacker has
+    /// hopped in); attacker Y derives from <see cref="ComputeAnimSpriteCloseY"/>
+    /// — the same sprite-derived helper PlayHopIn uses for the AnimSprite tween.
+    /// Defender Y is sprite rest position (<see cref="Combatant.AnimSpriteOrigin"/>).
+    /// Both Y values lifted by <see cref="SpriteContentYOffset"/> to match the
+    /// pre-C11.3 calibration baseline (frame-center → visible-body-center).
+    /// <para>
+    /// C11.3 — Y migrated from ColorRect-derived to sprite-derived to eliminate
+    /// the ~40-50px ColorRect-vs-sprite gap (which the C11.3 formation lift
+    /// would have widened to ~90-100px without this migration). X stays
+    /// ColorRect-derived because the X dimension of the gap was negligible —
+    /// the bug was purely Y. SpriteContentYOffset restores the calibration
+    /// baseline so hop-in circles land at visible body height (without it,
+    /// circles read ~40px too high relative to the visible body). Mirrors
+    /// C11.1 pointer fix and C11.3 damage-number fix: ColorRect-derived
+    /// geometry is reserved for HP bar / PartyPanel binding; positioning
+    /// math is sprite-derived.
+    /// </para>
     /// </summary>
     private Vector2 ComputeCameraMidpoint(Combatant attacker, Combatant defender)
     {
-        Vector2 attackerCenter = _sequenceAttackerClosePos + attacker.PositionRect.Size / 2f;
-        Vector2 defenderCenter = defender.Origin           + defender.PositionRect.Size / 2f;
-        return (attackerCenter + defenderCenter) / 2f;
+        float attackerCenterX = _sequenceAttackerClosePos.X + attacker.PositionRect.Size.X / 2f;
+        float defenderCenterX = defender.Origin.X           + defender.PositionRect.Size.X / 2f;
+        float attackerCenterY = ComputeAnimSpriteCloseY(attacker, defender) + SpriteContentYOffset;
+        float defenderCenterY = defender.AnimSpriteOrigin.Y                 + SpriteContentYOffset;
+        return new Vector2(
+            (attackerCenterX + defenderCenterX) / 2f,
+            (attackerCenterY + defenderCenterY) / 2f);
     }
 }

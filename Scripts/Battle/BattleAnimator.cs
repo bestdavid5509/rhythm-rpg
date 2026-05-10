@@ -1112,9 +1112,16 @@ public partial class BattleTest : Node2D
                     // Spawn damage number at the target's current world position, offset
                     // upward above the head. Parented to BattleTest root (not the sprite)
                     // so scale inheritance doesn't affect label size or float speed.
-                    // Sprite reads migrated to Combatant.AnimSprite (B-category); counter
-                    // has its own formula (different offset from standard damage numbers)
-                    // because the counter is visually dramatic.
+                    // Sprite reads migrated to Combatant.AnimSprite (B-category).
+                    //
+                    // Counter has its own formula (-fh*sy*0.3 + 50) — intentional
+                    // divergence from ComputeDamageOrigin's above-head anchor. The
+                    // 0.3 multiplier + 50 offset combine to land the damage number
+                    // at upper-body / head level (in-body), giving the counter a
+                    // "big impact" feel that contrasts with the floating-above-head
+                    // numbers from regular attacks. Don't unify with
+                    // ComputeDamageOrigin — the divergence is a design choice, not
+                    // an oversight.
                     var targetSprite = counterTarget.AnimSprite;
                     float fh = counterTarget.Data?.FrameHeight ?? 160;
                     float sy = targetSprite.Scale.Y;

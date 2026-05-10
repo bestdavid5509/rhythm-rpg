@@ -518,18 +518,31 @@ public partial class BattleSystem : Node
         // their bodies. Switching the baseline to <c>targetCenter</c> makes the offset
         // target-relative so each slot's effects align with its own body regardless of
         // slot position.
+        //
+        // C11.3: targetCenter migrated from ColorRect-derived
+        // (target.Origin + target.PositionRect.Size / 2f) to sprite-derived
+        // (target.AnimSpriteOrigin + SpriteContentYOffset). The pre-C11.3
+        // ColorRect-derived expression had a ~40-50px Y offset from the
+        // sprite center (documented as the "Cure target-circle positioning
+        // quirk" / damage-number quirk from Phase 3.3 testing); the C11.3
+        // formation lift would have widened it to ~90-100px without this
+        // migration. Sprite-derived eliminates the structural gap.
+        // SpriteContentYOffset (~+40px) restores the pre-C11.3 calibration
+        // baseline that .tres-authored activeOffset values were authored
+        // against — without it, all effects spawned ~40px too high
+        // relative to the visible body. Mirrors C11.1 pointer fix and
+        // C11.3 damage-number fix — ColorRect-derived geometry is reserved
+        // for HP bar / PartyPanel binding; positioning math is sprite-
+        // derived.
         var     attacker         = _sequenceContext.Attacker;
         var     target           = _sequenceContext.Target;
-        Vector2 targetCenter     = target.Origin + target.PositionRect.Size / 2f;
+        Vector2 targetCenter     = target.AnimSpriteOrigin
+                                 + new Vector2(0f, BattleTest.SpriteContentYOffset);
         // Self-targeting (e.g., Cure heal) has attacker == target with identical Origin.X.
         // The strict > returns false in that case, routing self-target to the left-side
         // branch (PlayerOffset + !step.FlipH). That matches pre-refactor behaviour where
         // _isPlayerAttack=true (player casting heal on self) took the effectively-equivalent
-        // branch. Note: there is a pre-existing Cure target-circle positioning quirk —
-        // the circle appears slightly right of the knight because target.Origin +
-        // PositionRect.Size/2f centers on the 80-wide ColorRect rather than the
-        // character's body (same root cause as the damage-number quirk flagged in
-        // Phase 3.3 testing). Preserved as-is; proper fix is deferred to B5 / scaffolding work.
+        // branch.
         bool    attackerOnRight  = attacker.Origin.X > target.Origin.X;
         Vector2 activeOffset     = attackerOnRight ? step.Offset : step.PlayerOffset;
 
