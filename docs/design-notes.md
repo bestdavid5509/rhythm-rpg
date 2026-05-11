@@ -58,7 +58,7 @@ animation rather than routing through the existing hop-in system.
   valid target pool to include allies (and possibly self) during target selection.
 - **Game-over check:** ally-damage that could reduce an ally's HP to zero needs
   standard game-over handling. The current "skip game-over on same-side" branch
-  in `OnPlayerMagicSequenceCompleted` (line ~1707) is correct for heal but would
+  in `OnPlayerMagicSequenceCompleted` is correct for heal but would
   need to narrow to "skip game-over on heal specifically" when ally-damage
   becomes real. Attack-identity check would replace the side-equality predicate
   at that one site.
@@ -79,8 +79,9 @@ further refactoring when the gameplay need arises.
 
 ## Beckon — dual-purpose absorption setup
 
-**Status:** force-learnable half implemented; target-redirect half deferred to
-multi-character density (Phase 6).
+**Status:** shipped in Phase 6 (force-learnable via C1; target-redirect
+mechanical wiring via C9; Absorber-only learnable signal gate +
+multi-Beckon HashSet refinement via C10).
 
 ### Design principle
 
@@ -121,66 +122,69 @@ absorption opportunities are gated on the enemy's natural targeting
 coincidentally aligning with a learnable selection — too rare to build a
 progression system around.
 
-### Current implementation status
+### Shipped implementation
 
-The force-learnable half is live today. `Combatant.IsBeckoning` (bool, player-
-only) is set by the Beckon menu option; `SelectEnemyAttack` reads the flag
-and returns `EnemyData.LearnableAttack` when true, consuming the flag after.
+Both halves are live. `Combatant.BeckoningTargets: HashSet<Combatant>`
+(player-only) is populated by the Beckon menu option after the picker
+resolves an enemy target. On each enemy turn, `SelectEnemyAttack`
+scans `_playerParty` for any beckoner whose set contains the active
+enemy and returns `EnemyData.LearnableAttack`, consuming that entry
+from the set; `SelectEnemyTarget` does the same scan read-only to
+resolve the enemy's defender to the beckoner. The HashSet form
+supports stacking concurrent Beckons across different enemies — each
+beckoned enemy's force-learnable fires when its turn arrives. The
+picker excludes enemies already in the active player's set so the
+same enemy cannot be beckoned twice. `KillCombatant` removes a dying
+enemy from every player's set so a stale entry cannot fire a redirect.
 
-The target-redirect half is **not yet implemented**. In the current 1v1
-prototype, the enemy always targets the single player, so there's no
-observable difference between "redirect to Beckoner" and "target the usual
-player." Implementation lands with Phase 6 (multi-character scaffolding) when
-there's more than one valid target for the enemy to pick from.
+### Shipped model — Option A (refined)
 
-### Likely implementation shape
+C1 introduced `BeckoningTarget: Combatant?` (single nullable ref) on
+the Beckoner side, retiring the pre-existing boolean placeholder.
+C10's multi-Beckon stacking enhancement then refactored this to
+`BeckoningTargets: HashSet<Combatant>` so successive Beckons on
+different enemies accumulate rather than overwriting. The Beckoning
+character is the one carrying the state; enemy-side target selection
+scans the party at decision time (`SelectEnemyAttack` /
+`SelectEnemyTarget`).
 
-Target-redirect implementation is a model change rather than a flag add.
-Either:
+Option B (`BeckonedBy: Combatant?` on the enemy side) was considered
+but not selected — its concern was that caching the decision on the
+enemy at Beckon time couples Beckoner and target state. The
+Beckoner-side scan that Option A required at enemy-target-selection
+time shipped without friction.
 
-- **Option A — redirect field on Combatant:** `Combatant.BeckoningTarget:
-  Combatant?` (nullable — null means no Beckon active). Replaces
-  `IsBeckoning: bool`. Enemy target selection reads
-  `player.BeckoningTarget != null` (or iterates party members for any
-  Beckoner) to decide whether to override natural target selection.
-
-- **Option B — state on the enemy:** keep `IsBeckoning: bool` on the
-  Beckoner, add `Combatant.BeckonedBy: Combatant?` (or equivalent) on the
-  enemy side when Beckon fires. Enemy target selection checks `BeckonedBy`
-  before running natural logic.
-
-Option A reads more naturally (the Beckoning character is the one with the
-flag) but requires enemy-side target selection to scan the party. Option B
-caches the decision on the enemy at Beckon time but couples Beckoner and
-target state. Choose at implementation time based on how enemy target
-selection is structured post-Phase-6.
-
-Both options preserve the single-action dual-effect contract: one Beckon
-menu selection sets both the force-learnable state and the target-redirect
-state in one step. The player doesn't pick which half to activate.
+The single-action dual-effect contract held: one Beckon menu
+selection populates the HashSet entry that drives both the
+force-learnable selection and the target-redirect in the same enemy
+turn. The player doesn't pick which half to activate.
 
 ### Interaction with threat-reveal (Phase 5)
 
-The threat-reveal flash introduced in Phase 5 reads from wherever the enemy's
-target decision lives and fires on the resolved target. Today that's always
-the player; post-Phase-6 it's the output of natural target selection after
-Beckon-redirect is applied. No Phase-5-specific Beckon handling is required —
-the flash machinery iterates `_threatenedCombatants` (populated from the
-enemy's current-turn target(s)) regardless of how that list was decided.
+The threat-reveal flash introduced in Phase 5 reads from wherever the
+enemy's target decision lives and fires on the resolved target — the
+output of natural target selection after Beckon-redirect is applied.
+No Phase-5-specific Beckon handling is needed; the flash machinery
+iterates `_threatenedCombatants` (populated from the enemy's
+current-turn target) regardless of how that list was decided.
 
-When Beckon target-redirect lands, the Beckon turn's sequence becomes:
+The Beckon turn sequence is:
 
-- Player picks Beckon → `IsBeckoning` (or equivalent) set → menu dispatches
-  to enemy turn.
-- Enemy turn begins → target selection sees Beckon-redirect is active → target
-  resolves to the Beckoner → `_threatenedCombatants` populated with the
-  Beckoner → threat-reveal fires on the Beckoner (matching the player's
+- Player picks Beckon → target picker resolves an enemy →
+  `BeckoningTargets.Add(enemy)` on the active player → MP deducted →
+  queue advances.
+- Beckoned enemy's turn begins → `SelectEnemyTarget` scans for a
+  beckoner whose set contains this enemy → target resolves to the
+  Beckoner → `_threatenedCombatants` populated with the Beckoner →
+  threat-reveal fires on the Beckoner (matching the player's
   expectation: "I called it; now it comes for me").
-- Enemy's `SelectEnemyAttack` returns the learnable attack → enemy white-flash
-  fires (learnable signal) → attack proceeds.
-- Both visual signals ( enemy white flash + Beckoner red tint ) run
-  concurrently on their respective sprites, consistent with the Phase 5
-  composite-shader design.
+- `SelectEnemyAttack` performs the same scan, consumes the set entry,
+  and returns the learnable attack → enemy white-flash fires
+  (learnable signal, gated on `target.IsAbsorber` for the
+  introspective "If I watch carefully…" text) → attack proceeds.
+- Both visual signals (enemy white flash + Beckoner red tint) run
+  concurrently on their respective sprites, consistent with the
+  Phase 5 composite-shader design.
 
 ### Why this matters for gameplay
 
