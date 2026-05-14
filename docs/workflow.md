@@ -133,6 +133,9 @@ parentheses when relevant, e.g.
 `feat(battle): add SelectingTarget state and player pointer (Phase 4)`.
 Keep the subject line under ~72 characters when practical.
 
+- Commits do NOT include a `Co-Authored-By` trailer or any AI-attribution
+  trailer. Commit authorship is the committer, full stop.
+
 Commit body is used only when the scope needs explanation beyond the
 subject. Most commits don't need one — the pre-commit diff review already
 captured the rationale for the reviewer.

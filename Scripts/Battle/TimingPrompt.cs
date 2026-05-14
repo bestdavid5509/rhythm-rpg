@@ -862,6 +862,7 @@ public partial class TimingPrompt : Node2D
         label.HorizontalAlignment = HorizontalAlignment.Center;
         label.CustomMinimumSize   = new Vector2(120f, 0f);
         label.AddThemeFontSizeOverride("font_size", 28);
+        label.ZIndex              = 52;  // prompt tier — above closing rings (50)
 
         Vector2 startPos = GlobalPosition - new Vector2(60f, 0f);
         Vector2 endPos   = startPos - new Vector2(0f, 60f);

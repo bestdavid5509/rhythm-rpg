@@ -47,7 +47,10 @@ public partial class BattleDialogue : Node
     [Export] public float PostDialogueBufferSec = 0.15f; // pause after fade-out before DialogueCompleted; prevents input bleed
 
     private const float PanelHeight       = 120f;
-    private const float PanelBottomInset  = 96f;
+    // Bottom inset clears the player panel strip at the bottom-center (Phase 6 C6
+    // moved it from the bottom-left corner to a centered row). Shared constant on
+    // BattleTest so any future strip-height change flows here automatically.
+    private const float PanelBottomInset  = BattleTest.OverlayBottomInset;
     private const float PanelAnchorLeft   = 0.2f;  // horizontal anchor — 60% width, centered (0.2..0.8)
     private const float PanelAnchorRight  = 0.8f;
     private const float NameTagWidth      = 200f;

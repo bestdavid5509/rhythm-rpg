@@ -7,7 +7,6 @@
 [node name="BattleTest" type="Node2D" unique_id=1582212467]
 position = Vector2(0, 1)
 script = ExtResource("1_battletest")
-SkipHopIn = false
 LoopAttack = true
 EnemyData = ExtResource("3_hdgai")
 
@@ -55,5 +54,5 @@ flip_h = true
 
 [node name="TargetZone" type="Node2D" parent="." unique_id=246813579]
 visible = false
-z_index = 10
+z_index = 32
 script = ExtResource("2_targetzone")

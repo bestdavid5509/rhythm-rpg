@@ -255,12 +255,13 @@ public partial class BattleTest : Node2D
     {
         if (!GodotObject.IsInstanceValid(this)) return;
         GD.Print("[BattleTest] OnCastIntroFinished fired.");
-        SafeDisconnectAnim(_enemyParty[0], OnCastIntroFinished);
-        if (_enemyParty[0].IsDead) return;
+        var attacker = _sequenceAttacker;  // enemy in enemy-attack sequences; handler never fires outside them
+        SafeDisconnectAnim(attacker, OnCastIntroFinished);
+        if (attacker.IsDead) return;
         // If the enemy has no cast_loop animation (CastLoopFrames = 0), hold idle for
         // the remainder of the prompt sequence instead.
         int castLoopFrames = EnemyData?.AnimationConfig?.CastLoopFrames ?? 0;
-        PlayAnim(_enemyParty[0], castLoopFrames > 0 ? "cast_loop" : "idle");
+        PlayAnim(attacker, castLoopFrames > 0 ? "cast_loop" : "idle");
     }
 
     /// <summary>
@@ -272,8 +273,9 @@ public partial class BattleTest : Node2D
     {
         if (!GodotObject.IsInstanceValid(this)) return;
         GD.Print("[BattleTest] OnEnemyAttackAnimFinished fired.");
-        SafeDisconnectAnim(_enemyParty[0], OnEnemyAttackAnimFinished);
-        if (_enemyParty[0].IsDead) return;  // death already in progress — don't interfere
+        var attacker = _sequenceAttacker;  // hop-in melee attacker
+        SafeDisconnectAnim(attacker, OnEnemyAttackAnimFinished);
+        if (attacker.IsDead) return;  // death already in progress — don't interfere
 
         // Determine what to show after this animation finishes.
         bool parryCounterImminent = _parryClean && _hopInSequenceCompleted;
@@ -291,19 +293,19 @@ public partial class BattleTest : Node2D
                 var nextStep = steps[nextIdx];
                 if (!string.IsNullOrEmpty(nextStep.WaitAnimation))
                 {
-                    PlayAnim(_enemyParty[0], nextStep.WaitAnimation);
-                    _enemyAnimSprite.Stop();
-                    _enemyAnimSprite.Frame = 0;
+                    PlayAnim(attacker, nextStep.WaitAnimation);
+                    attacker.AnimSprite.Stop();
+                    attacker.AnimSprite.Frame = 0;
                 }
                 else
-                    PlayAnim(_enemyParty[0], "idle");
+                    PlayAnim(attacker, "idle");
             }
             else
-                PlayAnim(_enemyParty[0], "idle");  // Last step — return to idle.
+                PlayAnim(attacker, "idle");  // Last step — return to idle.
         }
         else
         {
-            PlayAnim(_enemyParty[0], "idle");
+            PlayAnim(attacker, "idle");
         }
 
         _hopInAnimFinished = true;
@@ -315,8 +317,12 @@ public partial class BattleTest : Node2D
     {
         if (!GodotObject.IsInstanceValid(this)) return;
         GD.Print("[BattleTest] OnCastEndFinished fired.");
-        SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
-        PlayAnim(_enemyParty[0], "idle");
+        // Enemy is always _sequenceAttacker: regular sequence → enemy launched it; parry
+        // counter → scope fields intentionally NOT swapped per C2 survey §3, so
+        // _sequenceAttacker still points at the original enemy attacker.
+        var attacker = _sequenceAttacker;
+        SafeDisconnectAnim(attacker, OnCastEndFinished);
+        PlayAnim(attacker, "idle");
     }
 
     // -------------------------------------------------------------------------
@@ -331,20 +337,26 @@ public partial class BattleTest : Node2D
     private void OnPlayerCastFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnPlayerCastFinished);
-        if (_playerParty[0].IsDead) return;
+        var attacker = _sequenceAttacker;  // player in magic sequences
+        SafeDisconnectAnim(attacker, OnPlayerCastFinished);
+        if (attacker.IsDead) return;
 
         // Godot 4 resets Frame to 0 when Stop() is called on a finished non-looping animation.
         // Re-apply the last frame index explicitly so the knight holds the sword-extended pose.
-        StopAnim(_playerParty[0]);       // OWNER: OnPlayerCastFinished — hold last cast frame during spell sequence
-        SetAnimFrame(_playerParty[0], 3);  // frame 3 = last frame of cast; must come after Stop() due to Godot 4 reset
+        StopAnim(attacker);       // OWNER: OnPlayerCastFinished — hold last cast frame during spell sequence
+        SetAnimFrame(attacker, 3);  // frame 3 = last frame of cast; must come after Stop() due to Godot 4 reset
         GetTree().CreateTimer(0.2f).Timeout += () =>
         {
-            if (_playerParty[0].IsDead) return;
-            // Recompute the prompt position from the sequence-scoped fields set in
-            // BeginPlayerMagicAttack — they remain stable across the cast delay, so
-            // no separate Vector2 cache is needed.
-            Vector2 promptPos = ComputeCameraMidpoint(_sequenceAttacker, _sequenceDefender);
+            if (attacker.IsDead) return;
+            // Phase 6 C11.2 — magic / cast circles use the static formation-
+            // anchored center; hop-in attacks keep the per-attack midpoint via
+            // ComputeCameraMidpoint. Magic attackers stay at origin, so the
+            // per-attack midpoint at multi-character density is geometrically
+            // arbitrary; the static anchor gives the player a predictable
+            // "timing input always lands here" position. _magicCircleAnchor
+            // is computed once at scene init in BuildInitialParties and is
+            // stable for the entire battle.
+            Vector2 promptPos = _magicCircleAnchor;
             _targetZone.Position = promptPos;
             _targetZone.Visible  = true;
             var ctx = new SequenceContext
@@ -365,51 +377,54 @@ public partial class BattleTest : Node2D
     private void OnPlayerCastTransitionFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnPlayerCastTransitionFinished);
-        PlayAnim(_playerParty[0], "idle");  // OWNER: OnPlayerCastTransitionFinished — magic resolved, return to rest
+        var attacker = _sequenceAttacker;  // player in magic sequences
+        SafeDisconnectAnim(attacker, OnPlayerCastTransitionFinished);
+        PlayAnim(attacker, "idle");  // OWNER: OnPlayerCastTransitionFinished — magic resolved, return to rest
     }
 
     private void OnParryFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnParryFinished);
-        if (_playerParty[0].IsDead) return;
+        var defender = _sequenceDefender;  // player parries in enemy-attack sequences
+        SafeDisconnectAnim(defender, OnParryFinished);
+        if (defender.IsDead) return;
         // Freeze on the last parry frame for 4 frames (4 / 12fps ≈ 0.333s) before returning
         // to idle — gives the pose time to read rather than snapping away instantly.
         // Capture-before-Stop pattern: AnimatedSprite2D.Stop() resets Frame to 0 on non-looping
         // animations (Godot 4 gotcha). We cache the last frame first, call Stop, then restore it.
-        int lastFrame = _playerAnimSprite.Frame;
-        StopAnim(_playerParty[0]);
-        SetAnimFrame(_playerParty[0], lastFrame);
+        int lastFrame = defender.AnimSprite.Frame;
+        StopAnim(defender);
+        SetAnimFrame(defender, lastFrame);
         // 3-frame hold (~0.25s at 12fps). Shorter than hit because parry has visible
         // follow-through frames (2–5 of _Attack2NoMovement.png) that already register
         // the action before the hold begins.
         GetTree().CreateTimer(3f / 12f).Timeout += () =>
         {
             if (!GodotObject.IsInstanceValid(this)) return;
-            if (_playerParty[0].IsDead) return;
-            PlayAnim(_playerParty[0], "idle");  // OWNER: enemy pass resolved, parry complete
+            if (defender.IsDead) return;
+            PlayAnim(defender, "idle");  // OWNER: enemy pass resolved, parry complete
         };
     }
 
     private void OnHitAnimFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnHitAnimFinished);
-        if (_playerParty[0].IsDead) return;
+        var defender = _sequenceDefender;  // player takes hits in enemy-attack sequences
+        SafeDisconnectAnim(defender, OnHitAnimFinished);
+        if (defender.IsDead) return;
         // Freeze on the last hit frame for 4 frames (4 / 12fps ≈ 0.333s) before returning
         // to idle — gives the flinch pose time to read.
         // Capture-before-Stop pattern: currently hit is a 1-frame animation so the Stop()
         // reset-to-0 bug is invisible (frame 0 IS the last frame), but this hardens against
         // multi-frame hit animations in future.
-        int lastFrame = _playerAnimSprite.Frame;
-        StopAnim(_playerParty[0]);
-        SetAnimFrame(_playerParty[0], lastFrame);
+        int lastFrame = defender.AnimSprite.Frame;
+        StopAnim(defender);
+        SetAnimFrame(defender, lastFrame);
         GetTree().CreateTimer(4f / 12f).Timeout += () =>
         {
             if (!GodotObject.IsInstanceValid(this)) return;
-            if (_playerParty[0].IsDead) return;
-            PlayAnim(_playerParty[0], "idle");  // OWNER: enemy pass resolved, flinch complete
+            if (defender.IsDead) return;
+            PlayAnim(defender, "idle");  // OWNER: enemy pass resolved, flinch complete
         };
     }
 
@@ -424,9 +439,17 @@ public partial class BattleTest : Node2D
     private void OnPlayerDeathFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnPlayerDeathFinished);
+        // _sequenceDeathTarget is set immediately before each death-subscription site so
+        // this handler reaches the dying combatant independent of the attacker/defender
+        // roles in the sequence that killed them (enemy attack → player defender,
+        // self-damage → player attacker, etc.).
+        SafeDisconnectAnim(_sequenceDeathTarget, OnPlayerDeathFinished);
         GD.Print("[BattleTest] Player died.");
-        ShowEndLabel("Game Over");
+        // Game Over only when aggregate wipe fires, not on any single combatant's death
+        // animation completion. A dead slot at multi-unit still fires this handler but
+        // the battle continues if other players are alive.
+        if (CheckGameOver())
+            ShowEndLabel("Game Over");
     }
 
     /// <summary>
@@ -440,7 +463,11 @@ public partial class BattleTest : Node2D
     private void OnEnemyDeathFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
+        // _sequenceDeathTarget — set at each enemy death-subscription site so this
+        // handler can disconnect from the dying enemy regardless of whether the kill
+        // came from a player attack (enemy = defender), a parry counter (enemy =
+        // attacker, scope fields unswapped per C2 §3), or combo-miss damage edge case.
+        SafeDisconnectAnim(_sequenceDeathTarget, OnEnemyDeathFinished);
         if (IsPhaseTransitionPending())
         {
             // Warrior death finished on the main sprite. The reveal sprite has been
@@ -458,7 +485,11 @@ public partial class BattleTest : Node2D
             return;
         }
         GD.Print("[BattleTest] Enemy defeated.");
-        GetTree().CreateTimer(1.0f).Timeout += () => ShowEndLabel("Victory!");
+        // Victory only when aggregate wipe fires, not on any single enemy's death
+        // animation completion. At multi-unit, dead slot-N enemy still fires this handler
+        // but the battle continues if other enemies are alive.
+        if (CheckGameOver())
+            GetTree().CreateTimer(1.0f).Timeout += () => ShowEndLabel("Victory!");
     }
 
     // =========================================================================
@@ -654,7 +685,18 @@ public partial class BattleTest : Node2D
         _enemyAnimSprite.Scale    = new Vector2(3f, 3f);
         _enemyAnimSprite.Position = new Vector2(_enemyAnimSprite.Position.X,
                                                 FloorY - enemyFh * 3f * 0.6f + enemyOffsetY);
-        _enemyAnimSpriteOrigin    = _enemyAnimSprite.Position;
+        // Re-snapshot the per-combatant AnimSpriteOrigin on the slot-0 enemy so
+        // PlayHopIn / PlayTeardown read the new Phase 2 origin (Phase 1's origin
+        // was a different sprite at a different floor anchor).
+        _enemyParty[0].AnimSpriteOrigin = _enemyAnimSprite.Position;
+        // C7-extra-followup-phase2-feet: refresh the EnemyData-derived cache on the
+        // slot-0 Combatant. Without this, FeetAnchorY / FrameHeight / Data hold the
+        // Phase 1 Warrior values (FeetAnchorY=112, FrameHeight=130) so hop-in feet-
+        // alignment math computes the boss's feet world Y using stale Phase 1
+        // numbers — Knight lands ~27 px above the Phase 2 boss's actual feet line.
+        // RefreshCombatantFromEnemyData is the single source of truth for the cache
+        // mapping (also called from BuildEnemyCombatantForSlot at scene init).
+        RefreshCombatantFromEnemyData(_enemyParty[0], EnemyData, _enemyAnimSprite);
         _enemyAnimSprite.Play("idle");
     }
 
@@ -687,33 +729,86 @@ public partial class BattleTest : Node2D
         // _absorbedMoves. Other flags are one-shot or turn-scoped but are cleared here
         // for defense-in-depth against stale state from the final Phase 1 turn.
         var player = _playerParty[0];
-        player.IsBeckoning = false;
-        player.IsDefending = false;
+        player.BeckoningTargets.Clear();
+        player.IsDefending     = false;
         _parryClean               = false;
         _pendingGameOver          = false;
         _hopInOver                = false;
         _hopInSequenceCompleted   = false;
         _hopInAnimFinished        = false;
 
+        // C8 — clear shader uniform state and per-combatant tween handles on the
+        // slot-0 enemy. The dying Phase 1 warrior may have had active_amount set
+        // (it was the active actor when killed) and threat_amount/flash_amount
+        // mid-fade from a learnable wind-up that never got to fire. The
+        // FlashMaterial reference persists across the sprite swap (same
+        // AnimatedSprite2D node, just new SpriteFrames per ApplyPhase2Sprite),
+        // so without explicit clearing the Phase 2 boss inherits stale uniform
+        // values until the next AdvanceTurn cycle. Explicit reset closes a
+        // pre-existing latent issue that C8's longer-lived active_amount makes
+        // observable. Tween handles cleared so any in-flight fade aimed at the
+        // dead warrior doesn't keep running on the new combatant.
+        var enemyMaterial = _enemyParty[0].FlashMaterial;
+        if (enemyMaterial != null)
+        {
+            enemyMaterial.SetShaderParameter("active_amount", 0.0f);
+            enemyMaterial.SetShaderParameter("flash_amount",  0.0f);
+            enemyMaterial.SetShaderParameter("tint_amount",   0.0f);
+            enemyMaterial.SetShaderParameter("target_amount", 0.0f);
+        }
+        _enemyParty[0].ActiveTween?.Kill();
+        _enemyParty[0].ActiveTween = null;
+        _enemyParty[0].FlashTween?.Kill();
+        _enemyParty[0].FlashTween = null;
+        _enemyParty[0].ThreatTween?.Kill();
+        _enemyParty[0].ThreatTween = null;
+
         // Reset enemy Combatant state. EnemyData was reassigned in ApplyPhase2Sprite
         // above, so reading EnemyData.MaxHp here pulls the Phase 2 value. AnimSprite,
         // PositionRect, and FlashMaterial references stay valid — same node instances,
         // just new SpriteFrames via ApplyPhase2Sprite. Origin (ColorRect-based) is
-        // unchanged by phase transition.
+        // unchanged by phase transition. The EnemyData-derived cache on the Combatant
+        // (FeetAnchorY / FrameHeight / AnimSpriteScale / Data) was already refreshed
+        // in ApplyPhase2Sprite via RefreshCombatantFromEnemyData; this block only
+        // resets the runtime HP/Name/IsDead for the new round.
         var enemyCombatant       = _enemyParty[0];
-        enemyCombatant.Data      = EnemyData;
         enemyCombatant.Name      = EnemyData.EnemyName;
         enemyCombatant.MaxHp     = EnemyData.MaxHp;
         enemyCombatant.CurrentHp = EnemyData.MaxHp;
         enemyCombatant.IsDead    = false;
-        if (_enemyNameLabel != null) _enemyNameLabel.Text = EnemyData.EnemyName;
+        // Enemy panel name label is re-read from enemyCombatant.Name on every
+        // RefreshPanel call (UpdateHPBars below); pre-C6 this required an explicit
+        // _enemyNameLabel.Text = ... here, but the per-slot panel binding makes
+        // that redundant.
         UpdateHPBars();
 
         // Reset attack-pool rotation so the new pool starts fresh.
         _lastAttackIndex = -1;
 
-        // Brief pause before the player regains control in Phase 2.
-        GetTree().CreateTimer(0.5f).Timeout += ShowMenu;
+        // Brief pause before the player regains control in Phase 2. Queue rebuilt
+        // because slot 0 enemy reanimated (HP restored, IsDead=false) — the new
+        // round must reflect post-swap state. AdvanceTurn fires once the queue
+        // has its fresh round.
+        GetTree().CreateTimer(0.5f).Timeout += () =>
+        {
+            // Phase 2 transition resets all combatants' AP to 0 (C7-prereq).
+            //
+            // TODO(phase2-boss-ap-tuning): all combatants currently start at AP=0
+            // post-Phase-2, which means the player's fastest combatant (Knight at
+            // Agility=12) acts before the revived boss. Narratively the boss has
+            // just powered up, so them acting first might fit the beat better.
+            // Tunable post-Phase-6 by passing initial-AP overrides into Reset
+            // (e.g. boss starts at AP=80 → acts in 2 ticks vs Knight's 9). Out
+            // of scope for C7-prereq; documenting the decision so future-me
+            // remembers why this is currently uniform-zero.
+            _queue.Reset(_playerParty, _enemyParty);
+            // C7: hard-rebind the turn-order strip with the new (Phase 2)
+            // Lookahead. Reset is a "fresh start," not a "turn resolved" —
+            // animating it would semantically misrepresent the transition.
+            RefreshTurnOrderStrip(animate: false);
+            GD.Print("[BattleTest] Phase 2 — queue reset.");
+            AdvanceTurn();
+        };
         // TODO: Phase 2 music cue goes here.
     }
 
@@ -730,18 +825,23 @@ public partial class BattleTest : Node2D
     private void OnComboPass0SlashFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnComboPass0SlashFinished);
-        if (_playerParty[0].IsDead) return;
-        if (_comboMissed)
+        var attacker = _sequenceAttacker;  // player combo attacker
+        SafeDisconnectAnim(attacker, OnComboPass0SlashFinished);
+        if (attacker.IsDead) return;
+        if (_comboMissed || _comboTargetDied)
         {
-            // Pass 0 was a miss — skip the wind-up hold and retreat immediately.
-            _comboMissed = false;
+            // Pass 0 cancelled (miss or kill) — skip the wind-up hold and retreat
+            // immediately. Both flags route through the same retreat path; the
+            // damage-site set them, OnAttackPassEvaluated's early-return blocks
+            // subsequent passes, and BeginComboMissRetreat advances the turn.
+            _comboMissed     = false;
+            _comboTargetDied = false;
             BeginComboMissRetreat();
             return;
         }
-        _playerAnimSprite.Animation = "combo";
-        StopAnim(_playerParty[0]);
-        SetAnimFrame(_playerParty[0], 5);  // OWNER: combo pass 0 resolved — wind-up before slash2 (sheet frame 5)
+        attacker.AnimSprite.Animation = "combo";
+        StopAnim(attacker);
+        SetAnimFrame(attacker, 5);  // OWNER: combo pass 0 resolved — wind-up before slash2 (sheet frame 5)
     }
 
     /// <summary>
@@ -752,18 +852,21 @@ public partial class BattleTest : Node2D
     private void OnComboPass1SlashFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnComboPass1SlashFinished);
-        if (_playerParty[0].IsDead) return;
-        if (_comboMissed)
+        var attacker = _sequenceAttacker;  // player combo attacker
+        SafeDisconnectAnim(attacker, OnComboPass1SlashFinished);
+        if (attacker.IsDead) return;
+        if (_comboMissed || _comboTargetDied)
         {
-            // Pass 1 was a miss — skip the wind-up hold and retreat immediately.
-            _comboMissed = false;
+            // Pass 1 cancelled (miss or kill) — skip the wind-up hold and retreat
+            // immediately. See OnComboPass0SlashFinished for the shared rationale.
+            _comboMissed     = false;
+            _comboTargetDied = false;
             BeginComboMissRetreat();
             return;
         }
-        _playerAnimSprite.Animation = "combo";
-        StopAnim(_playerParty[0]);
-        SetAnimFrame(_playerParty[0], 0);  // OWNER: combo pass 1 resolved — wind-up before slash1 again (sheet frame 0)
+        attacker.AnimSprite.Animation = "combo";
+        StopAnim(attacker);
+        SetAnimFrame(attacker, 0);  // OWNER: combo pass 1 resolved — wind-up before slash1 again (sheet frame 0)
     }
 
     /// <summary>
@@ -775,37 +878,33 @@ public partial class BattleTest : Node2D
         // The animation already finished (that's what triggered the callback), so the sprite
         // is naturally holding its last frame. Calling Stop() here would reset Frame to 0 in
         // Godot 4 — don't touch the frame; just start the retreat from the current pose.
+        var attacker = _sequenceAttacker;  // player (combo attacker)
         if (_pendingGameOver)
         {
-            // Damage from the miss somehow killed the enemy (edge case).
-            _enemyParty[0].IsDead = true;
-            PlaySound("enemy_defeat.mp3");
-            SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
-            _enemyAnimSprite.Play("death");  // OWNER: enemy death from combo miss damage
-            _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
-            ScheduleBossRevealIfPhase1();
-            // Retreat the player to origin and return to idle — mirrors the non-game-over
-            // path below so the player doesn't freeze on the last combo miss frame.
+            // Last enemy went down — KillCombatant already fired at the
+            // damage site (per-target death detection). This branch only
+            // handles the player-side retreat so the killing-blow attacker
+            // doesn't freeze on the last combo frame.
             GetTree().CreateTimer(0.3f).Timeout += () =>
             {
-                if (_playerParty[0].IsDead) return;
-                _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
-                _playerAnimSprite.SpeedScale = 2f;
-                SafeDisconnectAnim(_playerParty[0], OnRetreatFinished);
-                PlayAnimBackwards(_playerParty[0], "run");  // OWNER: killing-blow retreat (combo miss)
-                _playerAnimSprite.AnimationFinished += OnRetreatFinished;
+                if (attacker.IsDead) return;
+                attacker.AnimSprite.SpriteFrames.SetAnimationLoop("run", false);
+                attacker.AnimSprite.SpeedScale = 2f;
+                SafeDisconnectAnim(attacker, OnRetreatFinished);
+                PlayAnimBackwards(attacker, "run");  // OWNER: killing-blow retreat (combo miss)
+                ConnectAnim(attacker, OnRetreatFinished);
                 PlayTeardown(null);
             };
             return;
         }
         GetTree().CreateTimer(0.3f).Timeout += () =>
         {
-            _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
-            _playerAnimSprite.SpeedScale = 2f;
-            SafeDisconnectAnim(_playerParty[0], OnRetreatFinished);
-            PlayAnimBackwards(_playerParty[0], "run");  // OWNER: BeginComboMissRetreat — retreat hop-back
-            _playerAnimSprite.AnimationFinished += OnRetreatFinished;
-            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack);
+            attacker.AnimSprite.SpriteFrames.SetAnimationLoop("run", false);
+            attacker.AnimSprite.SpeedScale = 2f;
+            SafeDisconnectAnim(attacker, OnRetreatFinished);
+            PlayAnimBackwards(attacker, "run");  // OWNER: BeginComboMissRetreat — retreat hop-back
+            ConnectAnim(attacker, OnRetreatFinished);
+            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn);
         };
     }
 
@@ -820,36 +919,29 @@ public partial class BattleTest : Node2D
     private void OnFinalSlashFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnFinalSlashFinished);
-        StopAnim(_playerParty[0]);  // OWNER: OnFinalSlashFinished — hold last slash frame (sheet frame 3 or 9)
+        var attacker = _sequenceAttacker;  // player (slash attacker)
+        SafeDisconnectAnim(attacker, OnFinalSlashFinished);
+        StopAnim(attacker);  // OWNER: OnFinalSlashFinished — hold last slash frame (sheet frame 3 or 9)
         // Godot 4 resets Frame to 0 when Stop() is called on a finished non-looping animation.
         // Re-apply the last frame index explicitly to counteract this and hold the final pose.
-        SetAnimFrame(_playerParty[0], _playerAnimSprite.SpriteFrames.GetFrameCount("combo_slash1") - 1);
+        SetAnimFrame(attacker, attacker.AnimSprite.SpriteFrames.GetFrameCount("combo_slash1") - 1);
 
         if (_pendingGameOver)
         {
-            // Enemy HP reached zero from the player's attack.
+            // Last enemy went down from the player's attack — KillCombatant already
+            // fired at the damage site (per-target death detection). This branch
+            // only handles the player-side retreat so the killing-blow attacker
+            // doesn't freeze on the last slash frame. Required for the Phase 1 →
+            // Phase 2 transition so Phase 2 starts with the player idling.
             // (Player cannot die during their own attack; _pendingGameOver here always means enemy defeated.)
-            // Interrupt the enemy's current animation and play death; reset camera without next turn.
-            _enemyParty[0].IsDead = true;
-            PlaySound("enemy_defeat.mp3");
-            SafeDisconnectAnim(_enemyParty[0], OnEnemyDeathFinished);
-            _enemyAnimSprite.Play("death");         // OWNER: enemy death from player attack
-            _enemyAnimSprite.AnimationFinished += OnEnemyDeathFinished;
-            ScheduleBossRevealIfPhase1();
-            // Retreat the player to origin and return to idle — same hop-back treatment
-            // as the non-game-over path. Without this the player freezes on the last
-            // slash frame (PlayTeardown would tween the ColorRect back but no run
-            // animation is played and OnRetreatFinished never fires PlayAnim(_playerParty[0], "idle")).
-            // Required for the phase transition so Phase 2 starts with the player idling.
             GetTree().CreateTimer(0.3f).Timeout += () =>
             {
-                if (_playerParty[0].IsDead) return;
-                _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
-                _playerAnimSprite.SpeedScale = 2f;
-                SafeDisconnectAnim(_playerParty[0], OnRetreatFinished);
-                PlayAnimBackwards(_playerParty[0], "run");  // OWNER: killing-blow retreat
-                _playerAnimSprite.AnimationFinished += OnRetreatFinished;
+                if (attacker.IsDead) return;
+                attacker.AnimSprite.SpriteFrames.SetAnimationLoop("run", false);
+                attacker.AnimSprite.SpeedScale = 2f;
+                SafeDisconnectAnim(attacker, OnRetreatFinished);
+                PlayAnimBackwards(attacker, "run");  // OWNER: killing-blow retreat
+                ConnectAnim(attacker, OnRetreatFinished);
                 PlayTeardown(null);
             };
             return;
@@ -864,13 +956,13 @@ public partial class BattleTest : Node2D
             // Disable looping on "run" for this one-shot backwards pass so that
             // AnimationFinished fires when frame 0 is reached and OnRetreatFinished triggers.
             // Looping is intentional for the forward hop-in; we restore it in OnRetreatFinished.
-            _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", false);
-            _playerAnimSprite.SpeedScale = 2f;
-            SafeDisconnectAnim(_playerParty[0], OnRetreatFinished);
-            PlayAnimBackwards(_playerParty[0], "run");  // OWNER: player turn, retreat hop-back
-            _playerAnimSprite.AnimationFinished += OnRetreatFinished;
+            attacker.AnimSprite.SpriteFrames.SetAnimationLoop("run", false);
+            attacker.AnimSprite.SpeedScale = 2f;
+            SafeDisconnectAnim(attacker, OnRetreatFinished);
+            PlayAnimBackwards(attacker, "run");  // OWNER: player turn, retreat hop-back
+            ConnectAnim(attacker, OnRetreatFinished);
 
-            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += BeginEnemyAttack);
+            PlayTeardown(() => GetTree().CreateTimer(0.5f).Timeout += AdvanceTurn);
         };
     }
 
@@ -883,16 +975,17 @@ public partial class BattleTest : Node2D
     private void OnRetreatFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_playerParty[0], OnRetreatFinished);
-        _playerAnimSprite.SpeedScale = 1f;  // always reset — SpeedScale affects all animations
+        var attacker = _sequenceAttacker;  // player (retreat follows player attack)
+        SafeDisconnectAnim(attacker, OnRetreatFinished);
+        attacker.AnimSprite.SpeedScale = 1f;  // always reset — SpeedScale affects all animations
         // Restore looping on "run" — it was disabled before PlayBackwards so AnimationFinished
         // would fire once at frame 0. The forward hop-in on the next player turn needs it looping.
-        _playerAnimSprite.SpriteFrames.SetAnimationLoop("run", true);
+        attacker.AnimSprite.SpriteFrames.SetAnimationLoop("run", true);
         // Guard: only return to idle if the retreat run still owns the sprite.
         // OnBattleSystemStepPassEvaluated may have pre-empted this handler and started
         // parry or hit; in that case let those complete without overriding them.
-        if (_playerAnimSprite.Animation == "run")
-            PlayAnim(_playerParty[0], "idle");  // OWNER: OnRetreatFinished — retreat complete
+        if (attacker.AnimSprite.Animation == "run")
+            PlayAnim(attacker, "idle");  // OWNER: OnRetreatFinished — retreat complete
     }
 
     // =========================================================================
@@ -912,28 +1005,37 @@ public partial class BattleTest : Node2D
         const int CounterDamage = 20;
         PlaySound("perfect_parry_shimmer_2.wav");
 
+        // C2 §3 no-swap: scope fields remain bound to the ORIGINAL sequence
+        // (attacker = enemy who attacked, defender = player who parried).
+        // The counter's own roles are the reverse — spelled out locally so the
+        // body reads naturally without confusing the sequence-scoped fields.
+        // counterAttacker: the player delivering the counter (= _sequenceDefender).
+        // counterTarget:   the enemy receiving the counter (= _sequenceAttacker).
+        var counterAttacker = _sequenceDefender;
+        var counterTarget   = _sequenceAttacker;
+
         // Disconnect OnParryFinished before it fires naturally on parry AnimationFinished.
-        // Without this, OnParryFinished schedules a PlayAnim(_playerParty[0], "idle") ~250ms after the
+        // Without this, OnParryFinished schedules a PlayAnim(player, "idle") ~250ms after the
         // parry completes, creating a visible idle frame before PlayParryCounter's first
         // timer fires its wind-up at t=0.5s. Killing the connection lets the player stay
         // on the last parry frame continuously until the counter takes over.
-        SafeDisconnectAnim(_playerParty[0], OnParryFinished);
+        SafeDisconnectAnim(counterAttacker, OnParryFinished);
 
         // Disconnect cast_end callback so it doesn't fire during the counter.
         // OnEnemyAttackAnimFinished is NOT disconnected — it must still set _hopInAnimFinished
         // for the hop-in rendezvous. Its idle call is guarded below.
-        SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
+        SafeDisconnectAnim(counterTarget, OnCastEndFinished);
         if (HasCastEnd())
         {
-            PlayAnim(_enemyParty[0], "cast_end");
-            _enemyAnimSprite.AnimationFinished += OnCastEndFinished;
+            PlayAnim(counterTarget, "cast_end");
+            ConnectAnim(counterTarget, OnCastEndFinished);
         }
         else if (!_battleSystem.CurrentAttackIsHopIn)
         {
             // Non-hop-in cast attacks: transition from cast_loop to idle.
             // Hop-in melee attacks: let melee_attack play to completion —
             // OnEnemyAttackAnimFinished handles the transition.
-            PlayAnim(_enemyParty[0], "idle");
+            PlayAnim(counterTarget, "idle");
         }
 
         // Player stays in parry animation until OnParryFinished fires naturally,
@@ -942,21 +1044,21 @@ public partial class BattleTest : Node2D
         // Wind-up: after parry completes, hold attack1 frame 0 for anticipation.
         GetTree().CreateTimer(0.5f).Timeout += () =>
         {
-            if (_playerParty[0].IsDead) { onComplete?.Invoke(); return; }
+            if (counterAttacker.IsDead) { onComplete?.Invoke(); return; }
 
             // Hold attack1 frame 0 (wind-up pose) for 0.3s.
-            _playerAnimSprite.Animation = "attack1";
-            StopAnim(_playerParty[0]);
-            SetAnimFrame(_playerParty[0], 0);  // OWNER: PlayParryCounter — wind-up anticipation hold
+            counterAttacker.AnimSprite.Animation = "attack1";
+            StopAnim(counterAttacker);
+            SetAnimFrame(counterAttacker, 0);  // OWNER: PlayParryCounter — wind-up anticipation hold
 
             GetTree().CreateTimer(0.3f).Timeout += () =>
             {
-                if (_playerParty[0].IsDead) { onComplete?.Invoke(); return; }
+                if (counterAttacker.IsDead) { onComplete?.Invoke(); return; }
 
                 // Impact: snap to frame 1, spawn slash effect + shake.
                 PlaySound("counter_swing.wav");
                 PlaySound("player_attack_swing.wav");
-                SetAnimFrame(_playerParty[0], 1);  // OWNER: PlayParryCounter — impact pose
+                SetAnimFrame(counterAttacker, 1);  // OWNER: PlayParryCounter — impact pose
 
                 // Play enemy hurt reaction during parry counter impact.
                 // Enemies with a separate hurt sheet use hurt_full (14 frames) looped
@@ -966,15 +1068,15 @@ public partial class BattleTest : Node2D
                 {
                     onHurtFullFinished = () =>
                     {
-                        SafeDisconnectAnim(_enemyParty[0], onHurtFullFinished);
-                        if (_enemyParty[0].IsDead) return;
-                        PlayAnim(_enemyParty[0], "hurt_full");
-                        _enemyAnimSprite.Frame = 3;
-                        _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
+                        SafeDisconnectAnim(counterTarget, onHurtFullFinished);
+                        if (counterTarget.IsDead) return;
+                        PlayAnim(counterTarget, "hurt_full");
+                        counterTarget.AnimSprite.Frame = 3;
+                        ConnectAnim(counterTarget, onHurtFullFinished);
                     };
-                    SafeDisconnectAnim(_enemyParty[0], onHurtFullFinished);
-                    PlayAnim(_enemyParty[0], "hurt_full");
-                    _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
+                    SafeDisconnectAnim(counterTarget, onHurtFullFinished);
+                    PlayAnim(counterTarget, "hurt_full");
+                    ConnectAnim(counterTarget, onHurtFullFinished);
                 }
                 else
                 {
@@ -982,21 +1084,16 @@ public partial class BattleTest : Node2D
                     // the counter slash effect completes and the callback plays idle.
                     onHurtFullFinished = () =>
                     {
-                        SafeDisconnectAnim(_enemyParty[0], onHurtFullFinished);
-                        if (_enemyParty[0].IsDead) return;
+                        SafeDisconnectAnim(counterTarget, onHurtFullFinished);
+                        if (counterTarget.IsDead) return;
                         // Explicitly stop and hold on the last hurt frame so the enemy
                         // stays in the hurt pose for the duration of the slash effect.
-                        _enemyAnimSprite.Stop();
+                        counterTarget.AnimSprite.Stop();
                     };
-                    SafeDisconnectAnim(_enemyParty[0], onHurtFullFinished);
-                    PlayAnim(_enemyParty[0], "hurt");
-                    _enemyAnimSprite.AnimationFinished += onHurtFullFinished;
+                    SafeDisconnectAnim(counterTarget, onHurtFullFinished);
+                    PlayAnim(counterTarget, "hurt");
+                    ConnectAnim(counterTarget, onHurtFullFinished);
                 }
-
-                // Counter lands on the attacker-who-was-parried (single enemy in the
-                // current UI). Hoisted above SpawnCounterSlashEffect + ShakeCombatantSprite
-                // so both use the same semantic local.
-                var counterTarget = _enemyParty[0];
 
                 // Spawn anime slash effect centered on the enemy.
                 // Damage is deferred until the slash animation completes.
@@ -1004,18 +1101,27 @@ public partial class BattleTest : Node2D
                 SpawnCounterSlashEffect(counterTarget, () =>
                 {
                     // Break the hurt loop and apply counter damage.
-                    SafeDisconnectAnim(_enemyParty[0], onHurtFullFinished);
-                    SafeDisconnectAnim(_enemyParty[0], OnCastEndFinished);
-                    PlayAnim(_enemyParty[0], "idle");
+                    SafeDisconnectAnim(counterTarget, onHurtFullFinished);
+                    SafeDisconnectAnim(counterTarget, OnCastEndFinished);
+                    PlayAnim(counterTarget, "idle");
                     counterTarget.TakeDamage(CounterDamage);
                     GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {counterTarget.CurrentHp}/{counterTarget.MaxHp}");
+                    if (counterTarget.CurrentHp <= 0)
+                        KillCombatant(counterTarget);
                     PlaySound("enemy_hit.wav");
                     // Spawn damage number at the target's current world position, offset
                     // upward above the head. Parented to BattleTest root (not the sprite)
                     // so scale inheritance doesn't affect label size or float speed.
-                    // Sprite reads migrated to Combatant.AnimSprite (B-category); counter
-                    // has its own formula (different offset from standard damage numbers)
-                    // because the counter is visually dramatic.
+                    // Sprite reads migrated to Combatant.AnimSprite (B-category).
+                    //
+                    // Counter has its own formula (-fh*sy*0.3 + 50) — intentional
+                    // divergence from ComputeDamageOrigin's above-head anchor. The
+                    // 0.3 multiplier + 50 offset combine to land the damage number
+                    // at upper-body / head level (in-body), giving the counter a
+                    // "big impact" feel that contrasts with the floating-above-head
+                    // numbers from regular attacks. Don't unify with
+                    // ComputeDamageOrigin — the divergence is a design choice, not
+                    // an oversight.
                     var targetSprite = counterTarget.AnimSprite;
                     float fh = counterTarget.Data?.FrameHeight ?? 160;
                     float sy = targetSprite.Scale.Y;
@@ -1024,7 +1130,7 @@ public partial class BattleTest : Node2D
                     SpawnDamageNumber(counterDmgPos, CounterDamage, DmgColorPerfect);
                     ShakeCamera(intensity: 10f, duration: 0.3f);
                     UpdateHPBars();
-                    PlayAnim(_playerParty[0], "idle");  // OWNER: PlayParryCounter — slash done, release held pose
+                    PlayAnim(counterAttacker, "idle");  // OWNER: PlayParryCounter — slash done, release held pose
                     // Brief pause so the damage number reads before the retreat/teardown begins.
                     GetTree().CreateTimer(0.5f).Timeout += () => onComplete?.Invoke();
                 });
@@ -1035,21 +1141,21 @@ public partial class BattleTest : Node2D
                 // Follow-through: after a short beat, play frames 2-3 then return to idle.
                 GetTree().CreateTimer(0.2f).Timeout += () =>
                 {
-                    if (_playerParty[0].IsDead) return;
+                    if (counterAttacker.IsDead) return;
                     // Play attack1 from frame 2 onward (frames 2-3 are the follow-through).
-                    PlayAnim(_playerParty[0], "attack1");
-                    _playerAnimSprite.Frame = 2;  // skip to follow-through frames
+                    PlayAnim(counterAttacker, "attack1");
+                    counterAttacker.AnimSprite.Frame = 2;  // skip to follow-through frames
 
                     Action onFollowThroughFinished = null;
                     onFollowThroughFinished = () =>
                     {
-                        SafeDisconnectAnim(_playerParty[0], onFollowThroughFinished);
+                        SafeDisconnectAnim(counterAttacker, onFollowThroughFinished);
                         // Hold on frame 3 (last attack1 frame) until slash effect completes.
-                        StopAnim(_playerParty[0]);
-                        SetAnimFrame(_playerParty[0], 3);  // OWNER: PlayParryCounter — hold final pose until slash done
+                        StopAnim(counterAttacker);
+                        SetAnimFrame(counterAttacker, 3);  // OWNER: PlayParryCounter — hold final pose until slash done
                     };
-                    SafeDisconnectAnim(_playerParty[0], onFollowThroughFinished);
-                    _playerAnimSprite.AnimationFinished += onFollowThroughFinished;
+                    SafeDisconnectAnim(counterAttacker, onFollowThroughFinished);
+                    ConnectAnim(counterAttacker, onFollowThroughFinished);
                 };
             };
         };
@@ -1158,10 +1264,16 @@ public partial class BattleTest : Node2D
     private void PlayCombatantHurtFlash(Combatant target)
     {
         if (target.IsDead) return;
+        // Capture the hurt target so the parameterless OnEnemyHurtFlashFinished callback
+        // knows which combatant to operate on. The hurt flash fires outside of normal
+        // sequence context (e.g. learnable-move selection flash at the start of a turn,
+        // before the attack sequence has set _sequenceAttacker/_sequenceDefender), so
+        // the sequence-scoped fields aren't a reliable source of truth here.
+        _lastHurtFlashTarget = target;
         SafeDisconnectAnim(target, OnEnemyHurtFlashFinished);
         string hurtAnim = HasSeparateHurtSheet() ? "hurt_flash" : "hurt";
         PlayAnim(target, hurtAnim);
-        target.AnimSprite.AnimationFinished += OnEnemyHurtFlashFinished;
+        ConnectAnim(target, OnEnemyHurtFlashFinished);
     }
 
     /// <summary>True when the enemy uses a separate spritesheet for hurt animations (hurt_flash + hurt_full).</summary>
@@ -1175,8 +1287,9 @@ public partial class BattleTest : Node2D
     private void OnEnemyHurtFlashFinished()
     {
         if (!GodotObject.IsInstanceValid(this)) return;
-        SafeDisconnectAnim(_enemyParty[0], OnEnemyHurtFlashFinished);
-        PlayAnim(_enemyParty[0], "idle");
+        var target = _lastHurtFlashTarget;
+        SafeDisconnectAnim(target, OnEnemyHurtFlashFinished);
+        PlayAnim(target, "idle");
     }
 
     // =========================================================================
@@ -1232,6 +1345,22 @@ public partial class BattleTest : Node2D
         var callable = Callable.From(handler);
         if (target.AnimSprite.IsConnected(AnimatedSprite2D.SignalName.AnimationFinished, callable))
             target.AnimSprite.Disconnect(AnimatedSprite2D.SignalName.AnimationFinished, callable);
+    }
+
+    /// <summary>
+    /// Subscribes <paramref name="handler"/> to <paramref name="target"/>'s
+    /// <c>AnimationFinished</c> signal via <c>target.AnimSprite</c>. Symmetric
+    /// call-site partner to <see cref="SafeDisconnectAnim"/>: every subscription
+    /// site pairs a SafeDisconnectAnim (prevents handler stacking) with a
+    /// ConnectAnim (subscribes the current pass). Does NOT guard on
+    /// <c>target.IsDead</c> — death handlers are legitimately subscribed
+    /// after IsDead is set, by design (the handler exists to run AFTER the
+    /// death animation completes), and a guard here would break the
+    /// phase-transition and death-handoff paths.
+    /// </summary>
+    private void ConnectAnim(Combatant target, Action handler)
+    {
+        target.AnimSprite.AnimationFinished += handler;
     }
 
     // =========================================================================

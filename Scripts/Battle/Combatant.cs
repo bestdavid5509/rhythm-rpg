@@ -37,16 +37,39 @@ public class Combatant
     // ---- Combat-universal state (both sides use these) ----
     public int              CurrentHp;
     public int              MaxHp;
+    public int              Agility = 10; // Per-tick AP gain for the C7-prerequisite tick-based scheduler (TurnOrderQueue). Higher Agility = more turns. Test values are assigned per slot in BuildPlayerCombatantForSlot / BuildEnemyCombatantForSlot; this default (10) is a fallback for any future code path that constructs a Combatant outside the slot-builder. Tie-break at simultaneous threshold-crossings: players-before-enemies, then party-list index.
     public bool             IsDead;
-    public Vector2          Origin;        // world-space origin for positioning
+    public Vector2          Origin;        // world-space origin for positioning (ColorRect-based)
+    public Vector2          AnimSpriteOrigin;  // AnimatedSprite2D position snapshot at scene-init time, after floor-anchor + per-slot offset. Distinct from Origin (different formulas per side). Read by PlayHopIn / PlayTeardown for the AnimSprite tween's destination so each slot retreats to its own origin instead of slot 0's.
     public ColorRect        PositionRect;  // existing anchor node (formerly _playerSprite / _enemySprite)
     public AnimatedSprite2D AnimSprite;    // existing animated sprite node (formerly _playerAnimSprite / _enemyAnimSprite)
 
+    // C7-extra feet-anchor metadata for hop-in feet-to-feet alignment. Cached at slot
+    // construction (BuildPlayerCombatantForSlot / BuildEnemyCombatantForSlot) — never
+    // mutated during gameplay. FeetAnchorY is the Y-pixel offset from the TOP of the
+    // sprite frame to the character's ground line (where their feet meet the floor);
+    // the centering math (Centered=true puts AnimSpriteOrigin at sprite center) is done
+    // at use time via `(FeetAnchorY - FrameHeight/2) * AnimSpriteScale.Y`. AnimSpriteScale
+    // is uniform (3, 3) at Phase 6 scope but cached here so future per-character scaling
+    // doesn't require touching the close-stance helpers.
+    public float            FeetAnchorY;
+    public float            FrameHeight;
+    public Vector2          AnimSpriteScale;
+
     // ---- Player-only — null/unused/default on enemies ----
-    public int  CurrentMp;
-    public int  MaxMp;
-    public bool IsDefending;
-    public bool IsBeckoning;  // Beckon ability active — consumed on the next SelectEnemyAttack call.
+    public int       CurrentMp;
+    public int       MaxMp;
+    public bool      IsDefending;
+    public System.Collections.Generic.HashSet<Combatant> BeckoningTargets = new();
+    // Set of enemies this combatant has beckoned. Each enemy's entry is
+    // consumed on the next SelectEnemyAttack call for that enemy. Empty =
+    // no active beckons. Set by Beckon's target picker via PerformBeckon
+    // (Add). Cleared in KillCombatant if any beckoned enemy dies before
+    // its turn fires (Remove). Whole set cleared in SwapToPhase2 (Clear).
+    // Multiple concurrent beckons supported — the player can stack
+    // Beckons across turns; each enemy's force-learnable fires when its
+    // own turn arrives.
+    public bool      IsAbsorber;       // True for the single Absorber on the player side; gates absorbed-move learning and Beckon menu visibility in the Skills submenu.
 
     // ---- Enemy-only — null/unused/default on players ----
     public EnemyData Data;
@@ -59,19 +82,38 @@ public class Combatant
 
     public ShaderMaterial FlashMaterial;
 
-    // Currently-running flash tween (e.g., the white-flash on learnable-move selection).
-    // Per-enemy because simultaneous enemies in multi-combat might each run their own
-    // flash concurrently. Lifetime is short (~0.6s); safe to hold as a reference until
-    // the tween self-destructs.
+    // Currently-running flash tween (the learnable-signal pulse fired by
+    // FlashCombatantLearnable when an enemy commits to its signature move).
+    // Per-combatant because simultaneous enemies in multi-combat might each run
+    // their own flash concurrently. Lifetime is short (~0.6s); safe to hold as a
+    // reference until the tween self-destructs.
     public Tween FlashTween;
 
     // Mirror of FlashTween — independent handle for the Phase 5 red-tint threat
-    // pulse. Tweens tint_amount on FlashMaterial; the two effects (white flash +
-    // red tint) coexist via separate uniforms on CombatantOverlay.gdshader, so
-    // both tween handles must be independent to avoid stomping each other when
-    // white-flash and threat-reveal fire in the same turn (e.g., enemy uses a
-    // learnable move — white flash on enemy + red tint on player).
+    // pulse. Tweens tint_amount on FlashMaterial; the two effects (purple
+    // learnable flash + red threat tint) coexist via separate uniforms on
+    // CombatantOverlay.gdshader, so both tween handles must be independent to
+    // avoid stomping each other when the learnable flash and threat-reveal fire
+    // in the same turn (e.g., enemy uses a learnable move — purple flash on
+    // enemy + red tint on player).
     public Tween ThreatTween;
+
+    // Phase 6 C8 — independent handle for the sustained active-turn whitening
+    // tween. Drives active_amount on FlashMaterial via ApplyActiveSpriteTint /
+    // ClearActiveSpriteTint. Independent from FlashTween / ThreatTween so the
+    // active wash, learnable flash, and threat reveal can fade in/out without
+    // stomping each other when they overlap on the same sprite (e.g., active
+    // enemy using a learnable move: active wash sustains while flash pulses).
+    public Tween ActiveTween;
+
+    // Phase 6 C11.1 — independent handle for the yellow target-highlight fade.
+    // Drives target_amount on FlashMaterial via ApplyTargetHighlight /
+    // ClearTargetHighlight. Independent from FlashTween / ThreatTween /
+    // ActiveTween so the picker's selected-target highlight, learnable flash,
+    // threat reveal, and active-turn wash can fade in/out without stomping
+    // each other when they overlap on the same sprite (cure-on-self stacks
+    // active + target on the same Combatant).
+    public Tween TargetTween;
 
     // ---- Damage / heal application --------------------------------------------
     //

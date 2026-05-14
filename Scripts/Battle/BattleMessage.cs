@@ -16,7 +16,10 @@ public class BattleMessage
     private readonly Node            _tweenOwner;
     private Tween                    _tween;
 
-    private const float PanelBottomInset = 100f;  // gap above viewport bottom
+    // Bottom inset clears the player panel strip at the bottom-center (Phase 6 C6
+    // moved it from the bottom-left corner to a centered row). Shared constant on
+    // BattleTest so any future strip-height change flows here automatically.
+    private const float PanelBottomInset = BattleTest.OverlayBottomInset;
     private const float PanelHeight      = 80f;
     private const float PanelMinWidth    = BattleTest.PanelMinWidthMessage;  // 400f
 

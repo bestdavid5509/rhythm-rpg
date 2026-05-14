@@ -36,6 +36,16 @@ public partial class EnemyData : Resource
     [Export] public int FrameHeight = 160;
 
     /// <summary>
+    /// Y-pixel offset from the TOP of the AnimSprite frame to the character's ground
+    /// line (where their feet meet the floor). Used by hop-in feet-to-feet alignment
+    /// (C7-extra) so attackers land at the defender's foot row regardless of frame
+    /// padding. Default = FrameHeight (legacy "feet at bottom of frame" common case);
+    /// override per-enemy in the .tres when the spritesheet has empty pixels below
+    /// feet for animation effects (explosion plumes, ground impacts, etc.).
+    /// </summary>
+    [Export] public float FeetAnchorY = 160f;
+
+    /// <summary>
     /// Y offset applied on top of the floor-anchor formula to fine-tune the enemy's
     /// visual ground contact. Positive values move the sprite down.
     /// </summary>
