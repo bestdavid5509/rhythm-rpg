@@ -238,7 +238,7 @@ public partial class BattleTest : Node2D
     /// flags: TestVictoryScreen, TestGameOverScreen, TestPhaseTransition
     /// all override TestFullParty.
     /// </summary>
-    [Export] public bool TestFullParty = false;
+    [Export] public bool TestFullParty = true;
 
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
@@ -3038,13 +3038,18 @@ public partial class BattleTest : Node2D
     // the effective shader value (no in-shader softening multiplier — softness
     // lives here for one-place tuning). Fade duration matches the panel-slide
     // duration (PanelSlideDur) so all visual cues for a turn transition land
-    // simultaneously rather than the tint lagging the slide.
-    private const float ActiveTintAmount  = 0.15f;
+    // simultaneously rather than the tint lagging the slide. Baseline bumped
+    // from C8's 0.15 to 0.20 alongside the shader-side breathing pass — the
+    // eye accepts a higher peak when the wash is dynamically breathing
+    // between 0.13 ↔ 0.27 (active_breathing_amplitude = 0.07) rather than
+    // statically pinned at 0.20.
+    private const float ActiveTintAmount  = 0.20f;
     private const float ActiveTintFadeSec = 0.10f;
 
     // Phase 6 C11.1 — selected-target highlight constants. Yellow needs more
-    // amplitude than C8's white (0.15) to read clearly across varied sprite
-    // colors; 0.4 is the starting value, tunable interactively. Fade is
+    // amplitude than the active white wash (0.20 post-breathing-bump) to read
+    // clearly across varied sprite colors; 0.4 is the starting value, tunable
+    // interactively. Fade is
     // asymmetric: TargetTintFadeSec on Apply, TargetTintClearSec on Clear.
     // The asymmetry prevents ghost trails on rapid cycling — previous target's
     // highlight snaps to zero quickly so the eye sees one highlighted

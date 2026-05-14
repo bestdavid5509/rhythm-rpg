@@ -1313,6 +1313,34 @@ duplicating overlapping items.
   gracefully when `LearnableAttack` is null or already absorbed.
   Could add a picker-side filter as cosmetic polish.
 
+### Visual indicator follow-ups
+
+Persistent combatant states that aren't yet surfaced via per-
+sprite shader cues. The active-turn breathing commit established
+the pattern (TIME-driven sinusoidal oscillation with smoothstep
+gate on the amount uniform); each item below fits the same
+shader-uniform-add + caller-side `Apply…` / `Clear…` helper
+shape.
+
+- **IsDefending sprite indicator.** With 4v8 allowing multiple
+  concurrent Defenders, the player has no sprite-level cue for
+  which of their 4 characters are defending — currently only
+  inferable from halved damage when an enemy hits the defender.
+  A parallel `defending_amount` channel mixing toward a calm
+  tint (cyan or blue) with the same breathing math would
+  surface the state during the multi-turn Defend persistence
+  window.
+- **Beckoner-side indicator.** A player whose `BeckoningTargets`
+  set is non-empty has no sprite-level cue that they're
+  committed to a Beckon. Beckon's effect surfaces partially via
+  threat-reveal on the beckoned enemy's turn, but the
+  intermediate turns leave the state invisible on the Beckoner.
+- **Beckoned-enemy indicator.** A beckoned enemy has no cue that
+  its next turn will fire the force-learnable. The picker
+  excludes already-beckoned enemies (cosmetic guard), but the
+  beckoned enemy itself shows nothing different in the formation
+  until its turn arrives.
+
 ### Roster / scope follow-ups
 
 - **Typed-array roster config (Q2).** `[Export] EnemyData[]` per
