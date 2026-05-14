@@ -110,7 +110,7 @@ TBD at implementation time.)
 Absorption requires **all three** conditions:
 
 1. The enemy is using a **learnable** attack — same condition that fires the
-   white-flash signal on the enemy sprite today.
+   purple learnable-flash signal on the enemy sprite today.
 2. The attack is **targeted at the Absorber**.
 3. The Absorber **perfect-parries** the attack (no missed inputs across the
    full sequence).
@@ -179,10 +179,10 @@ The Beckon turn sequence is:
   threat-reveal fires on the Beckoner (matching the player's
   expectation: "I called it; now it comes for me").
 - `SelectEnemyAttack` performs the same scan, consumes the set entry,
-  and returns the learnable attack → enemy white-flash fires
-  (learnable signal, gated on `target.IsAbsorber` for the
+  and returns the learnable attack → enemy purple learnable-flash
+  fires (learnable signal, gated on `target.IsAbsorber` for the
   introspective "If I watch carefully…" text) → attack proceeds.
-- Both visual signals (enemy white flash + Beckoner red tint) run
+- Both visual signals (enemy purple flash + Beckoner red tint) run
   concurrently on their respective sprites, consistent with the
   Phase 5 composite-shader design.
 

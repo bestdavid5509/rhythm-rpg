@@ -3,8 +3,11 @@ shader_type canvas_item;
 // Four independent per-combatant effects composited into a single shader so
 // all can run concurrently without material-slot collision on the sprite.
 //
-// flash_amount  — "white flash" — used by FlashCombatantWhite to signal
-//                 learnable moves on the enemy. Pulses; high amplitude.
+// flash_amount  — "learnable signal flash" — used by FlashCombatantLearnable
+//                 to signal an enemy committing to their learnable signature
+//                 move at turn-start. Pulses; high amplitude. Mix target is
+//                 the flash_color uniform (default white if unset by the
+//                 caller) so the visual color is caller-configurable.
 // tint_amount   — Phase 5 "threat reveal" — used by FlashCombatantThreatened
 //                 to signal incoming enemy attacks on the target combatant.
 // active_amount — Phase 6 C8 "active turn highlight" — sustained subtle white
@@ -20,12 +23,21 @@ shader_type canvas_item;
 //                 the pointer as the primary "selected" indicator;
 //                 amplitude tuned via the TargetTintAmount caller-side
 //                 constant.
+//
+// Color uniforms:
+// tint_color    — mix target color for tint_amount (red by default; set
+//                 once at the shader level, not currently caller-overridden).
+// flash_color   — mix target color for flash_amount (white by default;
+//                 written caller-side by FlashCombatantLearnable to purple
+//                 for the learnable signal). Persists across calls — future
+//                 flash-event authors set their own color explicitly.
 
 uniform float flash_amount  : hint_range(0.0, 1.0) = 0.0;
 uniform float tint_amount   : hint_range(0.0, 1.0) = 0.0;
 uniform float active_amount : hint_range(0.0, 1.0) = 0.0;
 uniform float target_amount : hint_range(0.0, 1.0) = 0.0;
 uniform vec4  tint_color    : source_color         = vec4(1.0, 0.2, 0.2, 1.0);
+uniform vec4  flash_color   : source_color         = vec4(1.0, 1.0, 1.0, 1.0);
 
 void fragment() {
     vec4 col = texture(TEXTURE, UV);
@@ -57,9 +69,11 @@ void fragment() {
     // pulse still overrides — preserves "flash = highest priority" invariant.
     col.rgb = mix(col.rgb, vec3(1.0, 1.0, 0.0), target_amount * col.a);
 
-    // White flash — applied last so a concurrent flash overrides everything
-    // else (white = learnable signal, highest priority).
-    col.rgb = mix(col.rgb, vec3(1.0), flash_amount * col.a);
+    // Learnable signal flash — applied last so a concurrent flash overrides
+    // everything else (highest priority). Color comes from flash_color (white
+    // by default; FlashCombatantLearnable writes purple for the learnable
+    // signal). Per-pulse amplitude tween lives on flash_amount.
+    col.rgb = mix(col.rgb, flash_color.rgb, flash_amount * col.a);
 
     COLOR = col;
 }

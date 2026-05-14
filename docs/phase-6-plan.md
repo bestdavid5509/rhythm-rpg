@@ -875,7 +875,9 @@ only the cleanup work surfaced by post-bundle survey.
 - `ShowLearnableSignal` ("If I watch carefully…" text + sound) gates
   on `playerDefender.IsAbsorber`. The text is the Absorber's
   introspective perception cue; non-Absorbers have no learning
-  channel. `FlashCombatantWhite(enemyAttacker)` stays unconditional —
+  channel. `FlashCombatantLearnable(enemyAttacker)` (the learnable
+  signal flash — purple-recolored and renamed from its original form
+  in the Phase 6 polish thematic color pass) stays unconditional —
   it's the enemy's signature visual identity for the move,
   independent of who's targeted.
 - `Combatant.BeckoningTarget` doc-comment refreshed (was stale,

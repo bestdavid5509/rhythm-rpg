@@ -82,18 +82,20 @@ public class Combatant
 
     public ShaderMaterial FlashMaterial;
 
-    // Currently-running flash tween (e.g., the white-flash on learnable-move selection).
-    // Per-enemy because simultaneous enemies in multi-combat might each run their own
-    // flash concurrently. Lifetime is short (~0.6s); safe to hold as a reference until
-    // the tween self-destructs.
+    // Currently-running flash tween (the learnable-signal pulse fired by
+    // FlashCombatantLearnable when an enemy commits to its signature move).
+    // Per-combatant because simultaneous enemies in multi-combat might each run
+    // their own flash concurrently. Lifetime is short (~0.6s); safe to hold as a
+    // reference until the tween self-destructs.
     public Tween FlashTween;
 
     // Mirror of FlashTween — independent handle for the Phase 5 red-tint threat
-    // pulse. Tweens tint_amount on FlashMaterial; the two effects (white flash +
-    // red tint) coexist via separate uniforms on CombatantOverlay.gdshader, so
-    // both tween handles must be independent to avoid stomping each other when
-    // white-flash and threat-reveal fire in the same turn (e.g., enemy uses a
-    // learnable move — white flash on enemy + red tint on player).
+    // pulse. Tweens tint_amount on FlashMaterial; the two effects (purple
+    // learnable flash + red threat tint) coexist via separate uniforms on
+    // CombatantOverlay.gdshader, so both tween handles must be independent to
+    // avoid stomping each other when the learnable flash and threat-reveal fire
+    // in the same turn (e.g., enemy uses a learnable move — purple flash on
+    // enemy + red tint on player).
     public Tween ThreatTween;
 
     // Phase 6 C8 — independent handle for the sustained active-turn whitening

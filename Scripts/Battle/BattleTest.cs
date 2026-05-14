@@ -670,11 +670,13 @@ public partial class BattleTest : Node2D
         // Slot-0 enemy AnimSpriteOrigin snapshot taken in BuildEnemyCombatantForSlot.
         _enemyAnimSprite.Play("idle");
 
-        // Combatant-overlay shader — composites two independent effects (white flash
-        // for learnable-move signalling, red tint for Phase 5 threat reveal) on a
-        // single material slot. Each combatant gets its own ShaderMaterial instance so
-        // the uniforms are per-combatant; both sprites get one attached here and are
-        // later referenced by Combatant.FlashMaterial in BuildInitialParties.
+        // Combatant-overlay shader — composites four independent effects (learnable
+        // flash via flash_amount + flash_color, red threat tint via tint_amount,
+        // white active-turn wash via active_amount, yellow target highlight via
+        // target_amount) on a single material slot. Each combatant gets its own
+        // ShaderMaterial instance so the uniforms are per-combatant; both sprites
+        // get one attached here and are later referenced by Combatant.FlashMaterial
+        // in BuildInitialParties.
         var overlayShader = GD.Load<Shader>("res://Assets/Shaders/CombatantOverlay.gdshader");
 
         var enemyOverlayMaterial = new ShaderMaterial();
@@ -1648,16 +1650,17 @@ public partial class BattleTest : Node2D
         //
         // Two split signals: ShowLearnableSignal is the Absorber's introspective
         // perception cue — only fires when the resolved defender IS the Absorber,
-        // since non-Absorbers have no learning channel. FlashCombatantWhite is the
-        // enemy's signature visual identity for the move — fires whenever the
-        // enemy uses a learnable, regardless of who's targeted.
+        // since non-Absorbers have no learning channel. FlashCombatantLearnable is
+        // the enemy's signature visual identity for the move (purple pulse — see
+        // method doc) — fires whenever the enemy uses a learnable, regardless of
+        // who's targeted.
         if (EnemyData?.LearnableAttack != null
             && selectedAttack == EnemyData.LearnableAttack
             && !_absorbedMoves.Contains(EnemyData.LearnableAttack))
         {
             if (playerDefender.IsAbsorber)
                 ShowLearnableSignal();
-            FlashCombatantWhite(enemyAttacker);
+            FlashCombatantLearnable(enemyAttacker);
         }
 
         // Phase 5 — threat reveal. Populated with the resolved defender post-
@@ -2961,19 +2964,33 @@ public partial class BattleTest : Node2D
     }
 
     /// <summary>
-    /// Flashes <paramref name="target"/>'s sprite white 3 times over ~0.6s using the
-    /// <c>flash_amount</c> uniform on <c>CombatantOverlay.gdshader</c>. Reads / writes the
-    /// flash material and tween on the Combatant so per-target flashes remain
-    /// independently trackable at multi-combat density. Target-agnostic — works for any
-    /// Combatant with a populated FlashMaterial.
+    /// Pulses <paramref name="target"/>'s sprite purple 3 times over ~0.6s to signal
+    /// that this enemy is committing to its learnable signature move at turn-start.
+    /// Caller is <c>BeginEnemyAttack</c>; fires when the selected attack equals
+    /// <c>EnemyData.LearnableAttack</c> and the move isn't already in
+    /// <c>_absorbedMoves</c>. Independent of whether the player will go on to parry
+    /// the attack — this is the identification cue, not the success cue.
     /// </summary>
-    private void FlashCombatantWhite(Combatant target)
+    /// <remarks>
+    /// Writes the <c>flash_color</c> uniform on <c>CombatantOverlay.gdshader</c> to
+    /// purple once at entry, then tweens <c>flash_amount</c> through three 0→1→0
+    /// pulses. The shader mixes the sprite toward <c>flash_color.rgb</c>; default
+    /// is white if a material's <c>flash_color</c> has never been written. Color
+    /// persists across calls — future flash-event authors must set their own
+    /// <c>flash_color</c> explicitly if they want a different color. The current
+    /// purple (0.7, 0.3, 1.0) reads as arcane / signature-move identity and is
+    /// distinct from the red threat tint, white active tint, and yellow target
+    /// highlight on the same shader. Per-target tween / material handles live on
+    /// the Combatant so concurrent flashes at multi-character density don't stomp.
+    /// </remarks>
+    private void FlashCombatantLearnable(Combatant target)
     {
         target.FlashTween?.Kill();
-        target.FlashMaterial.SetShaderParameter("flash_amount", 0.0f);
+        var material = target.FlashMaterial;
+        material.SetShaderParameter("flash_color", new Color(0.7f, 0.3f, 1.0f, 1.0f));
+        material.SetShaderParameter("flash_amount", 0.0f);
 
         target.FlashTween = CreateTween();
-        var material = target.FlashMaterial;
         for (int i = 0; i < 3; i++)
         {
             target.FlashTween.TweenMethod(
@@ -2989,8 +3006,9 @@ public partial class BattleTest : Node2D
     /// Plays a ~1s red-tint pulse on <paramref name="target"/>'s sprite to signal that
     /// an incoming enemy attack is about to hit this combatant (Phase 5 threat reveal).
     /// Tweens the <c>tint_amount</c> uniform on <c>CombatantOverlay.gdshader</c> —
-    /// independent of <c>flash_amount</c>, so the white-flash and threat-reveal effects
-    /// can run concurrently on the same sprite (rare today, more common post-Phase-6).
+    /// independent of <c>flash_amount</c>, so the learnable flash and threat-reveal
+    /// effects can run concurrently on the same sprite (rare today, more common
+    /// post-Phase-6).
     /// Target-agnostic — works for any Combatant with a populated FlashMaterial.
     /// </summary>
     private void FlashCombatantThreatened(Combatant target)
@@ -4028,8 +4046,10 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Creates a fresh <see cref="ShaderMaterial"/> bound to the combatant overlay shader
     /// with both <c>flash_amount</c> and <c>tint_amount</c> uniforms zeroed. Each combatant
-    /// gets its own instance so white-flash (learnable signal) and red-tint (threat reveal)
-    /// tweens do not interfere across combatants.
+    /// gets its own instance so the learnable flash (purple) and threat-reveal tint (red)
+    /// tweens do not interfere across combatants. <c>flash_color</c> is left at its
+    /// shader-default (white); <c>FlashCombatantLearnable</c> overwrites it to purple
+    /// before its first pulse on each call.
     /// </summary>
     private static ShaderMaterial CreateCombatantOverlayMaterial(Shader overlayShader)
     {
