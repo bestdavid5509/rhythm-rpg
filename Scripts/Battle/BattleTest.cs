@@ -238,7 +238,7 @@ public partial class BattleTest : Node2D
     /// flags: TestVictoryScreen, TestGameOverScreen, TestPhaseTransition
     /// all override TestFullParty.
     /// </summary>
-    [Export] public bool TestFullParty = true;
+    [Export] public bool TestFullParty = false;
 
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
