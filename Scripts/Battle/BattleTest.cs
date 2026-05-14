@@ -1648,19 +1648,23 @@ public partial class BattleTest : Node2D
         // Per-move-type absorb tracking: the signal is suppressed if THIS specific LearnableAttack
         // is already in _absorbedMoves (not if any move has been absorbed).
         //
-        // Two split signals: ShowLearnableSignal is the Absorber's introspective
-        // perception cue — only fires when the resolved defender IS the Absorber,
-        // since non-Absorbers have no learning channel. FlashCombatantLearnable is
-        // the enemy's signature visual identity for the move (purple pulse — see
-        // method doc) — fires whenever the enemy uses a learnable, regardless of
-        // who's targeted.
+        // Three signals package the Absorber's learnable-perception cue:
+        // ShowBattleMessage("If I watch carefully...") + learnable_signal.wav
+        // (both fired by ShowLearnableSignal), plus FlashCombatantLearnable's
+        // purple pulse on the enemy attacker. All three fire together only when
+        // the resolved defender is an Absorber — non-Absorbers have no learning
+        // channel and perceive none of the signals. Whether the Absorber
+        // successfully parries downstream is irrelevant to this gate; the
+        // perception cue precedes the attack.
         if (EnemyData?.LearnableAttack != null
             && selectedAttack == EnemyData.LearnableAttack
             && !_absorbedMoves.Contains(EnemyData.LearnableAttack))
         {
             if (playerDefender.IsAbsorber)
+            {
                 ShowLearnableSignal();
-            FlashCombatantLearnable(enemyAttacker);
+                FlashCombatantLearnable(enemyAttacker);
+            }
         }
 
         // Phase 5 — threat reveal. Populated with the resolved defender post-
@@ -2966,12 +2970,20 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Pulses <paramref name="target"/>'s sprite purple 3 times over ~0.6s to signal
     /// that this enemy is committing to its learnable signature move at turn-start.
-    /// Caller is <c>BeginEnemyAttack</c>; fires when the selected attack equals
-    /// <c>EnemyData.LearnableAttack</c> and the move isn't already in
-    /// <c>_absorbedMoves</c>. Independent of whether the player will go on to parry
-    /// the attack — this is the identification cue, not the success cue.
+    /// Caller is <c>BeginEnemyAttack</c>; the call-site gate fires this only when
+    /// the selected attack equals <c>EnemyData.LearnableAttack</c>, the move isn't
+    /// already in <c>_absorbedMoves</c>, AND the resolved defender is an Absorber.
+    /// Independent of whether the Absorber will go on to parry the attack — this
+    /// is the perception cue, not the success cue. Packaged together with
+    /// <c>ShowLearnableSignal</c>'s battle message + sound; all three signals fire
+    /// together as the Absorber's learnable-perception channel.
     /// </summary>
     /// <remarks>
+    /// The Absorber-only gate lives at the call site (in <c>BeginEnemyAttack</c>),
+    /// not inside this method — a future tutorial / cinematic caller could fire
+    /// the purple pulse unconditionally by calling this method directly outside
+    /// the gated block.
+    /// <para>
     /// Writes the <c>flash_color</c> uniform on <c>CombatantOverlay.gdshader</c> to
     /// purple once at entry, then tweens <c>flash_amount</c> through three 0→1→0
     /// pulses. The shader mixes the sprite toward <c>flash_color.rgb</c>; default
@@ -2982,6 +2994,7 @@ public partial class BattleTest : Node2D
     /// distinct from the red threat tint, white active tint, and yellow target
     /// highlight on the same shader. Per-target tween / material handles live on
     /// the Combatant so concurrent flashes at multi-character density don't stomp.
+    /// </para>
     /// </remarks>
     private void FlashCombatantLearnable(Combatant target)
     {
