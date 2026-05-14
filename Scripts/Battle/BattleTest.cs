@@ -200,11 +200,6 @@ public partial class BattleTest : Node2D
     // Prompt management
     // =========================================================================
 
-    // When true, the enemy does not hop in to close stance before attacking.
-    // Use for large/stationary enemies that hold their ground (e.g. 8 Sword Warrior).
-    // Slam tweens are also skipped — the cross-screen lunge would look wrong for a non-hopping attacker.
-    [Export] public bool SkipHopIn = true;
-
     // =========================================================================
     // Phase transition (Phase 1 → Phase 2)
     // =========================================================================
@@ -437,7 +432,7 @@ public partial class BattleTest : Node2D
     // C7-extra-followup: snapshot of the hop-in attacker's pre-bump ZIndex. Set in
     // PlayHopIn before the attacker takes the defender's Z; restored in PlayTeardown's
     // tween.Finished. Sentinel -1 means "no active snapshot" — safe by construction
-    // for the SkipHopIn=true / cast-attack paths that never call PlayHopIn. Single
+    // for the cast-attack paths that never call PlayHopIn. Single
     // field is sufficient because only one sequence is active at a time (turn-queue
     // invariant). Cleared unconditionally on teardown so a leaked stale value cannot
     // persist into the next sequence even if the attacker died mid-attack.
@@ -604,7 +599,6 @@ public partial class BattleTest : Node2D
         if (testVictory && Phase2EnemyData != null)
         {
             EnemyData = Phase2EnemyData;
-            SkipHopIn = true;  // 8 Sword Warrior is stationary — hop-in would look wrong.
             GD.Print("[TEST] TestVictoryScreen active — skipping intro, starting Phase 2 with enemy at 1 HP.");
         }
         else if (testGameOver)
@@ -1727,7 +1721,7 @@ public partial class BattleTest : Node2D
             return;
         }
 
-        // Non-hop-in path (both SkipHopIn=true and SkipHopIn=false + non-hop-in attack):
+        // Non-hop-in path (selected attack has IsHopIn = false):
         // enemy stays at origin and plays the cast arc. Hop-in only occurs for melee attacks.
         // _sequenceAttackerClosePos = origin so PlayTeardown is a zero-distance no-op.
         _sequenceAttacker         = enemyAttacker;
@@ -1897,7 +1891,7 @@ public partial class BattleTest : Node2D
     /// <summary>
     /// Adapter: BattleSystem.StepPassEvaluated → slam animation + per-pass damage.
     /// Called once per inward pass across all steps in the enemy's attack sequence.
-    /// Slam is skipped when SkipHopIn is true — the enemy never hopped in close,
+    /// Slam is skipped for non-hop-in attacks — the enemy never hopped in close,
     /// so the cross-screen lunge ComputeSlamPosition() would produce looks wrong.
     /// </summary>
     private void OnBattleSystemStepPassEvaluated(int result, int passIndex, int stepIndex, SequenceContext ctx)
@@ -1914,7 +1908,7 @@ public partial class BattleTest : Node2D
         // hit reactions on this sequence.
         if (ctx.Target.IsDead) return;
 
-        if (ctx.CurrentAttack.IsHopIn || !SkipHopIn)
+        if (ctx.CurrentAttack.IsHopIn)
             OnAttackPassEvaluated(result, passIndex);
         OnEnemyPassEvaluated(result, passIndex, stepIndex);
 
@@ -5099,7 +5093,7 @@ public partial class BattleTest : Node2D
             }
             // C7-extra-followup: restore the attacker's pre-hop-in ZIndex from the
             // snapshot taken in PlayHopIn. Sentinel guard `>= 0` skips the restore
-            // when no hop-in ran (cast attacks / SkipHopIn=true paths leave the
+            // when no hop-in ran (cast attacks leave the
             // sentinel at -1). The IsDead check preserves the Phase 2 reveal contract:
             // SpawnBossReveal bumps the dead Phase 1 warrior's ZIndex to stay above
             // the reveal sprite, and SwapToPhase2 owns the eventual restore via its

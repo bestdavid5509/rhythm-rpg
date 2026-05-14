@@ -630,7 +630,7 @@ Development scaffolding — `[Export] bool` flags on `BattleTest` that shortcut 
 
 | Flag | Effect | Skips intro? |
 |---|---|---|
-| `TestVictoryScreen` | Swaps `EnemyData` to `Phase2EnemyData` before sprite build, sets `SkipHopIn = true`, sets `_enemyParty[0].CurrentHp = 1`, sets `_phaseTransitionConsumed = true` so enemy death goes straight to Victory (not the Phase 1 → Phase 2 reveal), starts Phase 2 music. First player attack triggers Victory. | Yes |
+| `TestVictoryScreen` | Swaps `EnemyData` to `Phase2EnemyData` before sprite build, sets `_enemyParty[0].CurrentHp = 1`, sets `_phaseTransitionConsumed = true` so enemy death goes straight to Victory (not the Phase 1 → Phase 2 reveal), starts Phase 2 music. First player attack triggers Victory. | Yes |
 | `TestGameOverScreen` | Sets `_playerParty[0].CurrentHp = 1`, starts Phase 1 music. First missed parry triggers Game Over. | Yes |
 | `TestPhaseTransition` | Sets `_enemyParty[0].CurrentHp = 1` at battle start so the first player hit against the Warrior triggers the Phase 1 → Phase 2 reveal at full fidelity (reveal sprite, battle message, music swap all play normally). Documented in context in the Phase 1 → Phase 2 Transition section. | No |
 
@@ -642,9 +642,7 @@ Development scaffolding — `[Export] bool` flags on `BattleTest` that shortcut 
 
 **Phase2EnemyData fallback hoist:** the default `Phase2EnemyData` resource load (from `res://Resources/Enemies/8_sword_warrior_phase2.tres`) is hoisted to the top of `_Ready` — earlier than strictly needed for non-test paths — so `TestVictoryScreen` can reassign `EnemyData = Phase2EnemyData` before the enemy sprite is built downstream. Non-test flow is unchanged.
 
-### SkipHopIn Flag and FloorY Constant
-
-`[Export] public bool SkipHopIn = true` — when set, the enemy stays at origin for the entire turn. Setup and teardown tweens are skipped (no hop-in, no camera zoom). `_sequenceAttackerClosePos` is set to the enemy origin so `PlayTeardown` is a zero-distance no-op. Used for large/stationary enemies like the 8 Sword Warrior. Set to `false` for the Warrior Phase 1 which hops in for melee attacks.
+### FloorY Constant
 
 `const float FloorY = 750f` — world-space Y of the ground line. All character sprites are floor-anchored:
 - Player: `Position.Y = FloorY - frameHeight * scale * 0.5f` (center-anchored sprite)
