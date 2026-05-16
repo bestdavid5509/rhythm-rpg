@@ -236,15 +236,17 @@ public partial class BattleTest : Node2D
     [Export] public bool TestFullParty = false;
 
     /// <summary>
-    /// Opt-in toggle for the Green Forest battle background. When <c>true</c>,
-    /// the three forest layer sprites (BackgroundLayerBack/Middle/Front)
-    /// become visible and the legacy dark-blue Background ColorRect hides;
-    /// when <c>false</c> the legacy ColorRect is visible and the forest
-    /// layers hide. Both backgrounds always exist in the scene tree and
-    /// span the unified stage extent (see StageExtent* constants), so
-    /// toggling has no effect on camera math or character positioning.
-    /// Default <c>false</c> preserves the pre-integration baseline until
-    /// the visual is reviewed.
+    /// Opt-in toggle for the painted-art battle background. When <c>true</c>,
+    /// the <c>BackgroundLayer</c> Sprite2D (currently displaying DeepForest
+    /// from the Nidhoggn OpenGameArt Battlebacks set) becomes visible and
+    /// the legacy dark-blue Background ColorRect hides; when <c>false</c>
+    /// the legacy ColorRect is visible and the painted layer hides. Both
+    /// backgrounds always exist in the scene tree and span the unified
+    /// stage extent (see StageExtent* constants), so toggling has no
+    /// effect on camera math or character positioning. Default
+    /// <c>false</c> during the post-Phase-6 polish window — see
+    /// docs/phase-6-plan.md §10 "Forest background formation re-tuning"
+    /// for the pending re-tune that will flip the default to <c>true</c>.
     /// </summary>
     [Export] public bool UseBackground = false;
 
@@ -652,17 +654,18 @@ public partial class BattleTest : Node2D
 
         // Background visibility — wire the UseBackground toggle to the
         // mutually-exclusive visibility of the legacy dark-blue ColorRect
-        // and the three Green Forest layer sprites. Both backgrounds always
-        // exist in the scene tree; only one set is visible at a time.
-        // Default (UseBackground=false): dark blue visible, forest hidden.
+        // and the single BackgroundLayer painted-art Sprite2D. Both
+        // backgrounds always exist in the scene tree; only one is visible
+        // at a time. Default (UseBackground=false): dark blue visible,
+        // painted background hidden. The painted background's texture
+        // (currently DeepForest from the Nidhoggn OpenGameArt Battlebacks
+        // set) is wired in the tscn — a one-line ext_resource swap rolls
+        // any other texture in the OpenGameArtBattlebacks/ folder into
+        // the same slot for future per-encounter or default changes.
         var bgColorRect = GetNode<ColorRect>("Background");
-        var bgLayerBack   = GetNode<Sprite2D>("BackgroundLayerBack");
-        var bgLayerMiddle = GetNode<Sprite2D>("BackgroundLayerMiddle");
-        var bgLayerFront  = GetNode<Sprite2D>("BackgroundLayerFront");
-        bgColorRect.Visible   = !UseBackground;
-        bgLayerBack.Visible   =  UseBackground;
-        bgLayerMiddle.Visible =  UseBackground;
-        bgLayerFront.Visible  =  UseBackground;
+        var bgLayer     = GetNode<Sprite2D>("BackgroundLayer");
+        bgColorRect.Visible = !UseBackground;
+        bgLayer.Visible     =  UseBackground;
 
         // Grab character sprites and record their original positions for teardown restoration.
         _playerSprite = GetNode<ColorRect>("PlayerSprite");

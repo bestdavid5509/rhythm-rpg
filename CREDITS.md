@@ -15,7 +15,8 @@
 | Anime slash effect (derived from CreativeKind ice knife asset, modified and recolored) | CreativeKind | Free for commercial use, modifications allowed, no redistribution or resale of assets alone | https://creativekind.itch.io/magic-spell-effects-11 |
 | Fantasy UI Borders | Kenney | CC0 — no attribution required | https://kenney.nl/assets/fantasy-ui-borders |
 | UI Pack RPG Expansion | Kenney | CC0 — no attribution required | https://kenney.nl/assets/ui-pack-rpg-expansion |
-| Green Forest Battle Background LITE (3-layer composite: back1 + middle1 + front1) | ansimuz | Commercial use; see vendor docs for terms | https://ansimuz.itch.io/p1-green-forest |
+| Green Forest Battle Background LITE (3-layer composite: back1 + middle1 + front1) — *archived, replaced by Nidhoggn OpenGameArt Battlebacks* | ansimuz | Commercial use; see vendor docs for terms | https://ansimuz.itch.io/p1-green-forest |
+| Battlebacks (10-image set: Cave, DaytimeForest, DeepForest, Desert, DesertTown, Dungeon, EnemyFort, GoldenForest, RedForest, WinterForest) | Nidhoggn | CC0 — Public Domain (attribution voluntary) | https://opengameart.org/content/backgrounds-3 |
 
 ## Audio
 

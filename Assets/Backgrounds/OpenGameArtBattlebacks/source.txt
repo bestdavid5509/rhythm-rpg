@@ -1,0 +1,15 @@
+Source: OpenGameArt — Backgrounds (10-image set)
+Artist: Nidhoggn
+URL: https://opengameart.org/content/backgrounds-3
+License: CC0 — Public Domain (attribution voluntary)
+Files: Cave, DaytimeForest, DeepForest, Desert, DesertTown,
+       Dungeon, EnemyFort, GoldenForest, RedForest, WinterForest
+Native resolution: 1104×621 per image (painted art, not pixel art).
+Project usage: scaled uniformly ~2.01× to fill 2208×1248 stage extent
+       (vertical fits exactly; horizontal overflows ~5px each side
+       into the camera reserve). Sprite2D texture_filter = LINEAR
+       (smooths painted upscale; contrasts with the NEAREST filter
+       used for pixel-art layers).
+Current default for UseBackground=true: DeepForest.png
+       (other 9 textures sit in this folder for future per-encounter
+       background swaps; not currently referenced by code).

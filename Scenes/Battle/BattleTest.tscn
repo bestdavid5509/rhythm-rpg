@@ -3,9 +3,7 @@
 [ext_resource type="Script" uid="uid://dh4rjlvlickpi" path="res://Scripts/Battle/BattleTest.cs" id="1_battletest"]
 [ext_resource type="Script" uid="uid://cw3hjxalert1b" path="res://Scripts/Battle/TargetZone.cs" id="2_targetzone"]
 [ext_resource type="Resource" uid="uid://d145pa70x3l4n" path="res://Resources/Enemies/warrior_phase1.tres" id="3_hdgai"]
-[ext_resource type="Texture2D" uid="uid://d2ja0ek3rg7ka" path="res://Assets/Backgrounds/GreenForest/back1.png" id="4_bgback"]
-[ext_resource type="Texture2D" uid="uid://yr0td6fsxjfu" path="res://Assets/Backgrounds/GreenForest/middle1.png" id="5_bgmid"]
-[ext_resource type="Texture2D" uid="uid://cveqtyiav31ws" path="res://Assets/Backgrounds/GreenForest/front1.png" id="6_bgfront"]
+[ext_resource type="Texture2D" path="res://Assets/Backgrounds/OpenGameArtBattlebacks/DeepForest.png" id="4_bglayer"]
 
 [node name="BattleTest" type="Node2D" unique_id=1582212467]
 position = Vector2(0, 1)
@@ -20,29 +18,13 @@ offset_right = 2064.0
 offset_bottom = 1164.0
 color = Color(0.07, 0.07, 0.13, 1)
 
-[node name="BackgroundLayerBack" type="Sprite2D" parent="."]
-texture_filter = 1
+[node name="BackgroundLayer" type="Sprite2D" parent="."]
+texture_filter = 2
 position = Vector2(960, 540)
-scale = Vector2(6, 6)
-z_index = -3
-visible = false
-texture = ExtResource("4_bgback")
-
-[node name="BackgroundLayerMiddle" type="Sprite2D" parent="."]
-texture_filter = 1
-position = Vector2(960, 540)
-scale = Vector2(6, 6)
-z_index = -2
-visible = false
-texture = ExtResource("5_bgmid")
-
-[node name="BackgroundLayerFront" type="Sprite2D" parent="."]
-texture_filter = 1
-position = Vector2(960, 540)
-scale = Vector2(6, 6)
+scale = Vector2(2.00966, 2.00966)
 z_index = -1
 visible = false
-texture = ExtResource("6_bgfront")
+texture = ExtResource("4_bglayer")
 
 [node name="PlayerSprite" type="ColorRect" parent="." unique_id=577779961]
 visible = false
