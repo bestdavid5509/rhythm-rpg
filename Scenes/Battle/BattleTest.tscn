@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://dh4rjlvlickpi" path="res://Scripts/Battle/BattleTest.cs" id="1_battletest"]
 [ext_resource type="Script" uid="uid://cw3hjxalert1b" path="res://Scripts/Battle/TargetZone.cs" id="2_targetzone"]
 [ext_resource type="Resource" uid="uid://d145pa70x3l4n" path="res://Resources/Enemies/warrior_phase1.tres" id="3_hdgai"]
-[ext_resource type="Texture2D" path="res://Assets/Backgrounds/OpenGameArtBattlebacks/DeepForest.png" id="4_bglayer"]
+[ext_resource type="Texture2D" path="res://Assets/Backgrounds/OpenGameArtBattlebacks/Dungeon.png" id="4_bglayer"]
 
 [node name="BattleTest" type="Node2D" unique_id=1582212467]
 position = Vector2(0, 1)

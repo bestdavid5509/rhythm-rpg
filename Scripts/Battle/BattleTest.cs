@@ -237,7 +237,7 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Opt-in toggle for the painted-art battle background. When <c>true</c>,
-    /// the <c>BackgroundLayer</c> Sprite2D (currently displaying DeepForest
+    /// the <c>BackgroundLayer</c> Sprite2D (currently displaying Dungeon
     /// from the Nidhoggn OpenGameArt Battlebacks set) becomes visible and
     /// the legacy dark-blue Background ColorRect hides; when <c>false</c>
     /// the legacy ColorRect is visible and the painted layer hides. Both
@@ -658,7 +658,7 @@ public partial class BattleTest : Node2D
         // backgrounds always exist in the scene tree; only one is visible
         // at a time. Default (UseBackground=false): dark blue visible,
         // painted background hidden. The painted background's texture
-        // (currently DeepForest from the Nidhoggn OpenGameArt Battlebacks
+        // (currently Dungeon from the Nidhoggn OpenGameArt Battlebacks
         // set) is wired in the tscn — a one-line ext_resource swap rolls
         // any other texture in the OpenGameArtBattlebacks/ folder into
         // the same slot for future per-encounter or default changes.

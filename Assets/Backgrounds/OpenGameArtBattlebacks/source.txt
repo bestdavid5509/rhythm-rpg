@@ -10,6 +10,6 @@ Project usage: scaled uniformly ~2.01× to fill 2208×1248 stage extent
        into the camera reserve). Sprite2D texture_filter = LINEAR
        (smooths painted upscale; contrasts with the NEAREST filter
        used for pixel-art layers).
-Current default for UseBackground=true: DeepForest.png
+Current default for UseBackground=true: Dungeon.png
        (other 9 textures sit in this folder for future per-encounter
        background swaps; not currently referenced by code).
