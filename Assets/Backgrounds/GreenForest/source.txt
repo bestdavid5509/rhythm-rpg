@@ -1,0 +1,8 @@
+Background: Green Forest Battle Background LITE
+Artist: ansimuz
+Source: https://ansimuz.itch.io/p1-green-forest
+License: Commercial use; see vendor docs for terms.
+Layers: back1.png (sky/distant), middle1.png (mid-forest),
+        front1.png (framing trees + ground).
+Native resolution: 368×208 per layer.
+Project usage: scaled 6× to fill the 2208×1248 stage extent.

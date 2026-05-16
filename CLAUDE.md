@@ -651,6 +651,25 @@ Development scaffolding — `[Export] bool` flags on `BattleTest` that shortcut 
 
 `EnemyData.SpriteOffsetY` — per-enemy additional downward nudge on the enemy sprite, tuned visually. Warrior Phase 1 = 90f, 8 Sword Warrior = 130f.
 
+### Stage Extent and Battle Background
+
+The battle scene has a unified world-space rectangle — the **stage extent** — that every battle background fills and the camera math clamps against. Constants on `BattleTest`:
+
+| Constant | Value | Notes |
+|---|---|---|
+| `StageExtentSize`   | `Vector2(2208, 1248)` | 6× the ansimuz native (368×208); integer scale preserves pixel-art sharpness |
+| `StageExtentCenter` | `Vector2(960, 540)`   | Viewport center; default camera position |
+| `StageExtentMin`    | `Vector2(-144, -84)`  | `Center - Size/2` |
+| `StageExtentMax`    | `Vector2(2064, 1164)` | `Center + Size/2` |
+
+The stage extends 144px beyond the 1920×1080 viewport horizontally and 84px vertically — giving the camera room to zoom and pan during hop-in close-ups without exposing off-stage area. Both backgrounds (the legacy dark-blue ColorRect and the opt-in Green Forest layer composite) span exactly this extent.
+
+**`UseBackground` `[Export] bool`** toggles between the two backgrounds. Default `false` → dark-blue ColorRect visible, forest layers hidden. `true` → forest layers visible, dark-blue ColorRect hidden. Both always exist in the scene tree (`Background` ColorRect, `BackgroundLayerBack/Middle/Front` Sprite2Ds); `_Ready` writes mutual visibility based on the export value. Camera math is toggle-independent — it operates against the stage extent constants regardless of which background is showing.
+
+**Green Forest background** (when `UseBackground = true`): three `Sprite2D` layer nodes parented to the `BattleTest` root, each at `Position = (960, 540)` with `Scale = (6, 6)` and `TextureFilter = NEAREST` (preserves pixel art at 6× upscale). Z-order: `BackgroundLayerBack` z=-3, `BackgroundLayerMiddle` z=-2, `BackgroundLayerFront` z=-1 — all below the Background ColorRect's z=0 and the formation/effects/pointer z-stack (formation 0..14, hop-in attacker 15, effects 3, TargetZone 32). The three layers are a locked composite (no parallax). Source attribution lives in `Assets/Backgrounds/GreenForest/source.txt` (per-folder convention — first instance, will become precedent for future asset packs) and a row in `CREDITS.md` Art table.
+
+**Zoom-clamp math** (`BattleTest.ComputeFitZoom` consumed inside `PlayHopIn`): at the hop-in camera target midpoint, the visible window at the requested 2× zoom (960×540) can spill past the stage extent at 4v8 with extreme attacker/defender pairs (e.g. player slot 3 hop-in attacking enemy slot 6 produces a midpoint near X=1620, where 2× zoom's right half-extent would reach X=2100 vs the stage's 2064 limit). `ComputeFitZoom` computes the minimum zoom that keeps the visible window inside the stage extent — `Mathf.Max` across the four per-edge constraints — and the actual tween target is `Mathf.Max(desiredZoom, fitZoom)`. Sign convention: Godot 4 `Camera2D.Zoom` is "how zoomed IN" (higher Z = smaller visible window), so the fitting zoom is a LOWER bound on Z and clamping is upward. The visual consequence at edge midpoints is a tighter close-up (~2.16× at the X=1620 example) rather than a less-aggressive one — the "reduce zoom" colloquialism is inverted relative to Godot's zoom-IN-is-larger-Z semantics. No `Camera2D.limit_*` properties used; zoom-clamp is the sole edge-handling mechanism.
+
 ### Text UI Systems
 
 Two distinct text-display components serve different UX purposes. They are **not** candidates for unification — their UX roles genuinely differ. The rule for adding new text UI:

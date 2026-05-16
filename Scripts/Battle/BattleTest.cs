@@ -235,6 +235,19 @@ public partial class BattleTest : Node2D
     /// </summary>
     [Export] public bool TestFullParty = false;
 
+    /// <summary>
+    /// Opt-in toggle for the Green Forest battle background. When <c>true</c>,
+    /// the three forest layer sprites (BackgroundLayerBack/Middle/Front)
+    /// become visible and the legacy dark-blue Background ColorRect hides;
+    /// when <c>false</c> the legacy ColorRect is visible and the forest
+    /// layers hide. Both backgrounds always exist in the scene tree and
+    /// span the unified stage extent (see StageExtent* constants), so
+    /// toggling has no effect on camera math or character positioning.
+    /// Default <c>false</c> preserves the pre-integration baseline until
+    /// the visual is reviewed.
+    /// </summary>
+    [Export] public bool UseBackground = false;
+
     private bool             _phaseTransitionConsumed;  // point-of-no-return flag; set at the top of ApplyPhase2Sprite. IsPhaseTransitionPending returns false once true.
     private bool             _phase2SpriteApplied;      // guards the early sprite swap from running twice
     private bool             _phase2Finalised;          // guards SwapToPhase2 state-finalisation from running twice
@@ -528,11 +541,26 @@ public partial class BattleTest : Node2D
     private Camera2D  _camera;
     private static readonly Vector2 CameraDefaultPos  = new Vector2(960f, 540f);
     private static readonly Vector2 CameraDefaultZoom = Vector2.One;
-    // 2.0x zoom-in: visible viewport = 1920/2.0 = 960px wide, half = 480.
-    // Worst-case midpoint offset from canvas center (~520 when step.Offset.X = -200)
-    // still leaves a 40px margin from the left canvas edge, so the grey background
-    // is never revealed during hop-in attacks regardless of attacker offset.
+    // 2.0x zoom-in baseline: at zoom 2 the visible window is 960×540 (1920/2 ×
+    // 1080/2). PlayHopIn clamps the actual zoom upward via ComputeFitZoom when
+    // 2× at the chosen midpoint would push the visible window past stage extent
+    // (see StageExtent* constants below + the math note inside PlayHopIn).
     private static readonly Vector2 CameraZoomIn      = new Vector2(2.0f, 2.0f);
+
+    // Stage extent — the unified world-space rectangle that every battle
+    // background fills. Both the legacy dark-blue Background ColorRect and
+    // the opt-in Green Forest layer composite are sized to span exactly this
+    // extent. Camera zoom-clamp math (ComputeFitZoom in PlayHopIn) operates
+    // against these bounds regardless of which background is visible.
+    //
+    // Size 2208×1248 = 6× the ansimuz native (368×208), centered on the
+    // viewport so there's 144px reserve on each side horizontally and 84px
+    // vertically. Min/Max are derived as Center ± Size/2; hardcoded for
+    // clarity at call sites.
+    private static readonly Vector2 StageExtentSize   = new Vector2(2208f, 1248f);
+    private static readonly Vector2 StageExtentCenter = new Vector2( 960f,  540f); // = viewport center
+    private static readonly Vector2 StageExtentMin    = new Vector2(-144f,  -84f); // = Center - Size/2
+    private static readonly Vector2 StageExtentMax    = new Vector2(2064f, 1164f); // = Center + Size/2
 
     // Camera shake — delta-based so the offset feels organic rather than linear.
     // Shake is applied to _camera.Offset (not _camera.Position) so it operates on a
@@ -621,6 +649,20 @@ public partial class BattleTest : Node2D
             GD.Print("[TEST] TestFullParty active — 4 players vs 8 enemies.");
             GD.Print("[TEST] TestFullParty suppresses Phase 1 → Phase 2 transition.");
         }
+
+        // Background visibility — wire the UseBackground toggle to the
+        // mutually-exclusive visibility of the legacy dark-blue ColorRect
+        // and the three Green Forest layer sprites. Both backgrounds always
+        // exist in the scene tree; only one set is visible at a time.
+        // Default (UseBackground=false): dark blue visible, forest hidden.
+        var bgColorRect = GetNode<ColorRect>("Background");
+        var bgLayerBack   = GetNode<Sprite2D>("BackgroundLayerBack");
+        var bgLayerMiddle = GetNode<Sprite2D>("BackgroundLayerMiddle");
+        var bgLayerFront  = GetNode<Sprite2D>("BackgroundLayerFront");
+        bgColorRect.Visible   = !UseBackground;
+        bgLayerBack.Visible   =  UseBackground;
+        bgLayerMiddle.Visible =  UseBackground;
+        bgLayerFront.Visible  =  UseBackground;
 
         // Grab character sprites and record their original positions for teardown restoration.
         _playerSprite = GetNode<ColorRect>("PlayerSprite");
@@ -4852,10 +4894,16 @@ public partial class BattleTest : Node2D
             PlayAnim(attacker, "run");
         }
 
-        // Camera zooms in centered between the two combatants.
-        tween.TweenProperty(_camera, "position", ComputeCameraMidpoint(attacker, defender), SetupDuration)
+        // Camera zooms in centered between the two combatants. The zoom value
+        // is clamped via ComputeFitZoom so the visible window at that midpoint
+        // stays inside the stage extent — fixes the 4v8 gray-screen-during-
+        // hop-in bug where extreme midpoints + 2× zoom pushed the visible
+        // window past the background edge.
+        Vector2 hopInMidpoint = ComputeCameraMidpoint(attacker, defender);
+        Vector2 clampedZoom   = ComputeFitZoom(hopInMidpoint, CameraZoomIn);
+        tween.TweenProperty(_camera, "position", hopInMidpoint, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
-        tween.TweenProperty(_camera, "zoom", CameraZoomIn, SetupDuration)
+        tween.TweenProperty(_camera, "zoom", clampedZoom, SetupDuration)
              .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
         tween.Finished += () =>
         {
@@ -5224,5 +5272,64 @@ public partial class BattleTest : Node2D
         return new Vector2(
             (attackerCenterX + defenderCenterX) / 2f,
             (attackerCenterY + defenderCenterY) / 2f);
+    }
+
+    /// <summary>
+    /// Returns a zoom value clamped so the camera's visible window at
+    /// <paramref name="cameraPos"/> stays inside the unified stage extent
+    /// (see <see cref="StageExtentMin"/> / <see cref="StageExtentMax"/>).
+    /// Used by <c>PlayHopIn</c> to prevent the 4v8 gray-screen-during-zoom
+    /// bug — at extreme midpoints (e.g. player slot 3 hop-in attacking
+    /// enemy slot 6) the 2× default zoom can push the 960×540 visible
+    /// window past the background edge.
+    /// </summary>
+    /// <remarks>
+    /// Sign convention — Godot 4 Camera2D.Zoom is "how zoomed IN":
+    /// higher Z means sprites appear larger and the visible world window
+    /// SHRINKS (visible half-width = viewport_half / Z). To fit the visible
+    /// window inside stage extent at a midpoint with small distance to an
+    /// edge, we need <c>viewport_half / Z ≤ distance</c>, i.e.
+    /// <c>Z ≥ viewport_half / distance</c>. The fitting zoom is therefore
+    /// a LOWER BOUND on Z, and the binding cross-axis constraint is the
+    /// MAX of the four per-edge minimums. Final clamped zoom is
+    /// <c>Mathf.Max(desiredZoom, fitZoom)</c> — if the requested 2× already
+    /// fits, use 2×; otherwise zoom IN MORE (smaller visible window) until
+    /// it does. The visual consequence at edge cases is a tighter framing,
+    /// not a less-aggressive one — the "reduce zoom" colloquialism is
+    /// inverted relative to Godot's zoom-IN-is-larger-Z semantics.
+    /// </remarks>
+    private Vector2 ComputeFitZoom(Vector2 cameraPos, Vector2 desiredZoom)
+    {
+        // Half-viewport at zoom=1 (the natural Godot 4 baseline). Visible
+        // window half-extent at zoom Z = viewportHalf / Z; the constraints
+        // below derive directly from this.
+        const float ViewportHalfX = 960f;  // = 1920 / 2
+        const float ViewportHalfY = 540f;  // = 1080 / 2
+
+        float distLeft   = cameraPos.X - StageExtentMin.X;
+        float distRight  = StageExtentMax.X - cameraPos.X;
+        float distTop    = cameraPos.Y - StageExtentMin.Y;
+        float distBottom = StageExtentMax.Y - cameraPos.Y;
+
+        // Per-edge minimum zoom to keep half-viewport inside that edge.
+        // Defensive Max(epsilon, ...) guards against negative or zero
+        // distances (camera position outside stage extent) — would imply
+        // a bug elsewhere, but avoid infinity / NaN here.
+        const float MinDist = 1f;
+        float zMinLeft   = ViewportHalfX / Mathf.Max(MinDist, distLeft);
+        float zMinRight  = ViewportHalfX / Mathf.Max(MinDist, distRight);
+        float zMinTop    = ViewportHalfY / Mathf.Max(MinDist, distTop);
+        float zMinBottom = ViewportHalfY / Mathf.Max(MinDist, distBottom);
+
+        // Cross-axis binding constraint = the most restrictive (largest)
+        // per-edge minimum. The visible window fits iff Z ≥ fitZoom.
+        float fitZoom = Mathf.Max(
+            Mathf.Max(zMinLeft, zMinRight),
+            Mathf.Max(zMinTop,  zMinBottom));
+
+        // Clamp the requested zoom UPWARD: use the desired zoom if it
+        // already fits, otherwise zoom in more aggressively until it does.
+        float clamped = Mathf.Max(desiredZoom.X, fitZoom);
+        return new Vector2(clamped, clamped);
     }
 }
