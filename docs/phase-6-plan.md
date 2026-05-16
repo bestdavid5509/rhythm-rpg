@@ -1300,6 +1300,26 @@ duplicating overlapping items.
   `MakeLayeredPanel` + `modulate:a` fade construction. Structural
   extraction out of Phase 6 scope; both classes lift together via
   the shared `OverlayBottomInset` constant in the meantime.
+- **Forest background formation re-tuning.** Current
+  `PlayerFrontAnchor` / `PlayerBackAnchor` X values cluster the
+  player formation at the left viewport edge; the enemy formation
+  mirrors at the right edge. This was tuned for the dark-blue
+  ColorRect background, which has no implied geography. The
+  ansimuz Green Forest background includes `front1` framing trees
+  that establish left/right scene boundaries — the current
+  formation positions place characters AT those trees rather than
+  within the framed stage area. Re-tuning the four anchor X
+  constants (player front/back, plus the enemy-side equivalents
+  derived in `BuildEnemySpriteFrames`) to cluster the formation
+  more centrally is needed before `UseBackground` default can flip
+  to `true`. `FloorY` may also need a slight upward lift to put
+  characters further into the ground plane rather than at the
+  front edge of it. Side-view JRPG convention maintained
+  throughout — this is purely a re-positioning, not a re-design.
+  When the re-tune lands, `UseBackground` default flips to `true`
+  and ansimuz becomes the project's background source for
+  subsequent environments (35+ in the pack, consistent style,
+  AI-free policy).
 
 ### UX follow-ups
 
