@@ -473,14 +473,31 @@ public partial class BattleTest : Node2D
             // Warrior death finished on the main sprite. The reveal sprite has been
             // playing concurrently (reveal frames → appended idle frames) and is
             // holding on its last idle frame by now. Swap to Phase 2 sprite + play
-            // idle (frees the reveal), then run the dialogue and finalise.
+            // idle (frees the reveal), then run the Harbinger dialogue and finalise.
+            //
+            // BattleDialogue (not BattleMessage) — this is a discrete character beat,
+            // not an atmospheric overlay. Single-line array with AutoAdvanceSeconds=2.0
+            // matches the weight of the existing Harbinger lines in PlayIntroDialogue.
+            // Phase 2 music starts concurrently with the dialogue (boss's voice +
+            // theme cue land together). SwapToPhase2 hooks to DialogueCompleted so
+            // the player regains control after the dialogue finishes (auto-advance or
+            // player-accelerated) — removes the prior fixed 3.0s timer that
+            // duplicated the dialogue's natural duration.
             GD.Print("[BattleTest] Phase 1 death complete — applying Phase 2 sprite and queueing dialogue.");
             ApplyPhase2Sprite();
             GetTree().CreateTimer(0.5f).Timeout += () =>
             {
-                ShowBattleMessage("You've only just begun to suffer.");
+                _phase2Dialogue = new BattleDialogue();
+                _phase2Dialogue.Name = "Phase2BattleDialogue";
+                AddChild(_phase2Dialogue);
+                _phase2Dialogue.DialogueCompleted += OnPhase2DialogueCompleted;
+
+                var lines = new BattleDialogue.DialogueLine[]
+                {
+                    new BattleDialogue.DialogueLine { Speaker = "The Harbinger", Text = "How tedious.", AutoAdvanceSeconds = 2.0f },
+                };
+                _phase2Dialogue.PlayDialogue(lines);
                 StartPhase2Music();
-                GetTree().CreateTimer(3.0f).Timeout += SwapToPhase2;
             };
             return;
         }
@@ -515,7 +532,7 @@ public partial class BattleTest : Node2D
         if (!IsPhaseTransitionPending()) return;
         // Fade Phase 1 music over the death-to-reveal window. The silence that follows
         // holds through the boss reveal animation; Phase 2 music starts only when the
-        // "You've only just begun to suffer." dialogue appears (below in OnEnemyDeathFinished).
+        // Harbinger's "How tedious." dialogue appears (below in OnEnemyDeathFinished).
         FadeOutMusic(2.5f);
         GetTree().CreateTimer(4f / 12f).Timeout += SpawnBossReveal;
     }

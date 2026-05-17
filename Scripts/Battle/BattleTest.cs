@@ -321,6 +321,7 @@ public partial class BattleTest : Node2D
     private TargetZone       _targetZone;       // shared target ring — shown for the duration of any prompt sequence
     private TargetPointer    _targetPointer;    // selection-phase pointer; shown during SelectingTarget state only (Phase 4)
     private BattleDialogue   _introDialogue;    // owned narrative-dialogue component; QueueFree'd after DialogueCompleted
+    private BattleDialogue   _phase2Dialogue;   // parallel — Phase 2 transition Harbinger taunt; same construct/QueueFree lifecycle
 
     // Phase 4 — target selection. Between a menu pick and the Begin* that launches
     // the attack, the player confirms (or cancels) the target via the pointer.
@@ -1088,6 +1089,25 @@ public partial class BattleTest : Node2D
         {
             _introDialogue.QueueFree();
             _introDialogue = null;
+        }
+    }
+
+    /// <summary>
+    /// Fires when the Phase 2 transition Harbinger dialogue ("How tedious.")
+    /// completes — either via AutoAdvanceSeconds elapse or player-accelerated
+    /// advance. Finalises the Phase 2 swap (resets per-fight flags, updates
+    /// the enemy combatant, rebuilds the queue, and unlocks player input via
+    /// AdvanceTurn) and frees the dialogue node. Replaces the prior fixed
+    /// 3.0s timer that duplicated the dialogue's natural duration.
+    /// </summary>
+    private void OnPhase2DialogueCompleted()
+    {
+        SwapToPhase2();
+
+        if (GodotObject.IsInstanceValid(_phase2Dialogue))
+        {
+            _phase2Dialogue.QueueFree();
+            _phase2Dialogue = null;
         }
     }
 
