@@ -189,7 +189,8 @@ public partial class BattleTest : Node2D
     {
         float renderedHeight = unit.FrameHeight * unit.AnimSpriteScale.Y;
         return new Vector2(
-            unit.AnimSpriteOrigin.X,
+            unit.AnimSpriteOrigin.X
+            + unit.ContentXOffsetNative * unit.AnimSpriteScale.X,  // shift to visible body center (Knight: −5 native → −15 world at 3× scale)
             unit.AnimSpriteOrigin.Y
             - renderedHeight * 0.25f         // step up to upper-body anchor (less aggressive than frame top)
             + SpriteContentYOffset           // step down to visible content top
@@ -4170,9 +4171,10 @@ public partial class BattleTest : Node2D
             AnimSpriteOrigin = sprite.Position,  // post-floor-anchor + per-slot offset
             PositionRect     = rect,
             AnimSprite       = sprite,
-            FeetAnchorY      = PlayerFeetAnchorY,   // C7-extra: feet at bottom of 80-px frame
-            FrameHeight      = PlayerFrameHeight,
-            AnimSpriteScale  = sprite.Scale,        // (3, 3) at Phase 6 scope
+            FeetAnchorY          = PlayerFeetAnchorY,   // C7-extra: feet at bottom of 80-px frame
+            FrameHeight          = PlayerFrameHeight,
+            AnimSpriteScale      = sprite.Scale,        // (3, 3) at Phase 6 scope
+            ContentXOffsetNative = -5f,                 // Knight body sits ~5 native px left of frame center; see Combatant.ContentXOffsetNative doc
             CurrentMp        = PlayerMaxMp,
             MaxMp            = PlayerMaxMp,
             IsDefending      = false,
@@ -4242,10 +4244,11 @@ public partial class BattleTest : Node2D
                                                       EnemyData data,
                                                       AnimatedSprite2D sprite)
     {
-        combatant.FeetAnchorY     = data?.FeetAnchorY ?? data?.FrameHeight ?? 160f;
-        combatant.FrameHeight     = data?.FrameHeight ?? 160;
-        combatant.AnimSpriteScale = sprite.Scale;
-        combatant.Data            = data;
+        combatant.FeetAnchorY          = data?.FeetAnchorY ?? data?.FrameHeight ?? 160f;
+        combatant.FrameHeight          = data?.FrameHeight ?? 160;
+        combatant.AnimSpriteScale      = sprite.Scale;
+        combatant.ContentXOffsetNative = data?.ContentXOffsetNative ?? 0f;
+        combatant.Data                 = data;
     }
 
     /// <summary>

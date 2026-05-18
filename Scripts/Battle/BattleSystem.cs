@@ -536,8 +536,15 @@ public partial class BattleSystem : Node
         // derived.
         var     attacker         = _sequenceContext.Attacker;
         var     target           = _sequenceContext.Target;
+        // X: shift by ContentXOffsetNative (scaled) to land effects on the
+        // visible body center rather than the raw frame center. Zero for
+        // current enemies; nonzero for Knight (body offset left of frame
+        // center). Y: SpriteContentYOffset restores the pre-C11.3
+        // calibration baseline.
         Vector2 targetCenter     = target.AnimSpriteOrigin
-                                 + new Vector2(0f, BattleTest.SpriteContentYOffset);
+                                 + new Vector2(
+                                       target.ContentXOffsetNative * target.AnimSpriteScale.X,
+                                       BattleTest.SpriteContentYOffset);
         // Self-targeting (e.g., Cure heal) has attacker == target with identical Origin.X.
         // The strict > returns false in that case, routing self-target to the left-side
         // branch (PlayerOffset + !step.FlipH). That matches pre-refactor behaviour where

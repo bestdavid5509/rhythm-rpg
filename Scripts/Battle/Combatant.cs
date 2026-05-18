@@ -56,6 +56,28 @@ public class Combatant
     public float            FrameHeight;
     public Vector2          AnimSpriteScale;
 
+    // Per-sprite X offset (in NATIVE pixels, not world-scale) from the
+    // sprite frame center to the visible body center. Applied wherever
+    // sprite-X-derived positioning needs the body center rather than the
+    // raw frame center — currently ComputeDamageOrigin (damage / heal
+    // numbers above the unit) and BattleSystem.SpawnEffectSprite (effect
+    // sprite spawn position on the target's body). Zero for sprites
+    // whose body is centered in their frame (current Warrior + 8 Sword
+    // Warrior). Negative-N shifts content left; positive-N right.
+    //
+    // Knight's frame (120×80) has the character body offset ~5 native
+    // pixels left of frame center (sword extends right during attack
+    // animations, so the frame width accommodates the sword's reach).
+    // ContentXOffsetNative = -5 → -15 world px at 3× scale.
+    //
+    // Cached at slot construction (BuildPlayerCombatantForSlot /
+    // BuildEnemyCombatantForSlot) — never mutated during gameplay. When
+    // PlayerData / per-character sprite resource eventually lands, this
+    // value migrates onto it; today there's no PlayerData class, so
+    // caching per-Combatant is the smallest fit alongside the existing
+    // FeetAnchorY / FrameHeight / AnimSpriteScale cache pattern.
+    public float            ContentXOffsetNative;
+
     // ---- Player-only — null/unused/default on enemies ----
     public int       CurrentMp;
     public int       MaxMp;

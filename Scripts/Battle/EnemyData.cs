@@ -51,6 +51,21 @@ public partial class EnemyData : Resource
     /// </summary>
     [Export] public float SpriteOffsetY = 130f;
 
+    /// <summary>
+    /// Per-sprite X offset (in NATIVE pixels, not world-scale) from the frame
+    /// center to the visible body center. Applied wherever sprite-X-derived
+    /// positioning needs the body center rather than the raw frame center —
+    /// damage / heal number anchor (<c>BattleTest.ComputeDamageOrigin</c>) and
+    /// effect spawn position (<c>BattleSystem.SpawnEffectSprite</c>). Zero
+    /// (default) for sprites whose body is centered in their frame — currently
+    /// both Warrior Phase 1 and 8 Sword Warrior Phase 2. Override per-enemy
+    /// in the .tres when a future spritesheet has the character body offset
+    /// horizontally within the frame (e.g. wide-attack frames where the
+    /// weapon extends right). Negative values shift content left; positive
+    /// right.
+    /// </summary>
+    [Export] public float ContentXOffsetNative = 0f;
+
     /// <summary>Animation layout configuration for this enemy's spritesheet.</summary>
     [Export] public EnemyAnimationConfig AnimationConfig;
 

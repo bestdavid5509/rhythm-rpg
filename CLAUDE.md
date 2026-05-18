@@ -366,6 +366,20 @@ Counter-attack damage uses a separate hand-tuned in-body formula (`BattleAnimato
 
 After C11.3, sprite-positioning math is sprite-derived everywhere (pointer C11.1, damage numbers C11.3, effect spawns C11.3, hop-in midpoint Y C11.3). ColorRect-derived geometry is reserved for HP bar / PartyPanel binding and the X dimension of close-stance / midpoint computations where the ColorRect width tracks the sprite width acceptably.
 
+### Sprite Content X Offset
+
+`Combatant.ContentXOffsetNative` (`float`, NATIVE pixels — not world-scale) captures the X offset from the sprite frame center to the visible body center for sprites whose body isn't centered horizontally in the frame. Applied where sprite-X-derived positioning needs the body center rather than the raw frame center: `ComputeDamageOrigin` (damage / heal numbers above the unit) and `BattleSystem.SpawnEffectSprite` (effect sprite spawn position on the target). Applied as `unit.AnimSpriteOrigin.X + unit.ContentXOffsetNative * unit.AnimSpriteScale.X` — scaling lifts the native-pixel offset to world space.
+
+| Sprite | `ContentXOffsetNative` | Why |
+|---|---|---|
+| Knight (player) | `-5` | 120×80 frame; body sits ~5 native px left of frame center because the sword extends right during attack animations and the frame width accommodates that reach |
+| Warrior Phase 1 | `0` | Body centered in 130×130 frame |
+| 8 Sword Warrior Phase 2 | `0` | Body centered in 160×160 frame |
+
+For enemies the value lives on `EnemyData` as `[Export] float ContentXOffsetNative = 0f` and caches onto Combatant via `RefreshCombatantFromEnemyData` (parallel to `FeetAnchorY` / `FrameHeight` / `AnimSpriteScale`). Existing `.tres` files don't set it — defaults to 0 — so future enemies with asymmetric frame composition just set the field. For the player side there's no PlayerData resource yet; the Knight's `-5` is set inline in `BuildPlayerCombatantForSlot`. Migrates onto PlayerData if/when that class lands.
+
+Other sprite-X-derived systems checked and confirmed unaffected: `ComputeCameraMidpoint` X uses ColorRect-derived geometry (no frame-vs-body asymmetry); `_magicCircleAnchor` X is hardcoded viewport center; hop-in animation tween X is close-stance position math; target picker sort uses relative `AnimSpriteOrigin.X.CompareTo` ordering only. None of these need the offset.
+
 ### Attack Data Model
 
 **One `AttackStep` = one animation play + one or more timing circles.**
