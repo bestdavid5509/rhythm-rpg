@@ -462,6 +462,16 @@ public partial class BattleTest : Node2D
     // killed the combatant). Sequence-scoped: overwritten on each death; retention past
     // handler fire is harmless.
     private Combatant _sequenceDeathTarget;
+    // Lethal-counter hop-in defer: set in PlayParryCounter's slash-finished branch
+    // when the warrior is the hop-in attacker getting counter-killed. KillCombatant
+    // runs its state portion (IsDead, strip fade, BeckoningTargets cleanup) but
+    // skips the visual sequence (sound, death animation, boss reveal schedule).
+    // ProceedAfterHopInAnim's lethal-counter branch consumes this field, passing
+    // a PlayEnemyDeathSequence callback to PlayTeardown so the death animation
+    // fires AFTER the teardown slide-back settles at origin. Cleared on consume;
+    // null means "no deferred death pending" (the default for every non-counter
+    // kill path).
+    private Combatant _deferredEnemyDeath;
     // Target of the most recent PlayCombatantHurtFlash call. Set at PlayCombatantHurtFlash
     // entry; read by OnEnemyHurtFlashFinished for its disconnect + idle reset. Decouples
     // the hurt-flash callback from the sequence-scoped fields since the flash can fire
@@ -2817,12 +2827,35 @@ public partial class BattleTest : Node2D
             }
             else
             {
-                // Game over — retreat enemy without scheduling next turn. KillCombatant
-                // has already fired at the per-target damage sites (per-pass player damage
-                // at OnEnemyPassEvaluated and parry-counter site in PlayParryCounter), so
-                // death animation + IsDead + Phase 2 reveal scheduling are all in flight.
-                // This branch only handles end-of-battle UX.
-                PlayTeardown(null);
+                // Game over — retreat enemy without scheduling next turn.
+                // KillCombatant has already fired at the per-target damage sites
+                // (per-pass player damage at OnEnemyPassEvaluated and parry-counter
+                // site in PlayParryCounter), so IsDead + strip fade +
+                // BeckoningTargets cleanup are in flight. Normally the enemy-death
+                // visual sequence (sound + "death" animation + boss-reveal schedule)
+                // is also in flight by now — KillCombatant runs it inline by default.
+                //
+                // Two cases land here:
+                // (a) _deferredEnemyDeath == null (REGULAR enemy lethal counter,
+                //     no boss reveal queued at slash-finished): death animation
+                //     already kicked at close-stance during the slash-finished
+                //     callback. PlayTeardown(null) just slides the body back; the
+                //     concurrent death-during-slide reads as a recoil-and-collapse.
+                // (b) _deferredEnemyDeath == counterTarget (PHASE-TRANSITION lethal
+                //     counter — IsPhaseTransitionPending was true at slash-finished):
+                //     PlayParryCounter held the warrior on its last hurt frame
+                //     through the upcoming teardown; PlayEnemyDeathSequence fires
+                //     here on tween.Finished so the death animation + boss reveal
+                //     occur at origin (post-slide-back) rather than at close-stance.
+                //
+                // The deferral gate is documented in detail on PlayEnemyDeathSequence
+                // + ScheduleBossRevealIfPhase1; this site is the sole consumer.
+                Combatant deferredDying = _deferredEnemyDeath;
+                _deferredEnemyDeath     = null;
+                Action onTeardownEnd    = deferredDying != null
+                    ? () => PlayEnemyDeathSequence(deferredDying)
+                    : null;
+                PlayTeardown(onTeardownEnd);
 
                 // Roles in the hop-in enemy-attack sequence: attacker = enemy, defender = player.
                 var player = _sequenceDefender;
@@ -4683,7 +4716,22 @@ public partial class BattleTest : Node2D
     /// that detect a whole-party wipe via <see cref="CheckGameOver"/> drive the
     /// end-of-battle work separately.</para>
     /// </summary>
-    private void KillCombatant(Combatant dying)
+    /// <summary>
+    /// Marks <paramref name="dying"/> dead, fades its turn-order strip card, and runs
+    /// the side-appropriate death visual sequence. Idempotent on <c>IsDead</c>.
+    /// </summary>
+    /// <remarks>
+    /// The <paramref name="playAnimationNow"/> override (enemy-side only) lets the
+    /// lethal-counter hop-in path split state from animation: state mutates at
+    /// damage time (IsDead, strip fade, BeckoningTargets cleanup) so other guards
+    /// see the post-kill world immediately, while the visual sequence (sound +
+    /// "death" animation + boss-reveal schedule) defers until after the warrior's
+    /// PlayTeardown slide-back completes. <see cref="PlayEnemyDeathSequence"/>
+    /// holds the visual portion as a callable that the deferring path consumes
+    /// after teardown. Default <c>true</c> preserves the synchronous behavior for
+    /// every non-counter kill path.
+    /// </remarks>
+    private void KillCombatant(Combatant dying, bool playAnimationNow = true)
     {
         if (dying == null || dying.IsDead) return;
 
@@ -4692,29 +4740,83 @@ public partial class BattleTest : Node2D
 
         if (dying.Side == CombatantSide.Enemy)
         {
-            PlaySound("enemy_defeat.mp3");
-            _sequenceDeathTarget = dying;
-            SafeDisconnectAnim(dying, OnEnemyDeathFinished);
-            dying.AnimSprite.Play("death");
-            ConnectAnim(dying, OnEnemyDeathFinished);
-            ScheduleBossRevealIfPhase1();  // internally gated on IsPhaseTransitionPending — safe at multi-character density
-
             // Defensive: any player Beckoning this enemy now has a stale entry
             // in their BeckoningTargets set. Remove the dying enemy from every
             // player's set so the enemy-side scans in SelectEnemyAttack /
             // SelectEnemyTarget can't return a dead reference. HashSet.Remove
             // is a no-op (returns false) when the element is absent — safe to
-            // call on every player without a Contains pre-check.
+            // call on every player without a Contains pre-check. State-only;
+            // runs regardless of playAnimationNow.
             foreach (var p in _playerParty)
                 p.BeckoningTargets.Remove(dying);
+
+            if (playAnimationNow)
+                PlayEnemyDeathSequence(dying);
         }
         else // Player
         {
+            // Player path: no defer split — player death animation always fires
+            // at damage time. The lethal-counter sequencing concern (death-at-
+            // close-stance vs teardown-to-origin) only applies to enemies that
+            // hop in and get counter-killed. Players don't have an equivalent
+            // case in the current combat surface.
             _sequenceDeathTarget = dying;
             SafeDisconnectAnim(dying, OnPlayerDeathFinished);
             dying.AnimSprite.Play("death");
             ConnectAnim(dying, OnPlayerDeathFinished);
         }
+    }
+
+    /// <summary>
+    /// Enemy-death visual sequence — extracted from <see cref="KillCombatant"/>
+    /// so the lethal-counter hop-in PHASE-TRANSITION path can defer the
+    /// animation portion until after PlayTeardown's slide-back completes.
+    /// Plays the defeat sound, disconnects + reconnects the death-finished
+    /// handler, kicks the "death" animation, and schedules the Phase 2 boss
+    /// reveal (internally gated on <see cref="IsPhaseTransitionPending"/>).
+    /// </summary>
+    /// <remarks>
+    /// Two call paths into this method:
+    /// <list type="number">
+    /// <item><description><b>Default (synchronous)</b> — <see cref="KillCombatant"/>
+    /// calls this inline when <c>playAnimationNow</c> is true (every non-counter
+    /// kill path; counter kills outside the Phase 1 → Phase 2 transition gate;
+    /// 4v8 lethal counters on any slot — since TestFullParty nulls
+    /// <c>Phase2EnemyData</c>, IsPhaseTransitionPending is always false at 4v8).
+    /// Sound + death animation + reveal-schedule fire at slash-finished, same
+    /// frame as the state mutation. Used for the visual cases where the warrior
+    /// is at origin already (player attacks, magic) or where no boss reveal
+    /// follows so a death-during-slide reads as a recoil-and-collapse.</description></item>
+    /// <item><description><b>Deferred (asynchronous via PlayTeardown callback)</b>
+    /// — <see cref="ProceedAfterHopInAnim"/>'s lethal branch consumes
+    /// <c>_deferredEnemyDeath</c> and passes a closure that calls this method
+    /// from <c>PlayTeardown</c>'s <c>tween.Finished</c>. Only triggered when
+    /// <see cref="BattleSystem.CurrentAttackIsHopIn"/> AND
+    /// <see cref="IsPhaseTransitionPending"/> at the slash-finished moment in
+    /// <c>PlayParryCounter</c>. Lets the warrior hold its last hurt frame
+    /// through the 350ms teardown slide-back; the death animation then plays
+    /// at origin with the boss reveal spawning statically at the same
+    /// position, no spatial gap.</description></item>
+    /// </list>
+    /// Iteration history: pre-fix, KillCombatant ran the entire sequence
+    /// synchronously at slash-finished — death animation kicked at close-stance
+    /// while PlayTeardown concurrently slid AnimSprite to origin. Dying body +
+    /// explosion landed at mid-slide positions while the boss reveal spawned
+    /// statically at origin, leaving a 60-100px geometric gap. Position fixes
+    /// (AnimSpriteOrigin, parent-to-warrior, parallel slide tween) each had
+    /// failure modes (off-origin static, oversized scale from inheritance,
+    /// curve drift). Sequential design turned the spatial problem into a
+    /// temporal one — death and reveal both at origin, no gap possible.
+    /// </remarks>
+    private void PlayEnemyDeathSequence(Combatant dying)
+    {
+        if (dying == null) return;
+        PlaySound("enemy_defeat.mp3");
+        _sequenceDeathTarget = dying;
+        SafeDisconnectAnim(dying, OnEnemyDeathFinished);
+        dying.AnimSprite.Play("death");
+        ConnectAnim(dying, OnEnemyDeathFinished);
+        ScheduleBossRevealIfPhase1();  // internally gated on IsPhaseTransitionPending — safe at multi-character density
     }
 
     /// <summary>

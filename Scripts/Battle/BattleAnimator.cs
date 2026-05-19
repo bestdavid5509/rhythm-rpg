@@ -524,9 +524,38 @@ public partial class BattleTest : Node2D
 
     /// <summary>
     /// Called next to every site that starts the enemy death animation. Schedules the
-    /// boss reveal sprite to spawn at frame 4 of death (4 / 12fps = 0.333s after play start).
-    /// No-op unless the transition is pending and not skipped.
+    /// boss reveal sprite to spawn at frame 4 of death (4 / 12fps ≈ 0.333s after play
+    /// start). No-op unless the transition is pending and not skipped.
     /// </summary>
+    /// <remarks>
+    /// The sequencing design that makes a static-at-origin reveal work cleanly
+    /// lives upstream in <see cref="PlayEnemyDeathSequence"/>. Deferral is
+    /// gated to the Phase 1 → Phase 2 transition case only: lethal-counter
+    /// hop-in AND <see cref="IsPhaseTransitionPending"/> at slash-finished →
+    /// death animation + this scheduling fire post-teardown via the deferred
+    /// callback. Every other kill path (player attacks, magic, 4v8 lethal
+    /// counters where Phase2EnemyData is null, non-Phase-1 enemies) keeps the
+    /// concurrent behavior — death animation kicks at slash-finished alongside
+    /// the teardown slide. Without a boss reveal queued, the dying-and-sliding
+    /// warrior just disappears at end-of-animation, which reads as a recoil-
+    /// and-collapse rather than a spatial problem.
+    ///
+    /// Spawn frame 4 (≈333ms) gives the warrior's death animation time to
+    /// reach its bloom phase so the dying-warrior sprite provides visual cover
+    /// for the reveal's appearance at origin. Combined with the 300ms ease-out
+    /// alpha fade-in inside <see cref="SpawnBossReveal"/>, the reveal
+    /// materializes through the bloom rather than popping on top.
+    ///
+    /// Iteration history: pre-fix, the reveal spawned at AnimSprite.Position
+    /// (the warrior's current position) at frame 4 — which landed mid-slide
+    /// during lethal-counter hop-in cases. Position fixes (AnimSpriteOrigin,
+    /// parent-to-warrior, parallel slide tween) each had their own failure
+    /// modes (off-origin static, oversized scale from inheritance, curve
+    /// drift). Sequential design (defer death animation until post-teardown)
+    /// turned the spatial problem into a temporal one and let the static-at-
+    /// origin form work cleanly — gated to the phase-transition case so the
+    /// concurrent behavior is preserved everywhere a boss reveal isn't queued.
+    /// </remarks>
     private void ScheduleBossRevealIfPhase1()
     {
         if (!IsPhaseTransitionPending()) return;
@@ -630,15 +659,28 @@ public partial class BattleTest : Node2D
         _revealSprite.ZIndex     = 1;
         GD.Print($"[BossReveal] ZIndex set — reveal: {_revealSprite.ZIndex}, warrior: {_enemyAnimSprite.ZIndex} " +
                  $"(snapshot was {_enemyZIndexBeforeReveal}; background at 0)");
-        // Attach under the same parent as the warrior sprite and use its LOCAL position
-        // so the reveal shares whatever coordinate space the warrior lives in — including
-        // any camera/viewport transform chain that would misplace a world-coord child of
-        // the BattleTest root.
+        // Attach under the same parent as the warrior sprite and position at the
+        // warrior's rest origin (AnimSpriteOrigin, root-relative coordinate space).
+        // The lethal-counter hop-in case is handled by deferred death sequencing
+        // (PlayEnemyDeathSequence after PlayTeardown completes) — by the time
+        // SpawnBossReveal fires here, the warrior is statically at origin for
+        // ALL kill paths, so the reveal-at-origin lands co-located with the
+        // dying warrior + its explosion.
         var enemyParent = _enemyAnimSprite.GetParent();
         enemyParent.AddChild(_revealSprite);
-        // Shift the reveal up 10px so its final frame lines up more closely with the
-        // Phase 2 idle pose, reducing the vertical jump at the swap moment.
-        _revealSprite.Position = _enemyAnimSprite.Position + new Vector2(0f, -10f);
+        // Shift the reveal up 10px so its final frame lines up more closely with
+        // the Phase 2 idle pose, reducing the vertical jump at the swap moment.
+        _revealSprite.Position = _enemyParty[0].AnimSpriteOrigin + new Vector2(0f, -10f);
+
+        // Fade-in (0 → 1 alpha over 300ms, ease-out — fast start, settles smoothly
+        // into full opacity). Materialization aesthetic that softens the
+        // appearance moment; pairs with the frame-4 spawn timing which puts the
+        // appearance inside the death animation's bloom phase for double-cover.
+        _revealSprite.Modulate = new Color(1f, 1f, 1f, 0f);
+        var revealFadeIn = CreateTween();
+        revealFadeIn.TweenProperty(_revealSprite, "modulate:a", 1f, 0.3f)
+            .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Quad);
+
         _revealSprite.Play("default");
         GD.Print("[BattleTest] Boss reveal sprite spawned.");
     }
@@ -1120,11 +1162,41 @@ public partial class BattleTest : Node2D
                     // Break the hurt loop and apply counter damage.
                     SafeDisconnectAnim(counterTarget, onHurtFullFinished);
                     SafeDisconnectAnim(counterTarget, OnCastEndFinished);
-                    PlayAnim(counterTarget, "idle");
                     counterTarget.TakeDamage(CounterDamage);
                     GD.Print($"[BattleTest] Perfect parry! Auto counter: {CounterDamage} damage. Enemy HP: {counterTarget.CurrentHp}/{counterTarget.MaxHp}");
-                    if (counterTarget.CurrentHp <= 0)
-                        KillCombatant(counterTarget);
+                    bool isLethal       = counterTarget.CurrentHp <= 0;
+                    // Sequential death-deferral is gated to the Phase 1 → Phase 2
+                    // transition case: lethal-counter hop-in AND
+                    // IsPhaseTransitionPending(). Regular enemy lethal counters
+                    // (e.g. 4v8 with warrior in non-slot-0, or any path where
+                    // Phase2EnemyData is null) keep the concurrent
+                    // (death-during-slide) behavior — the disconnect between
+                    // mid-slide death and origin-anchored visuals only matters
+                    // when a boss reveal is queued; without a reveal, the
+                    // dying-and-sliding warrior just disappears, which reads as
+                    // a recoil-and-collapse rather than a problem.
+                    bool deferDeathAnim = isLethal
+                                       && _battleSystem.CurrentAttackIsHopIn
+                                       && IsPhaseTransitionPending();
+                    // Post-hurt cleanup: transition warrior to idle. Skipped for
+                    // deferred-death-anim path so the warrior holds its last hurt
+                    // frame through PlayTeardown's slide-back (read by the
+                    // "wounded retreating" visual beat). For non-deferred lethal,
+                    // the idle frame is immediately overridden by KillCombatant's
+                    // "death" play below; for non-lethal, idle is the post-counter
+                    // resting state.
+                    if (!deferDeathAnim)
+                        PlayAnim(counterTarget, "idle");
+                    if (isLethal)
+                    {
+                        // See KillCombatant + PlayEnemyDeathSequence doc-comments
+                        // for the full sequential-vs-concurrent rationale. The
+                        // deferDeathAnim gate above is the sole site that triggers
+                        // the deferred path.
+                        KillCombatant(counterTarget, playAnimationNow: !deferDeathAnim);
+                        if (deferDeathAnim)
+                            _deferredEnemyDeath = counterTarget;
+                    }
                     PlaySound("enemy_hit.wav");
                     // Spawn damage number at the target's current world position, offset
                     // upward above the head. Parented to BattleTest root (not the sprite)
